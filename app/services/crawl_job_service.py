@@ -576,6 +576,10 @@ class CrawlJobService:
             "created_at": batch.created_at,
             "started_at": batch.started_at,
             "finished_at": batch.finished_at,
+            # Jobs sudah dimuat di atas, jadi ini tidak menambah query.
+            # Disertakan juga saat include_jobs False: daftar batch tanpa
+            # penyebut cabang memaksa OneBox memanggil detail tiap batch.
+            "targets": [job.onebox_location_id for job in jobs],
         }
         if include_jobs:
             data["jobs"] = [
