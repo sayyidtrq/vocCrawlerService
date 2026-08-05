@@ -65,11 +65,19 @@ class CrawlJobService:
         onebox_location_ids: list[int],
         target_review_counts: dict[int, int] | None = None,
         target_date_ranges: dict | None = None,
+        target_sorts: dict | None = None,
     ) -> str:
         payload: dict = {
             "slot": slot,
             "onebox_location_ids": sorted(onebox_location_ids),
         }
+        if target_sorts:
+            # Urutan ikut sidik jari: permintaan yang sama dengan urutan berbeda
+            # akan menghasilkan kumpulan ulasan yang berbeda pula, jadi bukan
+            # pengulangan.
+            payload["target_sorts"] = {
+                str(k): v for k, v in sorted(target_sorts.items())
+            }
         if target_date_ranges:
             # Rentang ikut sidik jari: idempotency key yang sama dengan rentang
             # berbeda adalah permintaan berbeda, bukan pengulangan.
@@ -98,6 +106,7 @@ class CrawlJobService:
         slot: str | None,
         target_review_counts: dict[int, int] | None = None,
         target_date_ranges: dict | None = None,
+        target_sorts: dict | None = None,
     ) -> tuple[dict, bool]:
         key = idempotency_key.strip()
         if not 8 <= len(key) <= 128:
@@ -122,8 +131,10 @@ class CrawlJobService:
                 "Target review count override references an unknown location target.",
             )
         target_date_ranges = target_date_ranges or {}
+        target_sorts = target_sorts or {}
         fingerprint = self.request_fingerprint(
-            slot, target_ids, target_review_counts, target_date_ranges
+            slot, target_ids, target_review_counts, target_date_ranges,
+            target_sorts,
         )
 
         with self.session_factory() as session:
@@ -214,6 +225,9 @@ class CrawlJobService:
                         date_to=target_date_ranges.get(
                             location.onebox_location_id, (None, None)
                         )[1],
+                        sort_by=target_sorts.get(
+                            location.onebox_location_id, "newest"
+                        ),
                         target_review_count=target_review_counts.get(
                             location.onebox_location_id,
                             location.target_review_count,
@@ -245,7 +259,9 @@ class CrawlJobService:
             )
             return self._serialize_batch(session, batch), True
 
-    def _report_progress(self, job_id: int, fetched: int) -> None:
+    def _report_progress(
+        self, job_id: int, fetched: int, scanned: int = 0
+    ) -> None:
         """Simpan kemajuan sementara supaya status batch bisa membacanya.
 
         Ditulis ke result_json karena itu kolom yang memang sudah dibaca
@@ -258,9 +274,18 @@ class CrawlJobService:
                 if job is None or job.status != "running":
                     return
                 current = dict(job.result_json or {})
-                if int(current.get("progress_fetched") or 0) == int(fetched):
+                sama = (
+                    int(current.get("progress_fetched") or 0) == int(fetched)
+                    and int(current.get("progress_scanned") or 0) == int(scanned)
+                )
+                if sama:
                     return
                 current["progress_fetched"] = int(fetched)
+                # Berapa ulasan yang sudah DITELUSURI, termasuk yang dilewati
+                # karena di luar rentang. Tanpa angka ini layar diam di nol
+                # selama menembus ulasan yang lebih baru, dan tidak ada cara
+                # membedakan sedang bekerja dari macet.
+                current["progress_scanned"] = int(scanned)
                 job.result_json = current
                 session.commit()
         except Exception:  # kemajuan bersifat kosmetik, jangan sampai menggagalkan crawl
@@ -417,7 +442,14 @@ class CrawlJobService:
                 target=claimed.target_review_count,
                 date_from=claimed.date_from,
                 date_to=claimed.date_to,
-                on_progress=lambda n, total: self._report_progress(claimed.id, n),
+                sort_by=getattr(claimed, "sort_by", None) or "newest",
+                # Batas waktu per job. Tanpa ini satu permintaan rentang jauh
+                # ke belakang bisa menahan worker sampai batas gulir habis,
+                # sementara cabang lain mengantre.
+                time_limit_seconds=600,
+                on_progress=lambda n, total, seen=0: self._report_progress(
+                    claimed.id, n, seen
+                ),
             )
             if result.get("status") in {"success", "partial_success"}:
                 return self._finish(claimed, status="succeeded", result=result)
@@ -552,6 +584,12 @@ class CrawlJobService:
             "inserted": 0,
             "duplicate": 0,
             "failed": 0,
+            # Dibuang karena di luar rentang tanggal yang diminta. Tanpa angka
+            # ini layar hanya bisa menampilkan "terbaca 20, baru 0, duplikat 0"
+            # tanpa alasan, dan itu terbaca sebagai kerusakan.
+            "out_of_range": 0,
+            # Ulasan yang ditelusuri, termasuk yang dilewati saringan tanggal.
+            "scanned": 0,
         }
         for job in jobs:
             counts[job.status] = counts.get(job.status, 0) + 1
@@ -566,6 +604,17 @@ class CrawlJobService:
             review_counts["inserted"] += int(result.get("total_inserted") or 0)
             review_counts["duplicate"] += int(result.get("total_duplicate") or 0)
             review_counts["failed"] += int(result.get("total_failed") or 0)
+            review_counts["out_of_range"] += int(
+                result.get("total_skipped_out_of_range") or 0
+            )
+            # Selagi berjalan, jumlah yang ditelusuri hanya ada di progress_*.
+            # Sesudah selesai, total_fetched yang berlaku.
+            review_counts["scanned"] += int(
+                result.get("reviews_scanned")
+                or result.get("progress_scanned")
+                or result.get("total_fetched")
+                or 0
+            )
         data = {
             "batch_id": batch.public_id,
             "status": batch.status,

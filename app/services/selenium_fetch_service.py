@@ -56,10 +56,23 @@ class SeleniumFetchService:
         date_from: datetime | None = None,
         date_to: datetime | None = None,
         on_progress=None,
+        sort_by: str = "newest",
+        time_limit_seconds: int = 600,
     ) -> dict:
         location = self.location_service.get_location(location_id)
         if location is None:
             raise ValueError("Location not found.")
+
+        # Google Maps TIDAK punya penyaring tanggal — hanya empat urutan.
+        # Rentang tanggal karena itu hanya bisa dicapai dengan mengurutkan dari
+        # yang terbaru lalu berhenti begitu melewati batas bawah. Urutan lain
+        # tidak kronologis, sehingga berhenti-awal di atasnya akan membuang
+        # ulasan yang cocok tanpa ada yang tahu. Maka rentang tanggal memaksa
+        # 'newest', dan alasannya dicatat supaya layar bisa menjelaskannya.
+        sort_dipaksa = False
+        if (date_from is not None or date_to is not None) and sort_by != "newest":
+            sort_dipaksa = True
+            sort_by = "newest"
         requested_target = self.validate_target(
             target or location.target_review_count
         )
@@ -91,12 +104,64 @@ class SeleniumFetchService:
             requested_target,
         )
         try:
+            # Penyaringan tanggal harus ikut menentukan KAPAN BERHENTI
+            # menggulir, bukan cuma membuang hasil di akhir. Google Maps
+            # mengurutkan ulasan terbaru lebih dulu, jadi permintaan rentang ke
+            # periode lampau akan menghabiskan seluruh jatah target pada ulasan
+            # terbaru dan menyisakan nol — berapa kali pun diulang.
+            def _nilai_rentang(raw_review):
+                if date_from is None and date_to is None:
+                    return "keep"
+                try:
+                    waktu = self.normalizer.normalize_review(
+                        location, raw_review
+                    ).get("review_time")
+                except Exception:
+                    # Kartu rusak diserahkan ke jalur normal di bawah, yang
+                    # sudah menghitungnya sebagai gagal.
+                    return "keep"
+                if is_within_date_range(waktu, date_from, date_to):
+                    return "keep"
+                # Sudah lebih tua dari batas bawah: karena urutannya
+                # terbaru-dulu, sisanya pasti lebih tua lagi.
+                try:
+                    if date_from is not None and waktu is not None and waktu < date_from:
+                        return "stop"
+                except TypeError:
+                    # Beda kesadaran zona waktu — jangan sampai menghentikan
+                    # crawl hanya karena perbandingan tidak bisa dilakukan.
+                    return "skip"
+                return "skip"
+
             raw_reviews = self.client.fetch_reviews(
-                location, limit=requested_target, on_progress=on_progress
+                location,
+                limit=requested_target,
+                on_progress=on_progress,
+                keep_check=_nilai_rentang,
+                sort_by=sort_by,
+                time_limit_seconds=time_limit_seconds,
             )
             result["metadata"] = dict(self.client.last_metadata)
             result["metadata"]["date_from"] = date_from.isoformat() if date_from else None
             result["metadata"]["date_to"] = date_to.isoformat() if date_to else None
+            result["metadata"]["sort_forced_to_newest"] = sort_dipaksa
+
+            # Peringatan yang HARUS sampai ke layar: kalau urutan gagal
+            # dipasang sementara rentang tanggal diminta, hasilnya tidak bisa
+            # dijamin lengkap — daftar Google mengikuti urutan 'paling relevan'
+            # yang tidak kronologis.
+            if (date_from is not None or date_to is not None) and not result[
+                "metadata"
+            ].get("sort_applied", False):
+                result["metadata"]["range_warning"] = (
+                    "Urutan terbaru gagal dipasang, sehingga hasil rentang "
+                    "tanggal tidak dijamin lengkap."
+                )
+                logger.warning(
+                    "Rentang tanggal diminta tetapi urutan newest gagal "
+                    "dipasang untuk %s",
+                    location.branch_name,
+                )
             result["total_fetched"] = len(raw_reviews)
             result["total_failed"] = int(
                 result["metadata"].get("failed_review_cards", 0)
@@ -119,8 +184,13 @@ class SeleniumFetchService:
                     logger.exception(
                         "Failed to store one Selenium review: %s", exc
                     )
+            # Ulasan yang dibuang karena di luar rentang BUKAN kegagalan —
+            # itu justru penyaring bekerja. Menghitungnya sebagai partial
+            # membuat setiap penarikan berentang tanggal tampak setengah gagal.
+            tersimpan = result["total_inserted"] + result["total_duplicate"]
             partial = (
-                result["total_fetched"] < requested_target
+                (tersimpan < requested_target
+                 and result["total_skipped_out_of_range"] == 0)
                 or result["total_failed"] > 0
             )
             result["status"] = "partial_success" if partial else "success"

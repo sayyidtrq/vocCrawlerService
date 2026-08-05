@@ -83,6 +83,11 @@ def enqueue_crawl_jobs(
                 for target in payload.targets
                 if target.date_from is not None or target.date_to is not None
             },
+            target_sorts={
+                target.onebox_location_id: target.sort_by
+                for target in payload.targets
+                if target.sort_by and target.sort_by != "newest"
+            },
             slot=payload.slot,
         )
     except CrawlQueueError as exc:

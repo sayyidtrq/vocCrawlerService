@@ -228,6 +228,9 @@ class CrawlJob(Base):
     # karena tiap cabang boleh punya rentang sendiri.
     date_from: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     date_to: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # newest | most_relevant | highest_rating | lowest_rating.
+    # Kosong berarti newest — satu-satunya urutan yang menopang rentang tanggal.
+    sort_by: Mapped[str | None] = mapped_column(String(32))
     attempts: Mapped[int] = mapped_column(
         Integer, default=0, server_default="0", nullable=False
     )

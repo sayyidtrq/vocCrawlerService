@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -15,6 +15,12 @@ class CrawlTargetRequest(BaseModel):
     # Opsional dan backward-compatible: tidak dikirim = ambil semua tanggal.
     date_from: datetime | None = Field(default=None)
     date_to: datetime | None = Field(default=None)
+    # Urutan pengambilan di Google Maps. Rentang tanggal hanya bisa dikerjakan
+    # pada 'newest'; permintaan lain yang menyertakan rentang akan dipaksa ke
+    # sana oleh service, dan alasannya dicatat di metadata job.
+    sort_by: Literal[
+        "newest", "most_relevant", "highest_rating", "lowest_rating"
+    ] = Field(default="newest")
 
     @model_validator(mode="after")
     def _check_range(self):
