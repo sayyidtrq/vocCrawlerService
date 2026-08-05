@@ -172,21 +172,66 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
             ) from exc
 
     @staticmethod
-    def _resolve_url(location: Location) -> str:
-        if location.google_reviews_url:
-            return location.google_reviews_url.strip()
-        if location.google_maps_url:
-            return location.google_maps_url.strip()
-        if location.external_place_id:
-            query = quote_plus(location.branch_name or "Hermina")
-            place_id = quote_plus(location.external_place_id)
-            return (
-                "https://www.google.com/maps/search/?api=1"
-                f"&query={query}&query_place_id={place_id}&hl=id"
+    def _place_id_url(location: Location) -> str | None:
+        """URL pencarian dari Place ID — bentuk yang selalu sah."""
+        if not location.external_place_id:
+            return None
+        query = quote_plus(location.branch_name or "Hermina")
+        place_id = quote_plus(location.external_place_id)
+        return (
+            "https://www.google.com/maps/search/?api=1"
+            f"&query={query}&query_place_id={place_id}&hl=id"
+        )
+
+    @classmethod
+    def _resolve_url(cls, location: Location) -> str:
+        """Kandidat pertama yang SAH, bukan kandidat pertama yang terisi.
+
+        google_reviews_url dan google_maps_url adalah kolom opsional yang diisi
+        manusia, jadi bisa salah bentuk — tautan pendek maps.app.goo.gl adalah
+        yang paling sering. external_place_id sebaliknya berasal dari sistem dan
+        selalu menghasilkan URL yang sah.
+
+        Menyerah pada kandidat pertama yang terisi membuat satu kolom opsional
+        yang salah mengalahkan identitas yang benar: Eka Hospital Margonda gagal
+        crawl tiga kali berturut-turut karena tautan pendek, sementara cabang
+        lain yang kolomnya kosong sama sekali justru berhasil lewat Place ID.
+        """
+        kandidat = [
+            ("google_reviews_url", (location.google_reviews_url or "").strip()),
+            ("google_maps_url", (location.google_maps_url or "").strip()),
+            ("external_place_id", cls._place_id_url(location) or ""),
+        ]
+
+        ditolak = []
+
+        for asal, url in kandidat:
+            if not url:
+                continue
+            try:
+                cls._validate_url(url)
+                if ditolak:
+                    logger.warning(
+                        "URL dari %s tidak sah (%s); memakai %s sebagai gantinya",
+                        ", ".join(ditolak),
+                        location.branch_name,
+                        asal,
+                    )
+                return url
+            except ReviewSourceError:
+                ditolak.append(asal)
+
+        if ditolak:
+            raise ReviewSourceError(
+                "URL ulasan Google tidak sah pada "
+                + ", ".join(ditolak)
+                + ". Perbaiki kolom itu, atau isi external_place_id agar URL "
+                "bisa dibentuk otomatis. Tautan pendek maps.app.goo.gl tidak "
+                "didukung — pakai tautan lengkap google.com/maps."
             )
+
         raise ReviewSourceError(
-            "Invalid Google review URL. Please update location "
-            "google_reviews_url."
+            "Lokasi ini belum punya URL ulasan Google maupun external_place_id."
         )
 
     @staticmethod
