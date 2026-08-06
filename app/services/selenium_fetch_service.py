@@ -3,13 +3,16 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import Settings, get_settings
+from app.db.models import Competitor
 from app.db.session import get_session_factory
 from app.integrations.selenium_google_maps_client import (
     SeleniumGoogleMapsReviewClient,
 )
+from app.services.competitor_review_service import CompetitorReviewService
 from app.services.entitlement_service import EntitlementService
 from app.services.fetch_log_service import FetchLogService
 from app.services.fetch_service import FetchService
@@ -19,6 +22,38 @@ from app.utils.date_parser import is_within_date_range
 
 
 logger = logging.getLogger(__name__)
+
+
+class _CompetitorAsLocation:
+    """Bungkus kompetitor agar bisa melewati scraper dan normalizer yang sama
+    persis dengan cabang.
+
+    Scraper hanya membaca empat atribut — external_place_id, branch_name,
+    google_reviews_url, google_maps_url — dan normalizer hanya menambah `id`.
+    Dengan menyediakannya di sini, dukungan kompetitor tidak menuntut satu baris
+    pun perubahan di jalur cabang yang sudah berjalan.
+    """
+
+    __slots__ = (
+        "id",
+        "branch_name",
+        "hospital_name",
+        "external_place_id",
+        "google_maps_url",
+        "google_reviews_url",
+        "target_review_count",
+        "source",
+    )
+
+    def __init__(self, competitor):
+        self.id = competitor.id
+        self.branch_name = competitor.name
+        self.hospital_name = competitor.name
+        self.external_place_id = competitor.external_place_id
+        self.google_maps_url = competitor.google_maps_url
+        self.google_reviews_url = competitor.google_reviews_url
+        self.target_review_count = competitor.target_review_count
+        self.source = competitor.source
 
 
 class SeleniumFetchService:
@@ -39,6 +74,9 @@ class SeleniumFetchService:
             company_id=company_id, session_factory=self.session_factory
         )
         self.fetch_log_service = FetchLogService(
+            company_id=company_id, session_factory=self.session_factory
+        )
+        self.competitor_review_service = CompetitorReviewService(
             company_id=company_id, session_factory=self.session_factory
         )
         self.client = client or SeleniumGoogleMapsReviewClient(self.settings)
@@ -200,6 +238,155 @@ class SeleniumFetchService:
             logger.exception("Selenium fetch failed for %s", location.branch_name)
         finally:
             self.fetch_log_service.finish_log(log_id, result)
+        return result
+
+    def fetch_competitor(
+        self,
+        competitor_id: int,
+        target: int | None = None,
+        date_from: datetime | None = None,
+        date_to: datetime | None = None,
+        on_progress=None,
+        sort_by: str = "newest",
+        time_limit_seconds: int = 600,
+    ) -> dict:
+        """Tarik ulasan satu kompetitor ke tabel competitor_reviews.
+
+        Sengaja tidak menulis fetch_logs: kolom location_id di tabel itu
+        menunjuk ke locations, dan memasukkan id kompetitor ke sana akan
+        menautkannya ke cabang yang tidak ada hubungannya.
+        """
+        with self.session_factory() as session:
+            statement = select(Competitor).where(Competitor.id == competitor_id)
+            if self.company_id is not None:
+                statement = statement.where(
+                    Competitor.company_id == self.company_id
+                )
+            competitor = session.scalar(statement)
+            if competitor is None:
+                raise ValueError("Competitor not found.")
+            sasaran = _CompetitorAsLocation(competitor)
+
+        # Alasan pemaksaan urutan ini sama dengan jalur cabang: Google Maps
+        # tidak punya penyaring tanggal, jadi rentang hanya bisa dikerjakan
+        # dengan mengurutkan terbaru lalu berhenti di batas bawah.
+        sort_dipaksa = False
+        if (date_from is not None or date_to is not None) and sort_by != "newest":
+            sort_dipaksa = True
+            sort_by = "newest"
+        requested_target = self.validate_target(
+            target or sasaran.target_review_count
+        )
+        result = {
+            "competitor_id": sasaran.id,
+            "competitor_name": sasaran.branch_name,
+            "source": self.client.source_name,
+            "status": "failed",
+            "target_review_count": requested_target,
+            "total_fetched": 0,
+            "total_inserted": 0,
+            "total_duplicate": 0,
+            "total_failed": 0,
+            "total_skipped_out_of_range": 0,
+            "error_message": None,
+            "metadata": {
+                "target_review_count": requested_target,
+                "headless": self.settings.selenium_headless,
+                "date_from": date_from.isoformat() if date_from else None,
+                "date_to": date_to.isoformat() if date_to else None,
+            },
+        }
+        logger.info(
+            "Selenium competitor fetch started for %s with target %s",
+            sasaran.branch_name,
+            requested_target,
+        )
+        try:
+
+            def _nilai_rentang(raw_review):
+                if date_from is None and date_to is None:
+                    return "keep"
+                try:
+                    waktu = self.normalizer.normalize_review(
+                        sasaran, raw_review
+                    ).get("review_time")
+                except Exception:
+                    return "keep"
+                if is_within_date_range(waktu, date_from, date_to):
+                    return "keep"
+                try:
+                    if (
+                        date_from is not None
+                        and waktu is not None
+                        and waktu < date_from
+                    ):
+                        return "stop"
+                except TypeError:
+                    return "skip"
+                return "skip"
+
+            raw_reviews = self.client.fetch_reviews(
+                sasaran,
+                limit=requested_target,
+                on_progress=on_progress,
+                keep_check=_nilai_rentang,
+                sort_by=sort_by,
+                time_limit_seconds=time_limit_seconds,
+            )
+            result["metadata"] = dict(self.client.last_metadata)
+            result["metadata"]["date_from"] = (
+                date_from.isoformat() if date_from else None
+            )
+            result["metadata"]["date_to"] = date_to.isoformat() if date_to else None
+            result["metadata"]["sort_forced_to_newest"] = sort_dipaksa
+            if (date_from is not None or date_to is not None) and not result[
+                "metadata"
+            ].get("sort_applied", False):
+                result["metadata"]["range_warning"] = (
+                    "Urutan terbaru gagal dipasang, sehingga hasil rentang "
+                    "tanggal tidak dijamin lengkap."
+                )
+            result["total_fetched"] = len(raw_reviews)
+            result["total_failed"] = int(
+                result["metadata"].get("failed_review_cards", 0)
+            )
+            for raw_review in raw_reviews:
+                try:
+                    normalized = self.normalizer.normalize_review(
+                        sasaran, raw_review
+                    )
+                    if not is_within_date_range(
+                        normalized["review_time"], date_from, date_to
+                    ):
+                        result["total_skipped_out_of_range"] += 1
+                        continue
+                    _, duplicate = self.competitor_review_service.insert_review(
+                        sasaran.id, normalized
+                    )
+                    if duplicate:
+                        result["total_duplicate"] += 1
+                    else:
+                        result["total_inserted"] += 1
+                except Exception as exc:
+                    result["total_failed"] += 1
+                    logger.exception(
+                        "Failed to store one competitor review: %s", exc
+                    )
+            tersimpan = result["total_inserted"] + result["total_duplicate"]
+            partial = (
+                (
+                    tersimpan < requested_target
+                    and result["total_skipped_out_of_range"] == 0
+                )
+                or result["total_failed"] > 0
+            )
+            result["status"] = "partial_success" if partial else "success"
+        except Exception as exc:
+            result["status"] = "failed"
+            result["error_message"] = str(exc)
+            logger.exception(
+                "Selenium competitor fetch failed for %s", sasaran.branch_name
+            )
         return result
 
     def validate_target(self, target: object) -> int:
