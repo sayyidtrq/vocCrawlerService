@@ -13,11 +13,30 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import Settings, get_settings
-from app.db.models import CrawlBatch, CrawlJob, Location
+from app.db.models import Competitor, CrawlBatch, CrawlJob, Location
 from app.db.session import get_session_factory
 from app.services.selenium_fetch_service import SeleniumFetchService
 
 logger = logging.getLogger(__name__)
+
+
+def _iso(value):
+    return value.isoformat() if hasattr(value, "isoformat") else value
+
+
+def _batch_kind(jobs) -> str:
+    """location | competitor | mixed.
+
+    Batch kosong dianggap location: itu bentuk lama, dan menyebutnya apa pun
+    selain itu akan membuat batch lawas berpindah layar.
+    """
+    jenis = {
+        "competitor" if job.competitor_id is not None else "location"
+        for job in jobs
+    }
+    if len(jenis) == 1:
+        return jenis.pop()
+    return "mixed" if jenis else "location"
 
 
 class CrawlQueueError(ValueError):
@@ -34,12 +53,13 @@ class ClaimedCrawlJob:
     batch_id: int
     batch_public_id: str
     company_id: int
-    location_id: int
+    location_id: int | None
     target_review_count: int
     date_from: datetime | None
     date_to: datetime | None
     attempts: int
     max_attempts: int
+    competitor_id: int | None = None
 
 
 class CrawlJobService:
@@ -65,11 +85,39 @@ class CrawlJobService:
         onebox_location_ids: list[int],
         target_review_counts: dict[int, int] | None = None,
         target_date_ranges: dict | None = None,
+        target_sorts: dict | None = None,
+        competitor_targets: dict | None = None,
     ) -> str:
         payload: dict = {
             "slot": slot,
             "onebox_location_ids": sorted(onebox_location_ids),
         }
+        if competitor_targets:
+            # Alasannya sama seperti cabang: idempotency key yang sama dengan
+            # daftar kompetitor berbeda adalah permintaan berbeda, bukan
+            # pengulangan. Tanpa ini permintaan kedua akan diam-diam
+            # mengembalikan batch pertama.
+            payload["competitor_targets"] = {
+                place_id: {
+                    "target_review_count": competitor_targets[place_id].get(
+                        "target_review_count"
+                    ),
+                    "date_from": _iso(
+                        competitor_targets[place_id].get("date_from")
+                    ),
+                    "date_to": _iso(competitor_targets[place_id].get("date_to")),
+                    "sort_by": competitor_targets[place_id].get("sort_by")
+                    or "newest",
+                }
+                for place_id in sorted(competitor_targets)
+            }
+        if target_sorts:
+            # Urutan ikut sidik jari: permintaan yang sama dengan urutan berbeda
+            # akan menghasilkan kumpulan ulasan yang berbeda pula, jadi bukan
+            # pengulangan.
+            payload["target_sorts"] = {
+                str(k): v for k, v in sorted(target_sorts.items())
+            }
         if target_date_ranges:
             # Rentang ikut sidik jari: idempotency key yang sama dengan rentang
             # berbeda adalah permintaan berbeda, bukan pengulangan.
@@ -98,6 +146,8 @@ class CrawlJobService:
         slot: str | None,
         target_review_counts: dict[int, int] | None = None,
         target_date_ranges: dict | None = None,
+        target_sorts: dict | None = None,
+        competitor_targets: list[dict] | None = None,
     ) -> tuple[dict, bool]:
         key = idempotency_key.strip()
         if not 8 <= len(key) <= 128:
@@ -107,11 +157,16 @@ class CrawlJobService:
                 "Idempotency-Key must contain between 8 and 128 characters.",
             )
         target_ids = sorted(set(onebox_location_ids))
-        if not target_ids:
+        competitor_specs: dict[str, dict] = {}
+        for spec in competitor_targets or []:
+            place_id = str(spec.get("external_place_id") or "").strip()
+            if place_id:
+                competitor_specs[place_id] = spec
+        if not target_ids and not competitor_specs:
             raise CrawlQueueError(
                 400,
                 "INVALID_TARGETS",
-                "At least one OneBox location target is required.",
+                "At least one crawl target is required.",
             )
         target_review_counts = target_review_counts or {}
         unknown_overrides = sorted(set(target_review_counts) - set(target_ids))
@@ -122,8 +177,10 @@ class CrawlJobService:
                 "Target review count override references an unknown location target.",
             )
         target_date_ranges = target_date_ranges or {}
+        target_sorts = target_sorts or {}
         fingerprint = self.request_fingerprint(
-            slot, target_ids, target_review_counts, target_date_ranges
+            slot, target_ids, target_review_counts, target_date_ranges,
+            target_sorts, competitor_specs,
         )
 
         with self.session_factory() as session:
@@ -187,6 +244,42 @@ class CrawlJobService:
                     "One or more crawl targets are absent, disabled, or outside this tenant.",
                 )
 
+            # Kompetitor di-resolve lewat external_place_id miliknya sendiri,
+            # bukan lewat tabel locations. Syarat ingest_reviews sengaja tidak
+            # dipakai di sini: bendera itu menandai "boleh jadi tiket OneBox",
+            # dan ulasan kompetitor memang tidak boleh — tapi tetap harus bisa
+            # ditarik sebagai pembanding.
+            competitors = []
+            if competitor_specs:
+                competitors = list(
+                    session.scalars(
+                        select(Competitor)
+                        .where(
+                            Competitor.company_id == company_id,
+                            Competitor.external_place_id.in_(
+                                sorted(competitor_specs)
+                            ),
+                            Competitor.is_active.is_(True),
+                        )
+                        .order_by(Competitor.id)
+                    )
+                )
+                found_places = {
+                    competitor.external_place_id for competitor in competitors
+                }
+                missing_places = [
+                    place
+                    for place in sorted(competitor_specs)
+                    if place not in found_places
+                ]
+                if missing_places:
+                    raise CrawlQueueError(
+                        404,
+                        "TARGET_NOT_FOUND",
+                        "One or more competitor targets are absent, disabled, "
+                        "or outside this tenant.",
+                    )
+
             batch = CrawlBatch(
                 public_id=str(uuid4()),
                 company_id=company_id,
@@ -214,9 +307,33 @@ class CrawlJobService:
                         date_to=target_date_ranges.get(
                             location.onebox_location_id, (None, None)
                         )[1],
+                        sort_by=target_sorts.get(
+                            location.onebox_location_id, "newest"
+                        ),
                         target_review_count=target_review_counts.get(
                             location.onebox_location_id,
                             location.target_review_count,
+                        ),
+                        max_attempts=self.settings.crawl_worker_max_attempts,
+                    )
+                )
+            for competitor in competitors:
+                spec = competitor_specs[competitor.external_place_id]
+                session.add(
+                    CrawlJob(
+                        batch_id=batch.id,
+                        company_id=company_id,
+                        location_id=None,
+                        onebox_location_id=None,
+                        competitor_id=competitor.id,
+                        status="queued",
+                        source_snapshot=competitor.source,
+                        date_from=spec.get("date_from"),
+                        date_to=spec.get("date_to"),
+                        sort_by=spec.get("sort_by") or "newest",
+                        target_review_count=(
+                            spec.get("target_review_count")
+                            or competitor.target_review_count
                         ),
                         max_attempts=self.settings.crawl_worker_max_attempts,
                     )
@@ -240,12 +357,14 @@ class CrawlJobService:
                 extra={
                     "batch_id": batch.public_id,
                     "company_id": company_id,
-                    "job_count": len(locations),
+                    "job_count": len(locations) + len(competitors),
                 },
             )
             return self._serialize_batch(session, batch), True
 
-    def _report_progress(self, job_id: int, fetched: int) -> None:
+    def _report_progress(
+        self, job_id: int, fetched: int, scanned: int = 0
+    ) -> None:
         """Simpan kemajuan sementara supaya status batch bisa membacanya.
 
         Ditulis ke result_json karena itu kolom yang memang sudah dibaca
@@ -258,9 +377,18 @@ class CrawlJobService:
                 if job is None or job.status != "running":
                     return
                 current = dict(job.result_json or {})
-                if int(current.get("progress_fetched") or 0) == int(fetched):
+                sama = (
+                    int(current.get("progress_fetched") or 0) == int(fetched)
+                    and int(current.get("progress_scanned") or 0) == int(scanned)
+                )
+                if sama:
                     return
                 current["progress_fetched"] = int(fetched)
+                # Berapa ulasan yang sudah DITELUSURI, termasuk yang dilewati
+                # karena di luar rentang. Tanpa angka ini layar diam di nol
+                # selama menembus ulasan yang lebih baru, dan tidak ada cara
+                # membedakan sedang bekerja dari macet.
+                current["progress_scanned"] = int(scanned)
                 job.result_json = current
                 session.commit()
         except Exception:  # kemajuan bersifat kosmetik, jangan sampai menggagalkan crawl
@@ -377,6 +505,7 @@ class CrawlJobService:
                 batch_public_id=batch.public_id if batch else "",
                 company_id=job.company_id,
                 location_id=job.location_id,
+                competitor_id=job.competitor_id,
                 target_review_count=job.target_review_count,
                 date_from=job.date_from,
                 date_to=job.date_to,
@@ -389,6 +518,8 @@ class CrawlJobService:
         if claimed is None:
             return None
         try:
+            if claimed.competitor_id is not None:
+                return self._execute_competitor(claimed)
             with self.session_factory() as session:
                 location = session.scalar(
                     select(Location).where(
@@ -417,7 +548,14 @@ class CrawlJobService:
                 target=claimed.target_review_count,
                 date_from=claimed.date_from,
                 date_to=claimed.date_to,
-                on_progress=lambda n, total: self._report_progress(claimed.id, n),
+                sort_by=getattr(claimed, "sort_by", None) or "newest",
+                # Batas waktu per job. Tanpa ini satu permintaan rentang jauh
+                # ke belakang bisa menahan worker sampai batas gulir habis,
+                # sementara cabang lain mengantre.
+                time_limit_seconds=600,
+                on_progress=lambda n, total, seen=0: self._report_progress(
+                    claimed.id, n, seen
+                ),
             )
             if result.get("status") in {"success", "partial_success"}:
                 return self._finish(claimed, status="succeeded", result=result)
@@ -439,6 +577,54 @@ class CrawlJobService:
                 error_message="Crawler worker raised an unexpected exception.",
                 result={},
             )
+
+    def _execute_competitor(self, claimed: ClaimedCrawlJob) -> dict:
+        """Jalankan job kompetitor.
+
+        Kembarannya jalur cabang di execute_next, dengan dua beda yang
+        disengaja: kelayakan diukur dari is_active saja (kompetitor tidak punya
+        cermin Location untuk diperiksa), dan hasilnya mendarat di
+        competitor_reviews sehingga tidak ikut mengalir ke tiket OneBox.
+        """
+        with self.session_factory() as session:
+            competitor = session.scalar(
+                select(Competitor).where(
+                    Competitor.id == claimed.competitor_id,
+                    Competitor.company_id == claimed.company_id,
+                )
+            )
+            eligible = bool(competitor and competitor.is_active)
+        if not eligible:
+            return self._finish(
+                claimed,
+                status="skipped",
+                result={"reason": "target_disabled_or_removed"},
+                error_code="TARGET_DISABLED",
+                error_message="Target is no longer eligible for crawling.",
+            )
+
+        fetch_service = self.fetch_service_factory(claimed.company_id)
+        result = fetch_service.fetch_competitor(
+            claimed.competitor_id,
+            target=claimed.target_review_count,
+            date_from=claimed.date_from,
+            date_to=claimed.date_to,
+            sort_by=getattr(claimed, "sort_by", None) or "newest",
+            time_limit_seconds=600,
+            on_progress=lambda n, total, seen=0: self._report_progress(
+                claimed.id, n, seen
+            ),
+        )
+        if result.get("status") in {"success", "partial_success"}:
+            return self._finish(claimed, status="succeeded", result=result)
+        return self._retry_or_fail(
+            claimed,
+            error_code="CRAWL_FAILED",
+            error_message=str(
+                result.get("error_message") or "Crawler returned a failed result."
+            ),
+            result=result,
+        )
 
     def _retry_or_fail(
         self,
@@ -552,6 +738,12 @@ class CrawlJobService:
             "inserted": 0,
             "duplicate": 0,
             "failed": 0,
+            # Dibuang karena di luar rentang tanggal yang diminta. Tanpa angka
+            # ini layar hanya bisa menampilkan "terbaca 20, baru 0, duplikat 0"
+            # tanpa alasan, dan itu terbaca sebagai kerusakan.
+            "out_of_range": 0,
+            # Ulasan yang ditelusuri, termasuk yang dilewati saringan tanggal.
+            "scanned": 0,
         }
         for job in jobs:
             counts[job.status] = counts.get(job.status, 0) + 1
@@ -566,6 +758,17 @@ class CrawlJobService:
             review_counts["inserted"] += int(result.get("total_inserted") or 0)
             review_counts["duplicate"] += int(result.get("total_duplicate") or 0)
             review_counts["failed"] += int(result.get("total_failed") or 0)
+            review_counts["out_of_range"] += int(
+                result.get("total_skipped_out_of_range") or 0
+            )
+            # Selagi berjalan, jumlah yang ditelusuri hanya ada di progress_*.
+            # Sesudah selesai, total_fetched yang berlaku.
+            review_counts["scanned"] += int(
+                result.get("reviews_scanned")
+                or result.get("progress_scanned")
+                or result.get("total_fetched")
+                or 0
+            )
         data = {
             "batch_id": batch.public_id,
             "status": batch.status,
@@ -576,12 +779,34 @@ class CrawlJobService:
             "created_at": batch.created_at,
             "started_at": batch.started_at,
             "finished_at": batch.finished_at,
+            # Jobs sudah dimuat di atas, jadi ini tidak menambah query.
+            # Disertakan juga saat include_jobs False: daftar batch tanpa
+            # penyebut cabang memaksa OneBox memanggil detail tiap batch.
+            "targets": [
+                job.onebox_location_id
+                for job in jobs
+                if job.onebox_location_id is not None
+            ],
+            # Jenis batch, supaya daftar riwayat bisa dipisah tanpa memanggil
+            # detail tiap batch. Tanpa ini pemanggil hanya bisa menebak dari
+            # targets yang kosong, dan batch cabang yang gagal total akan
+            # tertukar dengan batch kompetitor.
+            "kind": _batch_kind(jobs),
+            "competitors": [
+                job.competitor_id for job in jobs if job.competitor_id is not None
+            ],
         }
         if include_jobs:
             data["jobs"] = [
                 {
                     "job_id": job.id,
                     "onebox_location_id": job.onebox_location_id,
+                    "competitor_id": job.competitor_id,
+                    "kind": (
+                        "competitor"
+                        if job.competitor_id is not None
+                        else "location"
+                    ),
                     "target_review_count": job.target_review_count,
                     "status": job.status,
                     "attempts": job.attempts,

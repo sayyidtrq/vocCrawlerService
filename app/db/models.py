@@ -204,6 +204,18 @@ class CrawlJob(Base):
         UniqueConstraint(
             "batch_id", "location_id", name="uq_crawl_jobs_batch_location"
         ),
+        # Pasangan kompetitor dari constraint di atas. Harus partial index,
+        # bukan UniqueConstraint biasa: baris cabang punya competitor_id NULL
+        # dan di PostgreSQL NULL dianggap saling berbeda, sehingga constraint
+        # penuh tidak akan menjaga apa pun.
+        Index(
+            "uq_crawl_jobs_batch_competitor",
+            "batch_id",
+            "competitor_id",
+            unique=True,
+            postgresql_where=text("competitor_id IS NOT NULL"),
+        ),
+        Index("idx_crawl_jobs_competitor", "competitor_id"),
         Index("idx_crawl_jobs_claim", "status", "available_at", "lease_expires_at"),
         Index("idx_crawl_jobs_company", "company_id"),
     )
@@ -215,10 +227,16 @@ class CrawlJob(Base):
     company_id: Mapped[int] = mapped_column(
         ForeignKey("companies.id", ondelete="CASCADE"), nullable=False
     )
-    location_id: Mapped[int] = mapped_column(
-        ForeignKey("locations.id", ondelete="CASCADE"), nullable=False
+    # Satu baris job mewakili SALAH SATU dari cabang (location_id) atau
+    # kompetitor (competitor_id), tidak pernah keduanya. Kompetitor tidak punya
+    # cermin di tabel locations, jadi kedua kolom cabang harus boleh kosong.
+    location_id: Mapped[int | None] = mapped_column(
+        ForeignKey("locations.id", ondelete="CASCADE"), nullable=True
     )
-    onebox_location_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    onebox_location_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    competitor_id: Mapped[int | None] = mapped_column(
+        ForeignKey("competitors.id", ondelete="CASCADE"), nullable=True
+    )
     status: Mapped[str] = mapped_column(
         String(30), default="queued", server_default="queued", nullable=False
     )
@@ -228,6 +246,9 @@ class CrawlJob(Base):
     # karena tiap cabang boleh punya rentang sendiri.
     date_from: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     date_to: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # newest | most_relevant | highest_rating | lowest_rating.
+    # Kosong berarti newest — satu-satunya urutan yang menopang rentang tanggal.
+    sort_by: Mapped[str | None] = mapped_column(String(32))
     attempts: Mapped[int] = mapped_column(
         Integer, default=0, server_default="0", nullable=False
     )
