@@ -20,6 +20,17 @@ LOCAL_SERVICE_TOKEN_PEPPER_FALLBACK = (
 )
 
 
+def _as_float(name: str, default: float) -> float:
+    """Baca setelan pecahan; jeda gulir kini boleh di bawah satu detik."""
+    raw = os.getenv(name)
+    if raw is None or str(raw).strip() == '':
+        return default
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return default
+
+
 def _as_int(name: str, default: int) -> int:
     value = os.getenv(name)
     if value is None or not value.strip():
@@ -75,7 +86,7 @@ class Settings:
     selenium_headless: bool
     selenium_default_target_reviews: int
     selenium_max_target_reviews: int
-    selenium_scroll_delay_seconds: int
+    selenium_scroll_delay_seconds: float
     selenium_max_scroll_attempts: int
     selenium_wait_timeout_seconds: int
     selenium_user_data_dir: Path | None
@@ -201,11 +212,18 @@ def get_settings() -> Settings:
         selenium_headless=_as_bool("SELENIUM_HEADLESS", False),
         selenium_default_target_reviews=_as_int("SELENIUM_DEFAULT_TARGET_REVIEWS", 100),
         selenium_max_target_reviews=_as_int("SELENIUM_MAX_TARGET_REVIEWS", 300),
+        # Lantai 0.5 detik, bukan 2. Nol tidak diizinkan: kartu perlu waktu
+        # dimuat setelah digulir, dan menggulir lebih cepat dari itu justru
+        # menghasilkan lebih sedikit ulasan.
         selenium_scroll_delay_seconds=max(
-            2, _as_int("SELENIUM_SCROLL_DELAY_SECONDS", 2)
+            0.5, _as_float("SELENIUM_SCROLL_DELAY_SECONDS", 1.0)
         ),
+        # Plafon 1000, bukan 100. Rentang tanggal ke periode lampau harus
+        # menembus ratusan ulasan yang lebih baru sebelum sampai ke jendelanya;
+        # dengan plafon 100 crawl berhenti jauh sebelum itu. Batas waktu per
+        # job yang sekarang menjaga durasinya, bukan lagi jumlah gulir.
         selenium_max_scroll_attempts=min(
-            100, max(1, _as_int("SELENIUM_MAX_SCROLL_ATTEMPTS", 100))
+            1000, max(1, _as_int("SELENIUM_MAX_SCROLL_ATTEMPTS", 400))
         ),
         selenium_wait_timeout_seconds=_as_int("SELENIUM_WAIT_TIMEOUT_SECONDS", 20),
         selenium_user_data_dir=selenium_user_data_dir,

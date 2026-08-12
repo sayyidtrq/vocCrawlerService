@@ -41,12 +41,8 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
         self.last_metadata: dict = {}
 
     def fetch_reviews(
-        self,
-        location: Location,
-        limit: int = 50,
-        on_progress=None,
-        date_from: datetime | None = None,
-        date_to: datetime | None = None,
+        self, location: Location, limit: int = 50, on_progress=None,
+        keep_check=None, sort_by: str = "newest", time_limit_seconds: int = 0,
     ) -> list[dict]:
         target = min(
             max(1, int(limit)),
@@ -63,41 +59,31 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
             self._accept_consent_if_present(driver)
             cards = self._wait_for_review_cards_or_open_panel(driver)
             container = self._find_scroll_container(driver, cards[0])
-            sort_applied = self._sort_newest_if_possible(driver)
+            sort_applied = self._apply_sort(driver, sort_by)
             time.sleep(1)
+
+            # Berhenti-awal berbasis tanggal HANYA sah pada daftar kronologis.
+            # Kalau urutan gagal dipasang, Google memakai urutan bawaannya
+            # ('paling relevan') yang tidak berurutan waktu — memotong daftar
+            # itu akan membuang ulasan yang sebenarnya cocok, diam-diam. Maka
+            # putusan 'stop' diturunkan menjadi 'skip': penyaringan tetap
+            # berjalan, hanya berhentinya yang tidak lagi dipercepat.
+            if keep_check is not None and not sort_applied:
+                _asli = keep_check
+
+                def keep_check(review, _f=_asli):
+                    putusan = _f(review)
+                    return 'skip' if putusan == 'stop' else putusan
             cards = self._find_review_cards(driver)
             if cards:
                 container = self._find_scroll_container(driver, cards[0])
-            range_requested = date_from is not None or date_to is not None
-            if range_requested and not sort_applied:
-                warning = (
-                    "Date-range crawling requires Google Maps newest sorting. "
-                    "Sorting was unavailable, so the crawl stopped early to "
-                    "avoid scanning stale reviews."
-                )
-                self.last_metadata = {
-                    "target_review_count": target,
-                    "loaded_review_cards": len(cards),
-                    "reviews_scanned": 0,
-                    "scraped_review_cards": 0,
-                    "matched_review_cards": 0,
-                    "failed_review_cards": 0,
-                    "scroll_attempts": 0,
-                    "headless": self.settings.selenium_headless,
-                    "url": url,
-                    "final_url": driver.current_url,
-                    "stopped_reason": "sort_unavailable",
-                    "sort_applied": False,
-                    "range_warning": warning,
-                }
-                return []
-            max_scanned = max(50, target * 10) if range_requested else None
             (
                 reviews,
-                scanned_review_cards,
+                loaded_review_cards,
                 failed_cards,
                 scroll_attempts,
                 stopped_reason,
+                total_seen,
             ) = self._collect_reviews(
                 driver=driver,
                 container=container,
@@ -105,7 +91,8 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
                 source_url=url,
                 scraped_at=started_at,
                 on_progress=on_progress,
-                max_scanned=max_scanned,
+                keep_check=keep_check,
+                time_limit_seconds=time_limit_seconds,
             )
             if not reviews:
                 raise ReviewSourceError(
@@ -115,18 +102,21 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
 
             self.last_metadata = {
                 "target_review_count": target,
-                "loaded_review_cards": scanned_review_cards,
-                "reviews_scanned": scanned_review_cards,
+                "loaded_review_cards": loaded_review_cards,
                 "scraped_review_cards": len(reviews),
-                "matched_review_cards": len(reviews),
                 "failed_review_cards": failed_cards,
                 "scroll_attempts": scroll_attempts,
                 "headless": self.settings.selenium_headless,
                 "url": url,
                 "final_url": driver.current_url,
                 "stopped_reason": stopped_reason,
+                "sort_by": sort_by,
+                # Penting bagi pemanggil: berhenti-awal berbasis tanggal HANYA
+                # sah bila urutannya benar-benar terpasang. Bila False, daftar
+                # mengikuti urutan bawaan Google yang tidak kronologis.
                 "sort_applied": sort_applied,
-                "max_scanned": max_scanned,
+                "time_limit_seconds": time_limit_seconds,
+                "reviews_scanned": total_seen,
             }
             return reviews
         except ReviewSourceError:
@@ -182,21 +172,66 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
             ) from exc
 
     @staticmethod
-    def _resolve_url(location: Location) -> str:
-        if location.google_reviews_url:
-            return location.google_reviews_url.strip()
-        if location.google_maps_url:
-            return location.google_maps_url.strip()
-        if location.external_place_id:
-            query = quote_plus(location.branch_name or "Hermina")
-            place_id = quote_plus(location.external_place_id)
-            return (
-                "https://www.google.com/maps/search/?api=1"
-                f"&query={query}&query_place_id={place_id}&hl=id"
+    def _place_id_url(location: Location) -> str | None:
+        """URL pencarian dari Place ID — bentuk yang selalu sah."""
+        if not location.external_place_id:
+            return None
+        query = quote_plus(location.branch_name or "Hermina")
+        place_id = quote_plus(location.external_place_id)
+        return (
+            "https://www.google.com/maps/search/?api=1"
+            f"&query={query}&query_place_id={place_id}&hl=id"
+        )
+
+    @classmethod
+    def _resolve_url(cls, location: Location) -> str:
+        """Kandidat pertama yang SAH, bukan kandidat pertama yang terisi.
+
+        google_reviews_url dan google_maps_url adalah kolom opsional yang diisi
+        manusia, jadi bisa salah bentuk — tautan pendek maps.app.goo.gl adalah
+        yang paling sering. external_place_id sebaliknya berasal dari sistem dan
+        selalu menghasilkan URL yang sah.
+
+        Menyerah pada kandidat pertama yang terisi membuat satu kolom opsional
+        yang salah mengalahkan identitas yang benar: Eka Hospital Margonda gagal
+        crawl tiga kali berturut-turut karena tautan pendek, sementara cabang
+        lain yang kolomnya kosong sama sekali justru berhasil lewat Place ID.
+        """
+        kandidat = [
+            ("google_reviews_url", (location.google_reviews_url or "").strip()),
+            ("google_maps_url", (location.google_maps_url or "").strip()),
+            ("external_place_id", cls._place_id_url(location) or ""),
+        ]
+
+        ditolak = []
+
+        for asal, url in kandidat:
+            if not url:
+                continue
+            try:
+                cls._validate_url(url)
+                if ditolak:
+                    logger.warning(
+                        "URL dari %s tidak sah (%s); memakai %s sebagai gantinya",
+                        ", ".join(ditolak),
+                        location.branch_name,
+                        asal,
+                    )
+                return url
+            except ReviewSourceError:
+                ditolak.append(asal)
+
+        if ditolak:
+            raise ReviewSourceError(
+                "URL ulasan Google tidak sah pada "
+                + ", ".join(ditolak)
+                + ". Perbaiki kolom itu, atau isi external_place_id agar URL "
+                "bisa dibentuk otomatis. Tautan pendek maps.app.goo.gl tidak "
+                "didukung — pakai tautan lengkap google.com/maps."
             )
+
         raise ReviewSourceError(
-            "Invalid Google review URL. Please update location "
-            "google_reviews_url."
+            "Lokasi ini belum punya URL ulasan Google maupun external_place_id."
         )
 
     @staticmethod
@@ -275,7 +310,8 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
         source_url: str,
         scraped_at: datetime,
         on_progress=None,
-        max_scanned: int | None = None,
+        keep_check=None,
+        time_limit_seconds: int = 0,
     ):
         reviews: list[dict] = []
         review_keys: set[str] = set()
@@ -285,25 +321,53 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
         scroll_attempts = 0
         stopped_reason = "target_reached"
 
+        # Jumlah ulasan yang LOLOS saringan pemanggil. Target dihitung dari
+        # angka ini, bukan dari jumlah kartu yang terbaca: Google menampilkan
+        # ulasan terbaru lebih dulu, jadi permintaan rentang ke periode lampau
+        # harus boleh menggulir melewati ulasan-ulasan baru tanpa menghabiskan
+        # jatahnya. Tanpa keep_check, angka ini sama dengan jumlah kartu dan
+        # perilakunya persis seperti sebelumnya.
+        kept = 0
+        habis_jendela = False
+
+        # Batas waktu. Rentang tanggal ke periode lampau menuntut menelusuri
+        # ratusan ulasan yang lebih baru lebih dulu, dan tanpa batas satu job
+        # bisa menahan worker sangat lama sementara cabang lain mengantre.
+        # Kehabisan waktu BUKAN kegagalan — yang sudah terkumpul tetap dipakai
+        # dan alasannya dilaporkan apa adanya.
+        batas_waktu = None
+        if time_limit_seconds and time_limit_seconds > 0:
+            batas_waktu = time.monotonic() + time_limit_seconds
+        kehabisan_waktu = False
+
         while (
-            len(reviews) < target
+            kept < target
             and scroll_attempts < self.settings.selenium_max_scroll_attempts
             and no_new_attempts < self.max_no_new_scroll_attempts
-            and (max_scanned is None or len(seen_card_ids) < max_scanned)
         ):
+            if batas_waktu is not None and time.monotonic() >= batas_waktu:
+                kehabisan_waktu = True
+                break
+
             count_before = len(reviews)
             if on_progress is not None:
                 # Dilaporkan tiap putaran gulir, bukan tiap kartu: menulis ke
                 # database sesering kartu akan lebih mahal daripada crawl-nya.
+                #
+                # Dua angka: berapa yang cocok dan berapa yang sudah
+                # ditelusuri. Melaporkan yang cocok saja membuat layar diam di
+                # nol selama menggulir melewati ulasan di luar rentang — tidak
+                # bisa dibedakan dari macet.
                 try:
-                    on_progress(len(reviews), target)
+                    on_progress(kept, target, len(reviews))
                 except Exception:  # laporan kemajuan tidak boleh menggagalkan crawl
                     logger.debug('on_progress gagal', exc_info=True)
             cards = self._find_review_cards(driver)
             for card in cards:
-                if len(reviews) >= target:
+                if kept >= target or habis_jendela:
                     break
-                if max_scanned is not None and len(seen_card_ids) >= max_scanned:
+                if batas_waktu is not None and time.monotonic() >= batas_waktu:
+                    kehabisan_waktu = True
                     break
                 card_id = self._card_identity(card)
                 if card_id in seen_card_ids:
@@ -328,15 +392,37 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
                     if review_key not in review_keys:
                         review_keys.add(review_key)
                         reviews.append(review)
+
+                        # Kartu tetap dikembalikan seluruhnya supaya service
+                        # bisa menghitung berapa yang terbaca dan berapa yang
+                        # dibuang; keputusan di sini hanya menyangkut kapan
+                        # berhenti menggulir.
+                        putusan = "keep"
+                        if keep_check is not None:
+                            try:
+                                putusan = keep_check(review) or "keep"
+                            except Exception:
+                                logger.debug(
+                                    "keep_check gagal, ulasan dianggap lolos",
+                                    exc_info=True,
+                                )
+                                putusan = "keep"
+
+                        if putusan == "stop":
+                            # Sudah melewati batas bawah jendela. Karena
+                            # urutannya terbaru-dulu, sisanya pasti lebih tua.
+                            habis_jendela = True
+                            break
+
+                        if putusan == "keep":
+                            kept += 1
                 except StaleElementReferenceException:
                     seen_card_ids.discard(card_id)
                 except Exception as exc:
                     failed_card_ids.add(card_id)
                     logger.warning("Failed to extract one review card: %s", exc)
 
-            if len(reviews) >= target:
-                break
-            if max_scanned is not None and len(seen_card_ids) >= max_scanned:
+            if kept >= target or habis_jendela or kehabisan_waktu:
                 break
             if len(reviews) == count_before:
                 no_new_attempts += 1
@@ -361,19 +447,23 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
             scroll_attempts += 1
             time.sleep(self.settings.selenium_scroll_delay_seconds)
 
-        if len(reviews) < target:
-            if max_scanned is not None and len(seen_card_ids) >= max_scanned:
-                stopped_reason = "max_scanned_reached"
-            elif no_new_attempts >= self.max_no_new_scroll_attempts:
+        if kehabisan_waktu:
+            stopped_reason = "time_limit"
+        elif habis_jendela:
+            stopped_reason = "out_of_range"
+        elif kept < target:
+            if no_new_attempts >= self.max_no_new_scroll_attempts:
                 stopped_reason = "no_new_review_cards"
             elif scroll_attempts >= self.settings.selenium_max_scroll_attempts:
                 stopped_reason = "max_scroll_attempts"
         return (
             reviews,
             len(seen_card_ids),
+
             len(failed_card_ids),
             scroll_attempts,
             stopped_reason,
+            len(reviews),
         )
 
     def _find_scroll_container(self, driver, first_card: WebElement):
@@ -529,29 +619,57 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
         except WebDriverException:
             return card.id
 
-    def _sort_newest_if_possible(self, driver) -> bool:
+    # Kata kunci menu urutan Google Maps, Inggris dan Indonesia. Google tidak
+    # menyediakan penyaring tanggal sama sekali — hanya empat urutan ini — jadi
+    # rentang tanggal hanya bisa dicapai lewat 'newest' ditambah berhenti awal.
+    SORT_KEYWORDS = {
+        "newest": ("newest", "terbaru"),
+        "most_relevant": ("most relevant", "paling relevan", "relevance"),
+        "highest_rating": ("highest rating", "peringkat tertinggi", "rating tertinggi"),
+        "lowest_rating": ("lowest rating", "peringkat terendah", "rating terendah"),
+    }
+
+    def _apply_sort(self, driver, sort_by: str = "newest") -> bool:
+        """Terapkan urutan pada panel ulasan.
+
+        Mengembalikan True HANYA bila urutannya benar-benar terpasang.
+        Pemanggil wajib memeriksa nilai ini sebelum mengandalkan urutan:
+        berhenti-awal berbasis tanggal hanya sah pada daftar kronologis, dan
+        urutan bawaan Google ('paling relevan') tidak kronologis. Memotong
+        daftar seperti itu akan membuang ulasan yang sebenarnya cocok, diam-diam.
+        """
+        kata = self.SORT_KEYWORDS.get(sort_by) or self.SORT_KEYWORDS["newest"]
+
         sort_button = self._find_first(driver, selectors.SORT_BUTTON_SELECTORS)
         if sort_button is None:
+            logger.info("Tombol urutan tidak ditemukan; memakai urutan bawaan.")
             return False
+
         try:
             self._safe_click(driver, sort_button)
+
+            syarat = " or ".join(
+                "contains(translate(normalize-space(.), "
+                "'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), "
+                f"'{k}')"
+                for k in kata
+            )
             options = driver.find_elements(
                 By.XPATH,
                 "//*[self::div or self::li][@role='menuitemradio' or "
-                "@role='menuitem'][contains(translate(normalize-space(.), "
-                "'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), "
-                "'newest') or contains(translate(normalize-space(.), "
-                "'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), "
-                "'terbaru')]",
+                f"@role='menuitem'][{syarat}]",
             )
             for option in options:
                 if option.is_displayed():
                     self._safe_click(driver, option)
                     time.sleep(1)
                     return True
+
+            logger.info("Pilihan urutan '%s' tidak ada di menu.", sort_by)
+            return False
         except WebDriverException:
             logger.info("Review sorting was unavailable; using current order.")
-        return False
+            return False
 
     @staticmethod
     def _accept_consent_if_present(driver) -> None:

@@ -65,24 +65,44 @@ def enqueue_crawl_jobs(
     _require_scope(principal, "crawl:enqueue")
     request_id = _request_id(request, x_request_id)
     service = CrawlJobService(session_factory=session_factory)
+    # Satu permintaan boleh memuat cabang dan kompetitor sekaligus. Keduanya
+    # dipisah di sini supaya peta per-target di bawah tetap berkunci id cabang
+    # dan tidak pernah bertabrakan dengan kompetitor yang tidak punya id itu.
+    location_targets = [t for t in payload.targets if t.kind == "location"]
+    competitor_targets = [t for t in payload.targets if t.kind == "competitor"]
     try:
         batch, _created = service.enqueue(
             company_id=principal.company_id,
             client_id=principal.client_id,
             idempotency_key=idempotency_key,
             onebox_location_ids=[
-                target.onebox_location_id for target in payload.targets
+                target.onebox_location_id for target in location_targets
             ],
             target_review_counts={
                 target.onebox_location_id: target.target_review_count
-                for target in payload.targets
+                for target in location_targets
                 if target.target_review_count is not None
             },
             target_date_ranges={
                 target.onebox_location_id: (target.date_from, target.date_to)
-                for target in payload.targets
+                for target in location_targets
                 if target.date_from is not None or target.date_to is not None
             },
+            target_sorts={
+                target.onebox_location_id: target.sort_by
+                for target in location_targets
+                if target.sort_by and target.sort_by != "newest"
+            },
+            competitor_targets=[
+                {
+                    "external_place_id": (target.external_place_id or "").strip(),
+                    "target_review_count": target.target_review_count,
+                    "date_from": target.date_from,
+                    "date_to": target.date_to,
+                    "sort_by": target.sort_by,
+                }
+                for target in competitor_targets
+            ],
             slot=payload.slot,
         )
     except CrawlQueueError as exc:
