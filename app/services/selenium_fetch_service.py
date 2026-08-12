@@ -92,7 +92,11 @@ class SeleniumFetchService:
         )
         try:
             raw_reviews = self.client.fetch_reviews(
-                location, limit=requested_target, on_progress=on_progress
+                location,
+                limit=requested_target,
+                on_progress=on_progress,
+                date_from=date_from,
+                date_to=date_to,
             )
             result["metadata"] = dict(self.client.last_metadata)
             result["metadata"]["date_from"] = date_from.isoformat() if date_from else None
@@ -119,11 +123,32 @@ class SeleniumFetchService:
                     logger.exception(
                         "Failed to store one Selenium review: %s", exc
                     )
+            result["metadata"]["matched_review_cards"] = max(
+                0, result["total_fetched"] - result["total_skipped_out_of_range"]
+            )
+            result["metadata"].setdefault(
+                "reviews_scanned",
+                result["metadata"].get("loaded_review_cards", result["total_fetched"]),
+            )
+            stopped_reason = result["metadata"].get("stopped_reason")
+            range_requested = date_from is not None or date_to is not None
+            zero_saved = (
+                result["total_inserted"] == 0
+                and result["total_duplicate"] == 0
+            )
             partial = (
                 result["total_fetched"] < requested_target
                 or result["total_failed"] > 0
+                or stopped_reason in {"sort_unavailable", "time_limit", "max_scanned_reached"}
+                or (
+                    range_requested
+                    and zero_saved
+                    and result["total_skipped_out_of_range"] > 0
+                )
             )
             result["status"] = "partial_success" if partial else "success"
+            if stopped_reason == "sort_unavailable":
+                result["error_message"] = result["metadata"].get("range_warning")
         except Exception as exc:
             result["status"] = "failed"
             result["error_message"] = str(exc)

@@ -419,8 +419,10 @@ class CrawlJobService:
                 date_to=claimed.date_to,
                 on_progress=lambda n, total: self._report_progress(claimed.id, n),
             )
-            if result.get("status") in {"success", "partial_success"}:
+            if result.get("status") == "success":
                 return self._finish(claimed, status="succeeded", result=result)
+            if result.get("status") == "partial_success":
+                return self._finish(claimed, status="partial_success", result=result)
             return self._retry_or_fail(
                 claimed,
                 error_code="CRAWL_FAILED",
@@ -491,7 +493,7 @@ class CrawlJobService:
             job.locked_by = None
             job.locked_at = None
             job.lease_expires_at = None
-            if status in {"succeeded", "skipped", "failed"}:
+            if status in {"succeeded", "partial_success", "skipped", "failed"}:
                 job.finished_at = now
             session.flush()
             batch = session.get(CrawlBatch, claimed.batch_id)
@@ -511,7 +513,7 @@ class CrawlJobService:
                 select(CrawlJob.status).where(CrawlJob.batch_id == batch.id)
             )
         )
-        terminal = {"succeeded", "skipped", "failed"}
+        terminal = {"succeeded", "partial_success", "skipped", "failed"}
         if any(status not in terminal for status in statuses):
             batch.status = "running"
             return
@@ -542,13 +544,17 @@ class CrawlJobService:
                 "running",
                 "retry_wait",
                 "succeeded",
+                "partial_success",
                 "skipped",
                 "failed",
             )
         }
         review_counts = {
             "target": 0,
+            "scanned": 0,
             "fetched": 0,
+            "matched": 0,
+            "out_of_range": 0,
             "inserted": 0,
             "duplicate": 0,
             "failed": 0,
@@ -563,6 +569,22 @@ class CrawlJobService:
             review_counts["fetched"] += int(
                 result.get("total_fetched") or result.get("progress_fetched") or 0
             )
+            metadata = result.get("metadata") or {}
+            fetched_count = int(result.get("total_fetched") or 0)
+            out_of_range_count = int(result.get("total_skipped_out_of_range") or 0)
+            review_counts["scanned"] += int(
+                metadata.get("reviews_scanned")
+                or metadata.get("loaded_review_cards")
+                or fetched_count
+                or result.get("progress_fetched")
+                or 0
+            )
+            review_counts["matched"] += int(
+                metadata.get("matched_review_cards")
+                if metadata.get("matched_review_cards") is not None
+                else max(0, fetched_count - out_of_range_count)
+            )
+            review_counts["out_of_range"] += out_of_range_count
             review_counts["inserted"] += int(result.get("total_inserted") or 0)
             review_counts["duplicate"] += int(result.get("total_duplicate") or 0)
             review_counts["failed"] += int(result.get("total_failed") or 0)

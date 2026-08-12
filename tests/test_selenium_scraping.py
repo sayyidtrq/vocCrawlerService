@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker
@@ -56,7 +56,14 @@ class FakeSeleniumClient:
     def __init__(self):
         self.last_metadata = {}
 
-    def fetch_reviews(self, location, limit=50, on_progress=None):
+    def fetch_reviews(
+        self,
+        location,
+        limit=50,
+        on_progress=None,
+        date_from=None,
+        date_to=None,
+    ):
         self.last_metadata = {
             "target_review_count": limit,
             "loaded_review_cards": 2,
@@ -101,6 +108,74 @@ class FakeSeleniumClient:
                 start=1,
             )
         ]
+
+
+class SortUnavailableSeleniumClient:
+    source_name = "selenium_google_maps"
+
+    def __init__(self):
+        self.last_metadata = {}
+
+    def fetch_reviews(
+        self,
+        location,
+        limit=50,
+        on_progress=None,
+        date_from=None,
+        date_to=None,
+    ):
+        self.last_metadata = {
+            "target_review_count": limit,
+            "loaded_review_cards": 4,
+            "reviews_scanned": 0,
+            "scraped_review_cards": 0,
+            "matched_review_cards": 0,
+            "failed_review_cards": 0,
+            "scroll_attempts": 0,
+            "headless": True,
+            "url": location.google_reviews_url,
+            "stopped_reason": "sort_unavailable",
+            "sort_applied": False,
+            "range_warning": "Date-range crawling requires newest sorting.",
+        }
+        return []
+
+
+def make_session_factory():
+    engine = create_engine(
+        "sqlite+pysqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    return sessionmaker(bind=engine, expire_on_commit=False)
+
+
+def seed_location(session_factory, target_review_count=2):
+    with session_factory() as session:
+        company = Company(
+            name="Test Company",
+            ai_enable_flag=True,
+            total_enable_review=100,
+            analyze_competitor_flag=False,
+        )
+        session.add(company)
+        session.commit()
+        session.refresh(company)
+        company_id = company.id
+    location = LocationService(
+        company_id=company_id, session_factory=session_factory
+    ).add_location(
+        hospital_name="Hermina",
+        branch_name="Hermina Bekasi",
+        city="Bekasi",
+        source="google_places",
+        external_place_id="place-bekasi",
+        google_reviews_url="https://www.google.com/maps/place/example/reviews",
+        target_review_count=target_review_count,
+        is_active=True,
+    )
+    return company_id, location
 
 
 def test_rating_and_count_parsers():
@@ -162,37 +237,9 @@ def test_selenium_hash_uses_scraping_identity_fields():
 
 
 def test_selenium_fetch_stores_metadata_and_deduplicates(tmp_path):
-    engine = create_engine(
-        "sqlite+pysqlite:///:memory:",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    Base.metadata.create_all(engine)
-    session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    session_factory = make_session_factory()
     settings = make_settings(tmp_path)
-    with session_factory() as session:
-        company = Company(
-            name="Test Company",
-            ai_enable_flag=True,
-            total_enable_review=100,
-            analyze_competitor_flag=False,
-        )
-        session.add(company)
-        session.commit()
-        session.refresh(company)
-        company_id = company.id
-    location = LocationService(
-        company_id=company_id, session_factory=session_factory
-    ).add_location(
-        hospital_name="Hermina",
-        branch_name="Hermina Bekasi",
-        city="Bekasi",
-        source="google_places",
-        external_place_id="place-bekasi",
-        google_reviews_url="https://www.google.com/maps/place/example/reviews",
-        target_review_count=2,
-        is_active=True,
-    )
+    company_id, location = seed_location(session_factory)
     service = SeleniumFetchService(
         company_id=company_id,
         session_factory=session_factory,
@@ -213,3 +260,52 @@ def test_selenium_fetch_stores_metadata_and_deduplicates(tmp_path):
         )
         assert latest_log.source == "selenium_google_maps"
         assert latest_log.metadata_json["scroll_attempts"] == 3
+
+
+def test_date_range_stops_honestly_when_sort_is_unavailable(tmp_path):
+    session_factory = make_session_factory()
+    settings = make_settings(tmp_path)
+    company_id, location = seed_location(session_factory, target_review_count=5)
+    service = SeleniumFetchService(
+        company_id=company_id,
+        session_factory=session_factory,
+        settings=settings,
+        client=SortUnavailableSeleniumClient(),
+    )
+
+    result = service.fetch_location(
+        location.id,
+        target=5,
+        date_from=datetime.now().astimezone() - timedelta(days=7),
+    )
+
+    assert result["status"] == "partial_success"
+    assert result["total_inserted"] == 0
+    assert result["total_fetched"] == 0
+    assert result["metadata"]["stopped_reason"] == "sort_unavailable"
+    assert result["metadata"]["reviews_scanned"] == 0
+    assert result["error_message"] == "Date-range crawling requires newest sorting."
+
+
+def test_date_range_with_only_out_of_range_reviews_is_partial(tmp_path):
+    session_factory = make_session_factory()
+    settings = make_settings(tmp_path)
+    company_id, location = seed_location(session_factory)
+    service = SeleniumFetchService(
+        company_id=company_id,
+        session_factory=session_factory,
+        settings=settings,
+        client=FakeSeleniumClient(),
+    )
+
+    result = service.fetch_location(
+        location.id,
+        target=2,
+        date_from=datetime.now().astimezone() - timedelta(days=1),
+    )
+
+    assert result["status"] == "partial_success"
+    assert result["total_fetched"] == 2
+    assert result["total_inserted"] == 0
+    assert result["total_skipped_out_of_range"] == 2
+    assert result["metadata"]["matched_review_cards"] == 0

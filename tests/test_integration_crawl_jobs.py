@@ -142,7 +142,10 @@ def test_enqueue_is_non_blocking_and_idempotent(session_factory):
     assert first.json()["data"]["jobs"][0]["target_review_count"] == 2
     assert first.json()["data"]["review_counts"] == {
         "target": 2,
+        "scanned": 0,
         "fetched": 0,
+        "matched": 0,
+        "out_of_range": 0,
         "inserted": 0,
         "duplicate": 0,
         "failed": 0,
@@ -220,9 +223,11 @@ def test_worker_claims_and_completes_job(session_factory):
                 "status": "success",
                 "location_id": location_id,
                 "target_review_count": target,
+                "metadata": {"reviews_scanned": 2, "matched_review_cards": 2},
                 "total_fetched": 2,
                 "total_inserted": 2,
                 "total_duplicate": 0,
+                "total_skipped_out_of_range": 0,
             }
 
     settings = replace(
@@ -253,8 +258,60 @@ def test_worker_claims_and_completes_job(session_factory):
     assert completed["jobs"][0]["result"]["total_inserted"] == 2
     assert completed["review_counts"] == {
         "target": 2,
+        "scanned": 2,
         "fetched": 2,
+        "matched": 2,
+        "out_of_range": 0,
         "inserted": 2,
         "duplicate": 0,
         "failed": 0,
     }
+
+
+def test_worker_marks_partial_success_without_failed_retry(session_factory):
+    class FakeFetchService:
+        def fetch_location(
+            self,
+            location_id,
+            target,
+            date_from=None,
+            date_to=None,
+            on_progress=None,
+        ):
+            return {
+                "status": "partial_success",
+                "location_id": location_id,
+                "target_review_count": target,
+                "metadata": {
+                    "reviews_scanned": 50,
+                    "matched_review_cards": 0,
+                    "stopped_reason": "sort_unavailable",
+                },
+                "total_fetched": 0,
+                "total_inserted": 0,
+                "total_duplicate": 0,
+                "total_skipped_out_of_range": 0,
+                "total_failed": 0,
+            }
+
+    service = CrawlJobService(
+        session_factory=session_factory,
+        fetch_service_factory=lambda _company_id: FakeFetchService(),
+    )
+    queued, _ = service.enqueue(
+        company_id=1,
+        client_id=1,
+        idempotency_key="169:2026-07-29:partial",
+        onebox_location_ids=[101],
+        slot="morning",
+    )
+
+    completed = service.execute_next(worker_id="test-worker")
+
+    assert completed["batch_id"] == queued["batch_id"]
+    assert completed["status"] == "completed"
+    assert completed["counts"]["partial_success"] == 1
+    assert completed["jobs"][0]["status"] == "partial_success"
+    assert completed["jobs"][0]["result"]["metadata"]["stopped_reason"] == (
+        "sort_unavailable"
+    )

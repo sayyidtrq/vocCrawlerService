@@ -41,7 +41,12 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
         self.last_metadata: dict = {}
 
     def fetch_reviews(
-        self, location: Location, limit: int = 50, on_progress=None
+        self,
+        location: Location,
+        limit: int = 50,
+        on_progress=None,
+        date_from: datetime | None = None,
+        date_to: datetime | None = None,
     ) -> list[dict]:
         target = min(
             max(1, int(limit)),
@@ -58,14 +63,38 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
             self._accept_consent_if_present(driver)
             cards = self._wait_for_review_cards_or_open_panel(driver)
             container = self._find_scroll_container(driver, cards[0])
-            self._sort_newest_if_possible(driver)
+            sort_applied = self._sort_newest_if_possible(driver)
             time.sleep(1)
             cards = self._find_review_cards(driver)
             if cards:
                 container = self._find_scroll_container(driver, cards[0])
+            range_requested = date_from is not None or date_to is not None
+            if range_requested and not sort_applied:
+                warning = (
+                    "Date-range crawling requires Google Maps newest sorting. "
+                    "Sorting was unavailable, so the crawl stopped early to "
+                    "avoid scanning stale reviews."
+                )
+                self.last_metadata = {
+                    "target_review_count": target,
+                    "loaded_review_cards": len(cards),
+                    "reviews_scanned": 0,
+                    "scraped_review_cards": 0,
+                    "matched_review_cards": 0,
+                    "failed_review_cards": 0,
+                    "scroll_attempts": 0,
+                    "headless": self.settings.selenium_headless,
+                    "url": url,
+                    "final_url": driver.current_url,
+                    "stopped_reason": "sort_unavailable",
+                    "sort_applied": False,
+                    "range_warning": warning,
+                }
+                return []
+            max_scanned = max(50, target * 10) if range_requested else None
             (
                 reviews,
-                loaded_review_cards,
+                scanned_review_cards,
                 failed_cards,
                 scroll_attempts,
                 stopped_reason,
@@ -76,6 +105,7 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
                 source_url=url,
                 scraped_at=started_at,
                 on_progress=on_progress,
+                max_scanned=max_scanned,
             )
             if not reviews:
                 raise ReviewSourceError(
@@ -85,14 +115,18 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
 
             self.last_metadata = {
                 "target_review_count": target,
-                "loaded_review_cards": loaded_review_cards,
+                "loaded_review_cards": scanned_review_cards,
+                "reviews_scanned": scanned_review_cards,
                 "scraped_review_cards": len(reviews),
+                "matched_review_cards": len(reviews),
                 "failed_review_cards": failed_cards,
                 "scroll_attempts": scroll_attempts,
                 "headless": self.settings.selenium_headless,
                 "url": url,
                 "final_url": driver.current_url,
                 "stopped_reason": stopped_reason,
+                "sort_applied": sort_applied,
+                "max_scanned": max_scanned,
             }
             return reviews
         except ReviewSourceError:
@@ -241,6 +275,7 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
         source_url: str,
         scraped_at: datetime,
         on_progress=None,
+        max_scanned: int | None = None,
     ):
         reviews: list[dict] = []
         review_keys: set[str] = set()
@@ -254,6 +289,7 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
             len(reviews) < target
             and scroll_attempts < self.settings.selenium_max_scroll_attempts
             and no_new_attempts < self.max_no_new_scroll_attempts
+            and (max_scanned is None or len(seen_card_ids) < max_scanned)
         ):
             count_before = len(reviews)
             if on_progress is not None:
@@ -266,6 +302,8 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
             cards = self._find_review_cards(driver)
             for card in cards:
                 if len(reviews) >= target:
+                    break
+                if max_scanned is not None and len(seen_card_ids) >= max_scanned:
                     break
                 card_id = self._card_identity(card)
                 if card_id in seen_card_ids:
@@ -298,6 +336,8 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
 
             if len(reviews) >= target:
                 break
+            if max_scanned is not None and len(seen_card_ids) >= max_scanned:
+                break
             if len(reviews) == count_before:
                 no_new_attempts += 1
             else:
@@ -322,7 +362,9 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
             time.sleep(self.settings.selenium_scroll_delay_seconds)
 
         if len(reviews) < target:
-            if no_new_attempts >= self.max_no_new_scroll_attempts:
+            if max_scanned is not None and len(seen_card_ids) >= max_scanned:
+                stopped_reason = "max_scanned_reached"
+            elif no_new_attempts >= self.max_no_new_scroll_attempts:
                 stopped_reason = "no_new_review_cards"
             elif scroll_attempts >= self.settings.selenium_max_scroll_attempts:
                 stopped_reason = "max_scroll_attempts"
@@ -487,10 +529,10 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
         except WebDriverException:
             return card.id
 
-    def _sort_newest_if_possible(self, driver) -> None:
+    def _sort_newest_if_possible(self, driver) -> bool:
         sort_button = self._find_first(driver, selectors.SORT_BUTTON_SELECTORS)
         if sort_button is None:
-            return
+            return False
         try:
             self._safe_click(driver, sort_button)
             options = driver.find_elements(
@@ -506,9 +548,10 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
                 if option.is_displayed():
                     self._safe_click(driver, option)
                     time.sleep(1)
-                    return
+                    return True
         except WebDriverException:
             logger.info("Review sorting was unavailable; using current order.")
+        return False
 
     @staticmethod
     def _accept_consent_if_present(driver) -> None:
