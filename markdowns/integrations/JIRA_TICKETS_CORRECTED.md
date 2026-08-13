@@ -27,6 +27,7 @@
 | **DNGO19-3390** | VOC : Crawl Scheduler         | TODO                 | `feature/DNGO19-3390_VOC-Crawl-Scheduler`                  |
 | **DNGO19-3391** | VOC : Config Setup            | READY TO DEV         | `feature/DNGO19-3391_VOC-Config-Setup`                     |
 | **DNGO19-3392** | VOC : Generate Reports        | READY TO DEV         | `feature/DNGO19-3392_VOC-Generate-Reports`                 |
+| **DNGO19-TBD**  | VOC : Dashboard Profile Per Daerah | TODO            | `feature/DNGO19-TBD_VOC-Dashboard-Per-Daerah`              |
 | **DNGO19-3396** | VOC : Competitor Analysis     | TODO                 | `feature/DNGO19-3396_VOC-Competitor-Analysis`              |
 | DNGO19-3346     | Media Crawler Google Business Review | *scope lanjutan sudah didistribusikan; tidak dipakai sebagai bucket* | `feature/DNGO19-3346_Media-Crawler-Google-Business-Review` |
 
@@ -1217,6 +1218,194 @@ Audit ini membandingkan branch ticket dengan integration branch `feature/voc` pa
 > - Page break dan tabel multi-page ditangani.
 > - Data sesuai hasil filter.
 > - File PDF dapat dibuka dan diunduh.
+
+### DNGO19-3471 — Dashboard Profile Per Daerah
+
+- **Owner:** OneBox (OB)
+- **Status:** TODO
+- **Branch:** `feature/DNGO19-3471_VOC-Dashboard-Per-Daerah`
+
+#### Description
+
+> Menyediakan Dashboard Profile VoC per daerah/wilayah dan per lokasi/site agar PIC daerah dapat melihat helicopter view sekaligus detail kondisi cabang/lokasi yang menjadi tanggung jawabnya.
+>
+> Ticket ini berbeda dari Dashboard Google Review existing yang bersifat dashboard global dengan filter wilayah/lokasi. Dashboard Profile Per Daerah berfokus pada konteks kerja PIC dan executive recap: satu daerah atau satu site menjadi pusat tampilan, lengkap dengan profil lokasi, penanggung jawab, recap bintang, tren bulanan, tren masalah, response rate, response time/SLA, serta daftar cabang yang perlu tindakan.
+>
+> **Scope:**
+> - Menyediakan halaman dashboard profile per daerah/wilayah yang menampilkan seluruh informasi penting terkait cabang/lokasi dalam wilayah tersebut.
+> - Menyediakan mode profile per 1 lokasi/site berisi alamat, PIC, kontak penanggung jawab, status integrasi, recap rating, dan performa respons.
+> - Membatasi data berdasarkan permission user, mapping PIC, site, wilayah/group, dan lokasi yang diizinkan.
+> - Menampilkan KPI operasional utama: total review, rating rata-rata, review hari ini, review bulan ini, review negatif, belum dibalas, response rate, SLA response, dan jumlah lokasi berisiko.
+> - Menampilkan tren bulanan rating, volume review, positif/negatif/netral, serta tren masalah per kategori untuk periode yang dipilih.
+> - Menampilkan daftar cabang/lokasi dalam wilayah terpilih beserta status risiko, rating, total review, review negatif, status reply, PIC, dan periode agregasi.
+> - Menampilkan peta atau ringkasan persebaran risiko lokasi dalam wilayah apabila koordinat tersedia.
+> - Menampilkan peta masalah/top issue per wilayah dengan komposisi positif, negatif, dan netral berdasarkan kategori yang tersedia dari backend.
+> - Menampilkan review negatif terbaru dan action/follow up yang terkait dengan lokasi dalam scope PIC.
+> - Menyediakan drill-down ke halaman Ulasan dan Action & Follow Up dengan filter wilayah/lokasi yang sesuai.
+> - Menyediakan tampilan recap executive yang siap dibaca untuk satu daerah atau satu profile site, tanpa perlu user menyusun filter manual dari dashboard global.
+>
+> **Acceptance Criteria:**
+> - PIC daerah hanya melihat lokasi yang berada dalam scope aksesnya.
+> - User tanpa mapping PIC atau permission yang sesuai mendapatkan empty/permission state yang jelas.
+> - KPI, tabel lokasi, review negatif, dan action tracker hanya menghitung data dari lokasi yang diizinkan.
+> - Profile daerah/site menampilkan alamat, PIC, recap bintang, response rate, response time/SLA, tren bulanan, dan tren masalah apabila data backend tersedia.
+> - Filter periode, wilayah/group, lokasi, status reply, dan risiko bekerja sesuai data backend yang tersedia tanpa membuat data simulasi.
+> - Drill-down ke Ulasan dan Action & Follow Up membawa filter wilayah/lokasi yang benar.
+> - Dashboard menampilkan loading, empty, partial-data, error state, tombol muat ulang, dan waktu terakhir data diperbarui.
+> - Tidak ada dummy/mock data ketika backend gagal atau data belum tersedia.
+> - Angka yang ditampilkan konsisten dengan Dashboard Google Review, halaman Ulasan, dan Action & Follow Up untuk scope yang sama.
+> - Perbedaan angka dengan Dashboard Google Review dapat dijelaskan: Dashboard Profile menghitung scope PIC/daerah/site, sedangkan Dashboard Google Review menghitung scope global/filter yang dipilih user.
+>
+> **Dependency:**
+> - Master Data Locations memiliki mapping wilayah/group dan PIC lokasi/daerah yang dapat dibaca oleh OneBox.
+> - Backend VoC menyediakan data Google Review dan action tracker berdasarkan SiteId serta scope lokasi user.
+> - Permission user/PIC daerah tersedia atau dapat diturunkan dari mapping PIC lokasi.
+>
+> **Out of Scope:**
+> - Membuat connector channel baru.
+> - Mengubah crawler Google Review.
+> - Mengubah model AI atau prompt analisis.
+> - Membuat dashboard competitor.
+> - Generate/export PDF khusus daerah; output PDF tetap menjadi scope Generate Reports apabila dibutuhkan.
+> - Mengubah relasi backend master lokasi yang sudah berjalan.
+
+
+
+#### Subtask 1
+
+**Summary**
+
+`VOC - Dashboard Per Daerah - Permission and PIC Scope`
+
+**Description**
+
+> Implementasikan pembatasan akses dashboard berdasarkan SiteId, permission user, dan mapping PIC daerah/lokasi.
+>
+> **Scope:**
+> - Baca SiteId user aktif.
+> - Tentukan daftar lokasi yang boleh dilihat user berdasarkan permission atau mapping PIC.
+> - Dukung user top level yang boleh melihat seluruh wilayah.
+> - Dukung PIC daerah yang hanya boleh melihat wilayah/lokasi terkait.
+> - Tampilkan permission state apabila user tidak memiliki scope lokasi.
+>
+> **Acceptance Criteria:**
+> - User hanya dapat melihat data lokasi dalam scope aksesnya.
+> - PIC daerah tidak dapat melihat lokasi di luar wilayahnya.
+> - User top level tetap dapat memilih semua wilayah.
+> - Kondisi mapping PIC kosong atau tidak valid ditampilkan dengan pesan yang jelas.
+> - Pembatasan akses diterapkan pada KPI, chart, tabel, review feed, dan action tracker.
+
+#### Subtask 2
+
+**Summary**
+
+`VOC - Dashboard Per Daerah - Backend Data Scope`
+
+**Description**
+
+> Siapkan data dashboard per daerah dari backend tanpa menggunakan dummy data.
+>
+> **Scope:**
+> - Ambil Google Review dari sumber backend VoC yang sama dengan Dashboard Google Review.
+> - Filter data berdasarkan SiteId dan daftar lokasi yang diizinkan.
+> - Sediakan KPI agregat per daerah/wilayah.
+> - Sediakan data per lokasi: rating, total review, review negatif, belum dibalas, response rate, SLA response, risk flag, PIC, dan periode agregasi.
+> - Sediakan data profile per lokasi/site: alamat, PIC, kontak, status integrasi, recap bintang, response rate, response time/SLA, dan periode.
+> - Sediakan tren bulanan rating, volume review, sentiment, dan tren masalah per kategori untuk scope daerah/site.
+> - Sediakan review negatif terbaru dan action/follow up dalam scope lokasi user.
+> - Gunakan data action/ticket yang tersedia dari Ticket OneBox apabila sudah ada.
+>
+> **Acceptance Criteria:**
+> - Backend tidak mengirim data lokasi di luar scope user.
+> - KPI konsisten dengan perhitungan dashboard Google Review untuk scope yang sama.
+> - Tren bulanan dan tren masalah mengikuti scope daerah/site yang dipilih.
+> - Profile site menampilkan data lokasi, PIC, recap bintang, response rate, dan SLA jika tersedia.
+> - Review negatif dan action tracker hanya berisi lokasi yang diizinkan.
+> - Jika backend gagal, frontend menerima error state, bukan data contoh.
+> - Data kosong dikembalikan sebagai empty state yang eksplisit.
+
+#### Subtask 3
+
+**Summary**
+
+`VOC - Dashboard Profile Per Daerah - Build Dashboard UI`
+
+**Description**
+
+> Bangun halaman dashboard profile per daerah/site dengan design system VoC yang konsisten dan mudah dipakai PIC daerah maupun executive.
+>
+> **Scope:**
+> - Tambahkan route/menu dashboard per daerah sesuai struktur navigasi VoC.
+> - Tampilkan selector scope daerah/site sebagai konteks utama, bukan sekadar filter tambahan.
+> - Tampilkan filter periode, wilayah/group, lokasi, status reply, dan risiko.
+> - Tampilkan KPI utama untuk scope daerah/site.
+> - Tampilkan panel profile site berisi alamat, PIC, kontak, status integrasi, recap bintang, response rate, dan SLA.
+> - Tampilkan tren bulanan rating, volume review, sentiment, dan tren masalah.
+> - Tampilkan tabel monitoring lokasi dengan sorting, pagination, dan drill-down.
+> - Tampilkan peta/ringkasan risiko lokasi dalam wilayah.
+> - Tampilkan peta masalah/top issue dengan komposisi sentimen.
+> - Tampilkan review negatif terbaru dan action/follow up terkait.
+> - Sediakan loading, empty, partial-data, error state, tombol muat ulang, dan timestamp data.
+>
+> **Acceptance Criteria:**
+> - Dashboard dapat dibuka dari menu/route yang disepakati.
+> - Tampilan konsisten dengan Dashboard Google Review dan halaman VoC lain.
+> - Selector scope daerah/site memperbarui KPI, tren, profile, tabel, review feed, dan action tracker.
+> - Tabel lokasi mudah discan oleh PIC daerah.
+> - Profile site dapat dibaca sebagai executive recap tanpa harus membuka halaman lain.
+> - Tren bulanan dan tren masalah mudah dibaca untuk satu daerah atau satu lokasi.
+> - Peta/ringkasan risiko tidak menampilkan marker kosong tanpa penjelasan.
+> - Tidak ada dummy data ketika backend gagal.
+
+#### Subtask 4
+
+**Summary**
+
+`VOC - Dashboard Profile Per Daerah - Site Profile and Executive Recap`
+
+**Description**
+
+> Bangun tampilan profile satu lokasi/site yang dapat dipakai PIC dan executive untuk memahami kondisi lokasi tertentu dalam periode tertentu.
+>
+> **Scope:**
+> - Tampilkan identitas lokasi: nama, alamat, wilayah/group, status integrasi, PIC, nomor WhatsApp, email, dan kontak penanggung jawab.
+> - Tampilkan recap bintang: average rating, distribusi rating, review hari ini, review bulan ini, dan total review periode.
+> - Tampilkan response performance: sudah dibalas, belum dibalas, response rate, rata-rata waktu response, dan SLA response.
+> - Tampilkan trend bulanan rating, volume review, positif/negatif/netral, dan trend masalah per kategori.
+> - Tampilkan top issue, review negatif terbaru, dan action/follow up yang masih perlu ditindaklanjuti.
+> - Sediakan empty/partial state apabila beberapa data profile belum tersedia dari backend.
+>
+> **Acceptance Criteria:**
+> - User dapat memilih satu lokasi/site dan melihat profile lengkap lokasi tersebut.
+> - Profile menampilkan alamat dan PIC dari Master Data Locations.
+> - Recap rating dan response performance sesuai data backend pada periode yang dipilih.
+> - Trend bulanan dan trend masalah hanya menghitung lokasi/site yang sedang dibuka.
+> - Review negatif dan action tracker hanya berisi data lokasi/site tersebut.
+> - Tidak ada dummy data untuk field yang belum tersedia.
+
+#### Subtask 5
+
+**Summary**
+
+`VOC - Dashboard Per Daerah - Drilldown and Follow Up Actions`
+
+**Description**
+
+> Hubungkan dashboard per daerah dengan halaman Ulasan dan Action & Follow Up agar PIC dapat mengambil tindakan cepat.
+>
+> **Scope:**
+> - Drill-down KPI, lokasi, issue, dan review negatif ke halaman Ulasan dengan filter wilayah/lokasi yang sesuai.
+> - Drill-down action tracker ke halaman Action & Follow Up dengan filter wilayah/lokasi/status yang sesuai.
+> - Sediakan akses buat tindak lanjut, eskalasi ke PIC, dan create ticket jika backend action tersedia.
+> - Pastikan aksi hanya dapat dilakukan user yang memiliki permission.
+> - Tampilkan conflict atau permission message apabila backend menolak perubahan.
+>
+> **Acceptance Criteria:**
+> - Klik KPI/lokasi/issue membawa user ke Ulasan dengan filter yang benar.
+> - Klik action membawa user ke Action & Follow Up dengan filter yang benar.
+> - PIC dapat membuat tindak lanjut untuk review dalam scope-nya.
+> - PIC tidak dapat mengubah review atau ticket di luar scope-nya.
+> - Error, conflict, dan permission denial ditampilkan dengan jelas.
 
 ### DNGO19-3396 — Competitor Analysis
 
