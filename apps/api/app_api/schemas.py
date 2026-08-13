@@ -109,6 +109,7 @@ class ReviewResponse(_Base):
     review_hash: str | None = None
     created_at: str | None = None
     # embedded analysis
+    analysis_status: str | None = None
     analyzed: bool | None = None
     analysis_id: int | None = None
     sentiment: str | None = None

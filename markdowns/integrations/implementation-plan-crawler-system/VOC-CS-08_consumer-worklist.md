@@ -62,6 +62,26 @@ ONEBOX_WORKLIST_CACHE_STALE_AFTER_SECONDS=86400
 `ONEBOX_COMPANY_ID` is mandatory for the consumer even though the JWT scopes the OneBox
 request. It prevents a deployment from guessing which VoC tenant should receive the data.
 
+### Test without OneBox using Postman Mock Server
+
+1. Import `postman/onebox-worklist-mock.postman_collection.json` into Postman.
+2. Create a **public** mock server from that collection and copy its
+   `https://<id>.mock.pstmn.io` URL.
+3. Copy `.env.example` to `.env`, then replace its OneBox block with
+   `.env.postman-mock.example` and set `ONEBOX_BASE_URL` to the copied URL.
+4. Ensure `ONEBOX_COMPANY_ID` points to an existing company in the crawler database.
+5. Run:
+
+```bash
+alembic upgrade head
+python -m scripts.refresh_worklist --json
+```
+
+The collection mocks both authentication and worklist responses, so the existing production
+client path is exercised unchanged. A successful run reports `status: synced`, `fetched: 2`,
+and `upserted: 2`. The sample location has `mock: true`, so a later review fetch uses the
+crawler's local mock review client instead of Google Maps or Selenium.
+
 ## Data behavior
 
 1. The entire response is validated before any database mutation.

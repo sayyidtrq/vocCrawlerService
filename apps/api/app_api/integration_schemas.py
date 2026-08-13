@@ -37,6 +37,7 @@ IssueCategory = Literal[
     "general_praise",
     "other",
 ]
+AnalysisStatus = Literal["pending", "completed", "failed", "incomplete"]
 
 API_VERSION = "v1"
 DEFAULT_LIMIT = 100
@@ -78,6 +79,7 @@ class IntegrationReviewItem(_Base):
     updated_at: datetime
     sync_updated_at: datetime
 
+    analysis_status: AnalysisStatus
     analyzed: bool
     # Null for every one of these when analyzed is false. keywords and the two
     # flags stay non-null with empty/false defaults so consumers never have to

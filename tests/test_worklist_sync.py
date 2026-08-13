@@ -1,4 +1,6 @@
+import json
 from dataclasses import replace
+from pathlib import Path
 
 import httpx
 import pytest
@@ -264,3 +266,37 @@ def test_onebox_client_logs_in_once_and_reuses_jwt(settings, monkeypatch):
     assert client.get_worklist()["data"] == []
     assert [request.url.path for request in calls].count("/api/Authenticate") == 1
     assert "jwt-secret-value" not in " ".join(str(request.headers) for request in calls)
+
+
+def test_postman_mock_collection_matches_worklist_consumer(
+    session_factory, settings, company_id
+):
+    collection_path = (
+        Path(__file__).parents[1]
+        / "postman"
+        / "onebox-worklist-mock.postman_collection.json"
+    )
+    collection = json.loads(collection_path.read_text())
+    responses = {
+        "/" + "/".join(item["request"]["url"]["path"]): (
+            item["response"][0]["code"],
+            json.loads(item["response"][0]["body"]),
+        )
+        for item in collection["item"]
+    }
+
+    def handler(request):
+        code, body = responses[request.url.path]
+        return httpx.Response(code, json=body)
+
+    cfg = onebox_settings(settings, company_id)
+    with httpx.Client(transport=httpx.MockTransport(handler)) as http_client:
+        result = WorklistSyncService(
+            company_id=company_id,
+            session_factory=session_factory,
+            settings=cfg,
+            client=OneBoxWorklistClient(cfg, http_client=http_client),
+        ).refresh()
+
+    assert result.status == "synced"
+    assert result.fetched == result.upserted == 2

@@ -227,6 +227,64 @@ def test_rating_only_review_uses_deterministic_fallback(
         assert "tanpa komentar tertulis" in analysis.summary
 
 
+def test_analysis_status_distinguishes_completed_incomplete_and_failed(
+    session_factory, settings, company_id
+):
+    location = add_location(session_factory, company_id)
+    with session_factory() as session:
+        session.add_all(
+            [
+                Review(
+                    company_id=company_id,
+                    location_id=location.id,
+                    source="google_maps",
+                    review_hash=f"status-{name}",
+                    review_text=name,
+                )
+                for name in ("complete", "incomplete", "failed")
+            ]
+        )
+        session.commit()
+
+    class StatusClient:
+        model_name = "status-test"
+
+        def __init__(self):
+            self.last_usage = {}
+
+        def analyze_review(self, review):
+            if review["review_text"] == "failed":
+                raise RuntimeError("provider secret must not leak")
+            return {
+                "issue_category": "general_praise",
+                "urgency": "low",
+                "summary": "Ringkasan" if review["review_text"] == "complete" else "",
+                "recommended_action": "Pertahankan pelayanan",
+            }
+
+    result = AnalysisService(
+        company_id=company_id,
+        session_factory=session_factory,
+        settings=settings,
+        client=StatusClient(),
+    ).analyze_pending()
+
+    assert result["success"] == 2
+    assert result["failed"] == 1
+    assert result["errors"] == [{"review_id": 3, "error": "Analysis failed."}]
+    with session_factory() as session:
+        statuses = list(session.scalars(select(Review.analysis_status).order_by(Review.id)))
+        assert statuses == ["completed", "incomplete", "failed"]
+    assert AnalysisService._result_status(
+        {
+            "urgency": "low",
+            "issue_category": "general_praise",
+            "summary": "Ringkasan",
+            "recommended_action": "Pertahankan pelayanan",
+        }
+    ) == "completed"
+
+
 def test_local_llm_normalizes_invalid_category_and_boolean(settings):
     content = json.dumps(
         {

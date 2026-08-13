@@ -176,6 +176,7 @@ class ReviewService:
             "raw_payload": review.raw_payload,
             "review_hash": review.review_hash,
             "created_at": review.created_at,
+            "analysis_status": review.analysis_status,
             "analyzed": analysis is not None,
             "analysis_id": analysis.id if analysis else None,
             "sentiment": analysis.sentiment if analysis else None,

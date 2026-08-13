@@ -398,6 +398,7 @@ def test_analysis_completed_after_a_pull_resurfaces_the_review(
 
     assert [item["id"] for item in returned] == [review_id]
     assert returned[0]["analyzed"] is True
+    assert returned[0]["analysis_status"] == "completed"
     assert returned[0]["sentiment"]
     # The watermark advanced past the checkpoint the consumer had already stored —
     # that advance is the only reason this row came back.
@@ -433,6 +434,43 @@ def test_rerunning_analysis_moves_the_watermark_again(
     assert len(rows) == 2  # append-only preserved
     # The consumer is handed the newest analysis, not the stale first one.
     assert payload["data"][0]["analyzed"] is True
+
+
+def test_failed_analysis_moves_the_watermark_and_syncs_status(
+    client, session_factory, tenants, settings
+):
+    review_id = add_review(
+        session_factory,
+        company_id=tenants["company_id"],
+        location_id=tenants["depok_id"],
+        tag="failed-analysis",
+        sync_at=BASE,
+        text="Pelayanan lambat",
+    )
+    _, checkpoint = drain(client, limit=10)
+
+    class FailingClient:
+        model_name = "failing-test"
+
+        def __init__(self):
+            self.last_usage = {}
+
+        def analyze_review(self, review):
+            raise RuntimeError("provider detail must stay in server logs")
+
+    result = AnalysisService(
+        company_id=tenants["company_id"],
+        session_factory=session_factory,
+        settings=settings,
+        client=FailingClient(),
+    ).rerun_review(review_id)
+    payload = get_page(client, cursor=checkpoint, limit=10)
+
+    assert result["errors"] == [{"review_id": review_id, "error": "Analysis failed."}]
+    assert [item["id"] for item in payload["data"]] == [review_id]
+    assert payload["data"][0]["analysis_status"] == "failed"
+    assert payload["data"][0]["analyzed"] is False
+    assert parse_z(payload["data"][0]["sync_updated_at"]) > BASE
 
 
 # --------------------------------------------------------------------------- #

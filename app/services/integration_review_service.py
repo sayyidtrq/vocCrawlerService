@@ -318,6 +318,7 @@ class IntegrationReviewService:
             "owner_response_time": _as_utc(review.owner_response_time),
             "updated_at": _as_utc(review.updated_at),
             "sync_updated_at": _as_utc(review.sync_updated_at),
+            "analysis_status": review.analysis_status,
             "analyzed": analysis is not None,
             "sentiment": analysis.sentiment if analysis else None,
             "sentiment_score": (

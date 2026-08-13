@@ -72,6 +72,7 @@ Contoh response:
       "rating": 5,
       "review_text": "RS Hermina memiliki pelayanan yang sangat konsisten...",
       "review_time": "2026-08-01T09:15:00",
+      "analysis_status": "pending",
       "analyzed": false,
       "analysis_id": null,
       "sentiment": null,
@@ -179,6 +180,7 @@ Contoh response:
   "rating": 5,
   "review_text": "RS Hermina memiliki pelayanan yang sangat konsisten...",
   "review_time": "2026-08-01T09:15:00",
+  "analysis_status": "completed",
   "analyzed": true,
   "analysis_id": 301,
   "sentiment": "positive",
@@ -407,4 +409,3 @@ Untuk flow satu ulasan, urutan minimum adalah:
 ```text
 Login -> GET 1 review -> POST rerun analysis 1 review -> GET detail review
 ```
-

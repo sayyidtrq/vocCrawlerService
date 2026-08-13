@@ -86,6 +86,7 @@ Semua timestamp **UTC ISO 8601 dengan suffix `Z`** (mis. `2026-07-12T03:00:00Z`)
 | `owner_response_time` | datetime | **ya** | |
 | `updated_at` | datetime | tidak | Kapan baris review terakhir berubah di DB kami. **Jangan dipakai untuk delta-sync** — lihat §3. |
 | `sync_updated_at` | datetime | tidak | **Watermark sinkronisasi. Ini yang dipakai untuk delta-sync.** Lihat §3. |
+| `analysis_status` | enum | tidak | Status authoritative: `pending`, `completed`, `failed`, atau `incomplete`. |
 | `analyzed` | boolean | tidak | `false` = analisis AI belum jalan. |
 | `sentiment` | enum | **ya** | Null ⟺ `analyzed=false`. |
 | `sentiment_score` | float | **ya** | 0.0–1.0. Null ⟺ `analyzed=false`. |
@@ -108,6 +109,7 @@ Mengikuti `AnalysisService`. Ada test yang gagal kalau daftar di kode analisis d
 - **`sentiment`** — `positive`, `neutral`, `negative`, `mixed`, `unknown`
 - **`urgency`** — `low`, `medium`, `high`, `critical`, `unknown`
 - **`issue_category`** (18) — `doctor_service`, `nurse_service`, `administration`, `waiting_time`, `cleanliness`, `facility`, `parking`, `billing`, `pharmacy`, `emergency_room`, `inpatient`, `customer_service`, `booking_system`, `staff_communication`, `security`, `food`, `general_praise`, `other`
+- **`analysis_status`** — `pending` (belum ada hasil), `completed` (seluruh field wajib terisi), `failed` (percobaan terakhir gagal), `incomplete` (analysis row ada tetapi field wajib kosong)
 
 Perlakukan nilai tak dikenal sebagai `unknown`/`other` daripada melempar error — itu memberi kami ruang menambah kategori tanpa memecahkan ingest kalian.
 

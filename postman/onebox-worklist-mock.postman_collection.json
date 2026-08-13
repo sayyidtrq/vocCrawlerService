@@ -1,0 +1,167 @@
+{
+  "info": {
+    "_postman_id": "edeb707e-cb7f-4c10-98ab-d68b70aa2c12",
+    "name": "OneBox Worklist Mock for Hermina Crawler",
+    "description": "Mock of the two OneBox endpoints used by the Hermina crawler.",
+    "schema": "https://schema.postman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Authenticate",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/x-www-form-urlencoded"
+          }
+        ],
+        "body": {
+          "mode": "urlencoded",
+          "urlencoded": [
+            {
+              "key": "email",
+              "value": "mock@local.invalid"
+            },
+            {
+              "key": "password",
+              "value": "mock-password"
+            },
+            {
+              "key": "siteId",
+              "value": "169"
+            }
+          ]
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/Authenticate",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "Authenticate"
+          ]
+        }
+      },
+      "response": [
+        {
+          "name": "Authentication successful",
+          "originalRequest": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/x-www-form-urlencoded"
+              }
+            ],
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "email",
+                  "value": "mock@local.invalid"
+                },
+                {
+                  "key": "password",
+                  "value": "mock-password"
+                },
+                {
+                  "key": "siteId",
+                  "value": "169"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/Authenticate",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "Authenticate"
+              ]
+            }
+          },
+          "status": "OK",
+          "code": 200,
+          "_postman_previewlanguage": "json",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "cookie": [],
+          "body": "{\n  \"token\": \"postman-mock-token\",\n  \"valid_until\": \"2099-01-01T00:00:00Z\"\n}"
+        }
+      ]
+    },
+    {
+      "name": "VoC Worklist",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer postman-mock-token",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/VocWorklist",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "VocWorklist"
+          ]
+        }
+      },
+      "response": [
+        {
+          "name": "Hermina mock worklist",
+          "originalRequest": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer postman-mock-token",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/VocWorklist",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "VocWorklist"
+              ]
+            }
+          },
+          "status": "OK",
+          "code": 200,
+          "_postman_previewlanguage": "json",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "cookie": [],
+          "body": "{\n  \"meta\": {\n    \"site_id\": 169,\n    \"count\": 2\n  },\n  \"data\": [\n    {\n      \"kind\": \"location\",\n      \"onebox_connection_id\": 1039,\n      \"onebox_location_id\": 1,\n      \"external_place_id\": \"postman-hermina-depok\",\n      \"branch_name\": \"RS Hermina Depok\",\n      \"hospital_name\": \"Hermina\",\n      \"city\": \"Depok\",\n      \"google_maps_url\": \"https://maps.google.com/?q=RS+Hermina+Depok\",\n      \"target_review_count\": 5,\n      \"active\": true,\n      \"crawl_enabled\": true,\n      \"ingest_reviews\": true,\n      \"mock\": true\n    },\n    {\n      \"kind\": \"competitor\",\n      \"onebox_connection_id\": 1040,\n      \"onebox_location_id\": 2,\n      \"external_place_id\": \"postman-competitor-depok\",\n      \"branch_name\": \"Competitor Depok\",\n      \"city\": \"Depok\",\n      \"target_review_count\": 5,\n      \"active\": true,\n      \"crawl_enabled\": false,\n      \"ingest_reviews\": false,\n      \"mock\": true\n    }\n  ]\n}"
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "https://replace-with-your-mock-id.mock.pstmn.io",
+      "type": "string"
+    }
+  ]
+}

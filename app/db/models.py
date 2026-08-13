@@ -341,6 +341,10 @@ class Review(Base):
             "rating IS NULL OR (rating >= 1 AND rating <= 5)",
             name="ck_reviews_rating",
         ),
+        CheckConstraint(
+            "analysis_status IN ('pending', 'completed', 'failed', 'incomplete')",
+            name="ck_reviews_analysis_status",
+        ),
         Index("idx_reviews_location_id", "location_id"),
         Index("idx_reviews_review_time", "review_time"),
         Index("idx_reviews_rating", "rating"),
@@ -396,6 +400,9 @@ class Review(Base):
     # mid-page.
     sync_updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    analysis_status: Mapped[str] = mapped_column(
+        String(20), server_default=text("'pending'"), default="pending", nullable=False
     )
 
     location: Mapped[Location] = relationship(back_populates="reviews")

@@ -21,12 +21,14 @@ from sqlalchemy.pool import StaticPool
 from app.db.base import Base
 from app.db.models import Company, Location, Review, ReviewAnalysis, User
 from app.services.analysis_service import (
+    ANALYSIS_STATUSES,
     ALLOWED_CATEGORIES,
     ALLOWED_SENTIMENTS,
     ALLOWED_URGENCIES,
 )
 from apps.api.app_api.dependencies import get_current_user
 from apps.api.app_api.integration_schemas import (
+    AnalysisStatus,
     IntegrationReviewListResponse,
     IssueCategory,
     Sentiment,
@@ -64,6 +66,7 @@ EXPECTED_ITEM_FIELDS = {
     "owner_response_time",
     "updated_at",
     "sync_updated_at",
+    "analysis_status",
     "analyzed",
     "sentiment",
     "sentiment_score",
@@ -147,6 +150,7 @@ def seeded(session_factory):
             # Set explicitly to the value the CS-02 backfill produces
             # (max of updated_at, created_at, latest analysis created_at).
             sync_updated_at=BASE_TIME + timedelta(hours=2),
+            analysis_status="completed",
         )
         negative = Review(
             company_id=tenant.id,
@@ -163,6 +167,7 @@ def seeded(session_factory):
             created_at=BASE_TIME + timedelta(days=2),
             updated_at=BASE_TIME + timedelta(days=2, hours=1),
             sync_updated_at=BASE_TIME + timedelta(days=2, hours=2),
+            analysis_status="completed",
         )
         unanalyzed = Review(
             company_id=tenant.id,
@@ -348,6 +353,7 @@ def test_analyzed_reviews_carry_their_analysis(client):
 
     critical = by_hash["hash-negative"]
     assert critical["analyzed"] is True
+    assert critical["analysis_status"] == "completed"
     assert critical["sentiment"] == "negative"
     assert critical["urgency"] == "critical"
     assert critical["issue_category"] == "emergency_room"
@@ -370,6 +376,7 @@ def test_contract_enums_match_analysis_service():
     assert set(get_args(Sentiment)) == ALLOWED_SENTIMENTS
     assert set(get_args(Urgency)) == ALLOWED_URGENCIES
     assert set(get_args(IssueCategory)) == ALLOWED_CATEGORIES
+    assert set(get_args(AnalysisStatus)) == ANALYSIS_STATUSES
 
 
 def test_every_timestamp_is_utc_with_a_z_suffix(client):

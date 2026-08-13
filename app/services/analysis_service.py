@@ -37,6 +37,13 @@ ALLOWED_CATEGORIES = {
     "general_praise",
     "other",
 }
+ANALYSIS_STATUSES = {"pending", "completed", "failed", "incomplete"}
+REQUIRED_ANALYSIS_FIELDS = (
+    "urgency",
+    "issue_category",
+    "summary",
+    "recommended_action",
+)
 
 
 class AnalysisService:
@@ -145,10 +152,11 @@ class AnalysisService:
                     self._store_analysis(review["id"], cleaned, raw_result)
                     result["success"] += 1
                     result["sentiments"][cleaned["sentiment"]] += 1
-                except Exception as exc:
+                except Exception:
+                    self._store_failure_status(review["id"])
                     result["failed"] += 1
                     result["errors"].append(
-                        {"review_id": review["id"], "error": str(exc)}
+                        {"review_id": review["id"], "error": "Analysis failed."}
                     )
                     logger.exception("Analysis failed for review %s", review["id"])
         return result
@@ -191,6 +199,7 @@ class AnalysisService:
                     raw_response=raw_result,
                 )
             )
+            review.analysis_status = self._result_status(cleaned)
             # Same transaction as the insert, deliberately. If the analysis
             # committed and the watermark did not, the review would sit below every
             # consumer's checkpoint forever and its analysis would never be
@@ -209,6 +218,34 @@ class AnalysisService:
                 else datetime.now(timezone.utc)
             )
             session.commit()
+
+    def _store_failure_status(self, review_id: int) -> None:
+        with self.session_factory() as session:
+            statement = select(Review).where(Review.id == review_id)
+            if self.company_id is not None:
+                statement = statement.where(Review.company_id == self.company_id)
+            if session.bind.dialect.name == "postgresql":
+                statement = statement.with_for_update()
+
+            review = session.scalar(statement)
+            if review is None:
+                raise ValueError(f"Review {review_id} not found in this company.")
+
+            review.analysis_status = "failed"
+            review.sync_updated_at = (
+                func.clock_timestamp()
+                if session.bind.dialect.name == "postgresql"
+                else datetime.now(timezone.utc)
+            )
+            session.commit()
+
+    @staticmethod
+    def _result_status(result: dict) -> str:
+        return (
+            "completed"
+            if all(str(result.get(field) or "").strip() for field in REQUIRED_ANALYSIS_FIELDS)
+            else "incomplete"
+        )
 
     @staticmethod
     def _rating_only_result(rating: int | None) -> dict:
