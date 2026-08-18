@@ -242,11 +242,15 @@ yang persis sama dengan batch manual.
 **Berkas:** `crontab.txt`
 
 ```
-* * * * * [ "$VOC_SCHEDULER" = "1" ] && ./runx voc schedule
+* * * * * [ "${VOC_WORKERS:-0}" != "0" ] && ./runx voc schedule
 ```
 
 Dijaga variabel lingkungan supaya hanya menyala di container yang memang
 ditugaskan, dan bisa dimatikan tanpa deploy ulang kalau ada masalah.
+
+Variabelnya wajib ikut didaftarkan di `onecloud/docker-compose.yml` **dan**
+`onecloud/docker-compose.base.yml`: blok `environment:` di sana daftar-putih,
+jadi variabel yang tidak disebut tidak pernah sampai ke dalam container.
 
 **Selesai bila:** log cron menunjukkan task berjalan tiap menit dan berhenti
 tanpa error ketika tidak ada jadwal jatuh tempo.
@@ -377,7 +381,7 @@ Ingat: yang menentukan menu tampil adalah **`Enabled`**, bukan `ExpireDate`.
 ### F1. Deploy dan migrasi di dev
 
 Migrasi dev = **MySQL 5.7**, lokal 8.0. Periksa tidak ada sintaks khusus MySQL 8
-sebelum jalan. Pastikan `VOC_SCHEDULER=1` terpasang di container scheduler dev.
+sebelum jalan. Pastikan `VOC_WORKERS=1` terpasang di container scheduler dev.
 
 ### F2. UAT
 

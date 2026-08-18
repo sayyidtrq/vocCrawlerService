@@ -43,11 +43,11 @@ masalah.
 Baris cron VoC tetap ditulis defensif:
 
 ```
-* * * * * [ -f /container.env ] && . /container.env; [ "$VOC_SCHEDULER" = "1" ] && ./runx voc schedule
+* * * * * [ -f /container.env ] && . /container.env; [ "${VOC_WORKERS:-0}" != "0" ] && ./runx voc schedule
 ```
 
 Di container scheduler, `/container.env` tidak ada sehingga sourcing dilewati
-dan `$VOC_SCHEDULER` datang dari `BASH_ENV` — benar. Di container mana pun yang
+dan `$VOC_WORKERS` datang dari `BASH_ENV` — benar. Di container mana pun yang
 menulis ke `/container.env`, ia tetap benar. Sudah diuji berjalan di kedua
 keadaan.
 
@@ -102,21 +102,26 @@ itu disengaja, supaya bisa dijalankan ulang setelah dibereskan.
 
 ## 3. Nyalakan scheduler di container scheduler dev
 
-Tambahkan pada environment service `scheduler`:
+Namanya `VOC_WORKERS`, mengikuti flag `*_WORKERS` lain. Nilainya sudah dipasang
+di repo: `0` di `.env` (default mati) dan `1` di `.env.development`.
 
-```
-VOC_SCHEDULER=1
-```
+Variabelnya juga sudah didaftarkan di **dua** compose — `onecloud/docker-compose.yml`
+dan `onecloud/docker-compose.base.yml`. Blok `environment:` di sana adalah
+daftar-putih: variabel yang tidak disebut tidak pernah sampai ke dalam
+container, berapa pun kali ia disetel di `.env`.
 
 Variabel ini masuk ke `/container.env` lewat entrypoint, lalu dibaca baris cron.
 **Jangan** dipasang di webapp — cukup di container yang memang menjalankan cron.
+
+`/var/www/html/container.env` ditulis sekali saat container start, jadi mengubah
+`.env` saja tidak cukup — **container scheduler harus dijalankan ulang**.
 
 Verifikasi setelah deploy:
 
 ```bash
 # di container scheduler dev
 crontab -l | grep 'voc schedule'
-grep VOC_SCHEDULER /container.env
+grep VOC_WORKERS /container.env
 ```
 
 `SCHEDULER_REPLICAS` boleh lebih dari 1. Sudah diuji: delapan proses scheduler
@@ -195,7 +200,7 @@ SELECT ScheduleId, ScheduledFor, COUNT(*) c
 Matikan lebih dulu — paling cepat dan tanpa deploy:
 
 ```
-VOC_SCHEDULER=0     (atau hapus variabelnya)
+VOC_WORKERS=0       (atau hapus variabelnya)
 ```
 
 Jadwal berhenti berjalan; data dan riwayat utuh.
