@@ -7,7 +7,7 @@ from typing import Any, Callable
 
 import httpx
 
-from app.config import Settings, get_settings, resolve_onebox_base_url
+from app.config import Settings, get_settings
 from app.utils.date_parser import parse_datetime
 
 logger = logging.getLogger(__name__)
@@ -178,14 +178,10 @@ class OneBoxWorklistClient:
         self._valid_until = None
 
     def _require_configuration(self) -> None:
-        try:
-            base_url = resolve_onebox_base_url(self.settings)
-        except ValueError as exc:
-            raise OneBoxWorklistError(str(exc)) from exc
         missing = [
             name
             for name, value in (
-                ("ONEBOX_BASE_URL or ONEBOX_LOCAL_FEATURE_KEY", base_url),
+                ("ONEBOX_BASE_URL", self.settings.onebox_base_url),
                 ("ONEBOX_SVC_EMAIL", self.settings.onebox_service_email),
                 ("ONEBOX_SVC_PASSWORD", self.settings.onebox_service_password),
                 ("ONEBOX_SITE_ID", self.settings.onebox_site_id),
@@ -199,9 +195,4 @@ class OneBoxWorklistClient:
             )
 
     def _path(self, path: str) -> str:
-        base_url = resolve_onebox_base_url(self.settings)
-        if base_url is None:
-            raise OneBoxWorklistError(
-                "OneBox worklist integration is missing a resolved base URL."
-            )
-        return f"{base_url.rstrip('/')}/{path.lstrip('/')}"
+        return f"{self.settings.onebox_base_url.rstrip('/')}/{path.lstrip('/')}"

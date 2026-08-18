@@ -4,17 +4,17 @@ from pathlib import Path
 
 import httpx
 import pytest
-from sqlalchemy import create_engine, func, select
+from sqlalchemy import func, select
+
+from app.db.models import Competitor, Location, WorklistSyncState
+from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.config import Settings, get_settings, resolve_onebox_base_url
+from app.config import Settings
 from app.db.base import Base
-from app.db.models import Company, Competitor, Location, WorklistSyncState
-from app.integrations.onebox_worklist_client import (
-    OneBoxUnavailableError,
-    OneBoxWorklistClient,
-)
+from app.db.models import Company
+from app.integrations.onebox_worklist_client import OneBoxUnavailableError, OneBoxWorklistClient
 from app.services.worklist_sync_service import WorklistSyncError, WorklistSyncService
 
 
@@ -92,94 +92,6 @@ def onebox_settings(settings, company_id):
         onebox_site_id=169,
         onebox_company_id=company_id,
     )
-
-
-def test_resolve_onebox_explicit_base_url_preserves_feature_prefix(settings):
-    cfg = replace(
-        settings,
-        onebox_base_url="https://dev.onebox.co.id/feature/voc/",
-    )
-
-    assert resolve_onebox_base_url(cfg) == "https://dev.onebox.co.id/feature/voc"
-
-
-def test_resolve_onebox_local_feature_key(settings):
-    cfg = replace(
-        settings,
-        app_env="local",
-        onebox_base_url=None,
-        onebox_local_feature_key="dngo19-3471",
-    )
-    assert (
-        resolve_onebox_base_url(cfg)
-        == "https://localhost.onebox.co.id/feature/DNGO19-3471"
-    )
-
-
-def test_get_settings_fails_fast_when_both_onebox_modes_are_set(monkeypatch):
-    monkeypatch.setenv("APP_ENV", "local")
-    monkeypatch.setenv(
-        "ONEBOX_BASE_URL", "https://dev.onebox.co.id/feature/voc"
-    )
-    monkeypatch.setenv("ONEBOX_LOCAL_FEATURE_KEY", "DNGO19-3471")
-    get_settings.cache_clear()
-    try:
-        with pytest.raises(
-            ValueError,
-            match="either ONEBOX_BASE_URL or ONEBOX_LOCAL_FEATURE_KEY",
-        ):
-            get_settings()
-    finally:
-        get_settings.cache_clear()
-
-
-@pytest.mark.parametrize(
-    ("changes", "message"),
-    [
-        (
-            {
-                "app_env": "local",
-                "onebox_base_url": "https://dev.onebox.co.id/feature/voc",
-                "onebox_local_feature_key": "DNGO19-3471",
-            },
-            "either ONEBOX_BASE_URL or ONEBOX_LOCAL_FEATURE_KEY",
-        ),
-        (
-            {
-                "app_env": "development",
-                "onebox_base_url": None,
-                "onebox_local_feature_key": "DNGO19-3471",
-            },
-            "only allowed when APP_ENV=local",
-        ),
-        (
-            {
-                "app_env": "local",
-                "onebox_base_url": None,
-                "onebox_local_feature_key": "../../admin",
-            },
-            "must match DNGO19-<number>",
-        ),
-        (
-            {
-                "app_env": "local",
-                "onebox_base_url": None,
-                "onebox_local_origin": "https://localhost.onebox.co.id/feature",
-                "onebox_local_feature_key": "DNGO19-3471",
-            },
-            "only scheme, host, and optional port",
-        ),
-        (
-            {"onebox_base_url": "https://onebox.test/path?target=other"},
-            "must not contain a query string or fragment",
-        ),
-    ],
-)
-def test_resolve_onebox_base_url_rejects_unsafe_configuration(
-    settings, changes, message
-):
-    with pytest.raises(ValueError, match=message):
-        resolve_onebox_base_url(replace(settings, **changes))
 
 
 def payload():
@@ -353,36 +265,6 @@ def test_onebox_client_logs_in_once_and_reuses_jwt(settings, monkeypatch):
     assert client.get_worklist()["data"] == []
     assert [request.url.path for request in calls].count("/api/Authenticate") == 1
     assert "jwt-secret-value" not in " ".join(str(request.headers) for request in calls)
-
-
-def test_onebox_client_uses_local_feature_prefix(settings):
-    paths = []
-
-    def handler(request):
-        paths.append(request.url.path)
-        if request.url.path.endswith("/api/Authenticate"):
-            return httpx.Response(200, json={"token": "local-jwt"})
-        return httpx.Response(200, json={"data": []})
-
-    cfg = replace(
-        settings,
-        app_env="local",
-        onebox_base_url=None,
-        onebox_local_feature_key="DNGO19-3471",
-        onebox_service_email="voc@test.invalid",
-        onebox_service_password="secret",
-        onebox_site_id=169,
-        onebox_company_id=3,
-    )
-    with httpx.Client(transport=httpx.MockTransport(handler)) as http_client:
-        client = OneBoxWorklistClient(cfg, http_client=http_client)
-        assert client.get_worklist()["data"] == []
-
-    assert paths == [
-        "/feature/DNGO19-3471/api/Authenticate",
-        "/feature/DNGO19-3471/api/VocWorklist",
-    ]
-    assert WorklistSyncService.is_configured(cfg)
 
 
 def test_postman_mock_collection_matches_worklist_consumer(

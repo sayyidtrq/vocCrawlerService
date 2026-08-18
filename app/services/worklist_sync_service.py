@@ -8,7 +8,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.config import Settings, get_settings, resolve_onebox_base_url
+from app.config import Settings, get_settings
 from app.db.models import Company, Competitor, Location, WorklistSyncState
 from app.db.session import get_session_factory
 from app.integrations.onebox_worklist_client import (
@@ -122,14 +122,10 @@ class WorklistSyncService:
 
     @classmethod
     def is_configured(cls, settings: Settings) -> bool:
-        try:
-            base_url = resolve_onebox_base_url(settings)
-        except ValueError:
-            return False
         return all(
             value is not None and (not isinstance(value, str) or bool(value.strip()))
             for value in (
-                base_url,
+                settings.onebox_base_url,
                 settings.onebox_service_email,
                 settings.onebox_service_password,
                 settings.onebox_site_id,

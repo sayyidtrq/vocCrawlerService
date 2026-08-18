@@ -12,10 +12,6 @@ services:
     restart: unless-stopped
     env_file:
       - .env
-    extra_hosts:
-      # Local feature routing: keep the TLS hostname while reaching the OneBox
-      # reverse proxy published on the Docker host.
-      - "localhost.onebox.co.id:host-gateway"
     ports:
       - "8000:8000"
     volumes:
@@ -34,8 +30,6 @@ services:
     restart: unless-stopped
     env_file:
       - .env
-    extra_hosts:
-      - "localhost.onebox.co.id:host-gateway"
     environment:
       SKIP_MIGRATIONS: "true"
       SELENIUM_HEADLESS: "${SELENIUM_HEADLESS:-true}"
