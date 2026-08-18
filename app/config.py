@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
-
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env")
@@ -18,6 +19,8 @@ LOCAL_JWT_SECRET_FALLBACK = "local-only-jwt-secret-never-deploy-this"
 LOCAL_SERVICE_TOKEN_PEPPER_FALLBACK = (
     "local-only-service-token-pepper-never-deploy-this"
 )
+DEFAULT_ONEBOX_LOCAL_ORIGIN = "https://localhost.onebox.co.id"
+ONEBOX_LOCAL_FEATURE_PATTERN = re.compile(r"DNGO19-[0-9]+", re.IGNORECASE)
 
 
 def _as_float(name: str, default: float) -> float:
@@ -100,6 +103,8 @@ class Settings:
     jwt_secret_key: str = LOCAL_JWT_SECRET_FALLBACK
     service_token_pepper: str = LOCAL_SERVICE_TOKEN_PEPPER_FALLBACK
     onebox_base_url: str | None = None
+    onebox_local_origin: str = DEFAULT_ONEBOX_LOCAL_ORIGIN
+    onebox_local_feature_key: str | None = None
     onebox_service_email: str | None = None
     onebox_service_password: str | None = None
     onebox_site_id: int | None = None
@@ -116,6 +121,55 @@ class Settings:
     def ensure_export_dir(self) -> Path:
         self.export_dir.mkdir(parents=True, exist_ok=True)
         return self.export_dir
+
+
+def _validated_onebox_url(name: str, value: str, *, origin_only: bool) -> str:
+    candidate = value.strip().rstrip("/")
+    try:
+        parsed = urlsplit(candidate)
+        # Accessing port also validates malformed/non-numeric port values.
+        _ = parsed.port
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a valid HTTP(S) URL.") from exc
+
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise ValueError(f"{name} must use http or https and include a host.")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError(f"{name} must not contain user information.")
+    if parsed.query or parsed.fragment:
+        raise ValueError(f"{name} must not contain a query string or fragment.")
+    if origin_only and parsed.path not in {"", "/"}:
+        raise ValueError(f"{name} must contain only scheme, host, and optional port.")
+
+    if origin_only:
+        return f"{parsed.scheme}://{parsed.netloc}"
+    return candidate
+
+
+def resolve_onebox_base_url(settings: Settings) -> str | None:
+    """Resolve one explicit OneBox upstream without accepting request input."""
+    explicit = (settings.onebox_base_url or "").strip()
+    feature_key = (settings.onebox_local_feature_key or "").strip()
+
+    if explicit and feature_key:
+        raise ValueError(
+            "Set either ONEBOX_BASE_URL or ONEBOX_LOCAL_FEATURE_KEY, not both."
+        )
+    if explicit:
+        return _validated_onebox_url("ONEBOX_BASE_URL", explicit, origin_only=False)
+    if not feature_key:
+        return None
+    if settings.app_env.strip().lower() != "local":
+        raise ValueError("ONEBOX_LOCAL_FEATURE_KEY is only allowed when APP_ENV=local.")
+    if not ONEBOX_LOCAL_FEATURE_PATTERN.fullmatch(feature_key):
+        raise ValueError("ONEBOX_LOCAL_FEATURE_KEY must match DNGO19-<number>.")
+
+    origin = _validated_onebox_url(
+        "ONEBOX_LOCAL_ORIGIN",
+        settings.onebox_local_origin or DEFAULT_ONEBOX_LOCAL_ORIGIN,
+        origin_only=True,
+    )
+    return f"{origin}/feature/{feature_key.upper()}"
 
 
 @lru_cache(maxsize=1)
@@ -183,7 +237,7 @@ def get_settings() -> Settings:
     if selenium_user_data_dir and not selenium_user_data_dir.is_absolute():
         selenium_user_data_dir = BASE_DIR / selenium_user_data_dir
 
-    return Settings(
+    settings = Settings(
         app_env=app_env,
         app_name=os.getenv("APP_NAME", "Review System").strip(),
         log_level=os.getenv("LOG_LEVEL", "INFO").strip().upper(),
@@ -235,6 +289,11 @@ def get_settings() -> Settings:
         jwt_secret_key=jwt_secret_key,
         service_token_pepper=service_token_pepper,
         onebox_base_url=os.getenv("ONEBOX_BASE_URL") or None,
+        onebox_local_origin=(
+            os.getenv("ONEBOX_LOCAL_ORIGIN", DEFAULT_ONEBOX_LOCAL_ORIGIN).strip()
+            or DEFAULT_ONEBOX_LOCAL_ORIGIN
+        ),
+        onebox_local_feature_key=os.getenv("ONEBOX_LOCAL_FEATURE_KEY") or None,
         onebox_service_email=os.getenv("ONEBOX_SVC_EMAIL") or None,
         onebox_service_password=os.getenv("ONEBOX_SVC_PASSWORD") or None,
         onebox_site_id=_as_optional_int("ONEBOX_SITE_ID"),
@@ -255,3 +314,7 @@ def get_settings() -> Settings:
             1, _as_int("CRAWL_WORKER_RETRY_BASE_SECONDS", 60)
         ),
     )
+    # Fail during application startup instead of surfacing an ambiguous route
+    # only when the background worker attempts its first worklist refresh.
+    resolve_onebox_base_url(settings)
+    return settings

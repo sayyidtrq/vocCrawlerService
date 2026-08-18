@@ -2,6 +2,8 @@
 
 $Root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $FrontendDir = Join-Path $Root "hermina-crawler-fe"
+$PythonPath = Join-Path $Root ".venv\Scripts\python.exe"
+$NpmPath = (Get-Command npm.cmd -ErrorAction SilentlyContinue).Source
 
 if (-not (Test-Path (Join-Path $Root "apps\api\main.py"))) {
     throw "FastAPI backend tidak ditemukan di apps\api\main.py"
@@ -11,6 +13,14 @@ if (-not (Test-Path (Join-Path $FrontendDir "package.json"))) {
     throw "Next.js frontend tidak ditemukan di hermina-crawler-fe"
 }
 
+if (-not (Test-Path $PythonPath)) {
+    throw "Python virtual environment tidak ditemukan di .venv"
+}
+
+if (-not $NpmPath) {
+    throw "npm.cmd tidak ditemukan. Install Node.js dan pastikan tersedia di PATH."
+}
+
 Write-Host "Starting Review System..." -ForegroundColor Green
 Write-Host "Backend : http://localhost:8000/api/docs" -ForegroundColor Cyan
 Write-Host "Frontend: http://localhost:3000" -ForegroundColor Cyan
@@ -18,17 +28,17 @@ Write-Host "Tekan Ctrl+C untuk stop FE dan BE." -ForegroundColor Yellow
 Write-Host ""
 
 $backendJob = Start-Job -Name "hermina-api" -ScriptBlock {
-    param($RootPath)
+    param($RootPath, $ProjectPython)
     Set-Location $RootPath
     $env:PYTHONUNBUFFERED = "1"
-    & python -m uvicorn apps.api.main:app --reload --port 8000 2>&1 | ForEach-Object { $_ }
-} -ArgumentList $Root
+    & $ProjectPython -m uvicorn apps.api.main:app --reload --port 8000 2>&1 | ForEach-Object { $_ }
+} -ArgumentList $Root, $PythonPath
 
 $frontendJob = Start-Job -Name "hermina-web" -ScriptBlock {
-    param($FrontendPath)
+    param($FrontendPath, $NpmExecutable)
     Set-Location $FrontendPath
-    & npm run dev -- --hostname 127.0.0.1 --port 3000 2>&1 | ForEach-Object { $_ }
-} -ArgumentList $FrontendDir
+    & $NpmExecutable run dev -- --hostname 127.0.0.1 --port 3000 2>&1 | ForEach-Object { $_ }
+} -ArgumentList $FrontendDir, $NpmPath
 
 try {
     while ($true) {
