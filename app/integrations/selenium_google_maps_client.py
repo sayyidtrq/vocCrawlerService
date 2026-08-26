@@ -77,6 +77,7 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
             cards = self._find_review_cards(driver)
             if cards:
                 container = self._find_scroll_container(driver, cards[0])
+            platform_snapshot = self._extract_platform_snapshot(driver)
             (
                 reviews,
                 loaded_review_cards,
@@ -118,6 +119,8 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
                 "time_limit_seconds": time_limit_seconds,
                 "reviews_scanned": total_seen,
             }
+            if platform_snapshot:
+                self.last_metadata.update(platform_snapshot)
             return reviews
         except ReviewSourceError:
             raise
@@ -756,6 +759,69 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
                     seen.add(key)
                     output.append(element)
         return output
+
+    @staticmethod
+    def _extract_platform_snapshot(driver) -> dict:
+        try:
+            body = driver.find_element(By.TAG_NAME, "body")
+            text = body.text or ""
+        except WebDriverException:
+            text = ""
+
+        candidates = [text]
+        for selector in selectors.REVIEW_BUTTON_SELECTORS:
+            try:
+                elements = driver.find_elements(By.CSS_SELECTOR, selector)
+            except WebDriverException:
+                continue
+            for element in elements[:5]:
+                try:
+                    candidates.append(
+                        " ".join(
+                            [
+                                element.text or "",
+                                element.get_attribute("aria-label") or "",
+                            ]
+                        )
+                    )
+                except WebDriverException:
+                    continue
+
+        blob = "\n".join(candidates).replace("\xa0", " ")
+        rating = None
+        review_count = 0
+        patterns = (
+            r"([1-5](?:[.,]\d)?)\s+(?:stars?|bintang)\s+(\d[\d.,]*)\s+"
+            r"(?:reviews?|ulasan)",
+            r"([1-5](?:[.,]\d)?)\s+(\d[\d.,]*)\s+(?:reviews?|ulasan)",
+            r"([1-5](?:[.,]\d)?)\s*\n\s*(\d[\d.,]*)\s+(?:reviews?|ulasan)",
+        )
+        for pattern in patterns:
+            match = re.search(pattern, blob, flags=re.IGNORECASE)
+            if match:
+                rating = float(match.group(1).replace(",", "."))
+                review_count = parse_compact_count(match.group(2), default=0)
+                break
+
+        if not review_count:
+            match = re.search(
+                r"(\d[\d.,]*)\s+(?:reviews?|ulasan)",
+                blob,
+                flags=re.IGNORECASE,
+            )
+            if match:
+                review_count = parse_compact_count(match.group(1), default=0)
+        if rating is None:
+            match = re.search(r"\b([1-5][.,]\d)\b", blob)
+            if match:
+                rating = float(match.group(1).replace(",", "."))
+
+        snapshot = {}
+        if rating is not None:
+            snapshot["platform_rating"] = rating
+        if review_count:
+            snapshot["platform_review_count"] = review_count
+        return snapshot
 
     @staticmethod
     def _element_text(element: WebElement | None) -> str:

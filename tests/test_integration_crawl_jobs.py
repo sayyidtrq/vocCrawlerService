@@ -215,6 +215,8 @@ def test_worker_claims_and_completes_job(session_factory):
             target,
             date_from=None,
             date_to=None,
+            sort_by="newest",
+            time_limit_seconds=600,
             on_progress=None,
         ):
             if on_progress is not None:
@@ -256,6 +258,8 @@ def test_worker_claims_and_completes_job(session_factory):
     assert completed["jobs"][0]["status"] == "succeeded"
     assert completed["jobs"][0]["onebox_location_id"] == 101
     assert completed["jobs"][0]["result"]["total_inserted"] == 2
+    assert completed["duration_seconds"] >= 0
+    assert completed["jobs"][0]["duration_seconds"] >= 0
     assert completed["review_counts"] == {
         "target": 2,
         "scanned": 2,
@@ -276,6 +280,8 @@ def test_worker_marks_partial_success_without_failed_retry(session_factory):
             target,
             date_from=None,
             date_to=None,
+            sort_by="newest",
+            time_limit_seconds=600,
             on_progress=None,
         ):
             return {
@@ -315,3 +321,92 @@ def test_worker_marks_partial_success_without_failed_retry(session_factory):
     assert completed["jobs"][0]["result"]["metadata"]["stopped_reason"] == (
         "sort_unavailable"
     )
+
+
+def test_worker_response_includes_instrumentation_and_does_not_double_count(
+    session_factory,
+):
+    seen = {}
+
+    class FakeFetchService:
+        def fetch_location(
+            self,
+            location_id,
+            target,
+            date_from=None,
+            date_to=None,
+            sort_by="newest",
+            time_limit_seconds=600,
+            on_progress=None,
+        ):
+            seen["sort_by"] = sort_by
+            seen["time_limit_seconds"] = time_limit_seconds
+            return {
+                "status": "success",
+                "location_id": location_id,
+                "target_review_count": target,
+                "metadata": {
+                    "reviews_scanned": 5,
+                    "matched_review_cards": 3,
+                    "platform_rating": 4.3,
+                    "platform_review_count": 9422,
+                },
+                "total_fetched": 3,
+                "total_inserted": 1,
+                "total_duplicate": 2,
+                "total_skipped_out_of_range": 2,
+                "total_failed": 0,
+            }
+
+    service = CrawlJobService(
+        session_factory=session_factory,
+        fetch_service_factory=lambda _company_id: FakeFetchService(),
+    )
+    service.enqueue(
+        company_id=1,
+        client_id=1,
+        idempotency_key="169:2026-07-29:instrumented-lowest",
+        onebox_location_ids=[101],
+        slot="manual",
+        target_sorts={101: "lowest_rating"},
+    )
+
+    completed = service.execute_next(worker_id="test-worker")
+
+    assert seen == {"sort_by": "lowest_rating", "time_limit_seconds": 600}
+    assert completed["review_counts"] == {
+        "target": 2,
+        "scanned": 5,
+        "fetched": 3,
+        "matched": 3,
+        "out_of_range": 2,
+        "inserted": 1,
+        "duplicate": 2,
+        "failed": 0,
+    }
+    assert completed["platform_snapshot"]["rating"] == 4.3
+    assert completed["platform_snapshot"]["review_count"] == 9422
+    assert completed["jobs"][0]["platform_snapshot"] == {
+        "rating": 4.3,
+        "review_count": 9422,
+    }
+
+
+def test_running_job_includes_live_duration(session_factory):
+    service = CrawlJobService(session_factory=session_factory)
+    queued, _ = service.enqueue(
+        company_id=1,
+        client_id=1,
+        idempotency_key="169:2026-07-29:running-duration",
+        onebox_location_ids=[101],
+        slot="manual",
+    )
+
+    claimed = service.claim_next(worker_id="test-worker")
+    assert claimed is not None
+    running = service.get_batch(company_id=1, public_id=queued["batch_id"])
+
+    assert running is not None
+    assert running["status"] == "running"
+    assert running["duration_seconds"] >= 0
+    assert running["jobs"][0]["duration_seconds"] >= 0

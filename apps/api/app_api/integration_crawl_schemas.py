@@ -69,9 +69,11 @@ class CrawlJobResponse(BaseModel):
     attempts: int
     max_attempts: int
     result: dict[str, Any]
+    platform_snapshot: dict[str, Any] | None = None
     error: CrawlJobErrorResponse | None = None
     started_at: datetime | None = None
     finished_at: datetime | None = None
+    duration_seconds: int | None = None
 
 
 class CrawlBatchDataResponse(BaseModel):
@@ -84,6 +86,8 @@ class CrawlBatchDataResponse(BaseModel):
     created_at: datetime
     started_at: datetime | None = None
     finished_at: datetime | None = None
+    duration_seconds: int | None = None
+    platform_snapshot: dict[str, Any] | None = None
     # Cabang yang dikerjakan batch ini. Ikut pada daftar maupun detail, supaya
     # layar Riwayat Fetch OneBox bisa menyebut cabangnya tanpa memanggil detail
     # tiap batch satu per satu. Hanya id-nya: nama cabang milik OneBox.

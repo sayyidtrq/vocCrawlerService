@@ -39,6 +39,89 @@ def _batch_kind(jobs) -> str:
     return "mixed" if jenis else "location"
 
 
+def _duration_seconds(
+    started_at: datetime | None,
+    finished_at: datetime | None,
+    now: datetime | None = None,
+) -> int | None:
+    if started_at is None:
+        return None
+    end = finished_at or now or datetime.now(timezone.utc)
+    if started_at.tzinfo is None:
+        started_at = started_at.replace(tzinfo=timezone.utc)
+    if end.tzinfo is None:
+        end = end.replace(tzinfo=timezone.utc)
+    return max(0, int((end - started_at).total_seconds()))
+
+
+def _as_int(value) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _as_float_or_none(value) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        return float(str(value).replace(",", "."))
+    except (TypeError, ValueError):
+        return None
+
+
+def _platform_snapshot(result: dict | None) -> dict | None:
+    result = result or {}
+    metadata = result.get("metadata") or {}
+    explicit = result.get("platform_snapshot")
+    if isinstance(explicit, dict):
+        metadata = {**metadata, **explicit}
+
+    rating = (
+        metadata.get("platform_rating")
+        or metadata.get("platform_rating_snapshot")
+        or metadata.get("business_rating")
+        or metadata.get("rating")
+    )
+    review_count = (
+        metadata.get("platform_review_count")
+        or metadata.get("platform_review_count_snapshot")
+        or metadata.get("business_review_count")
+        or metadata.get("review_count")
+        or metadata.get("user_rating_count")
+    )
+    parsed_rating = _as_float_or_none(rating)
+    parsed_count = _as_int(review_count)
+    if parsed_rating is None and parsed_count == 0:
+        return None
+    return {
+        "rating": parsed_rating,
+        "review_count": parsed_count or None,
+    }
+
+
+def _batch_platform_snapshot(jobs) -> dict | None:
+    snapshots = []
+    for job in jobs:
+        snapshot = _platform_snapshot(job.result_json)
+        if snapshot is None:
+            continue
+        snapshots.append(
+            {
+                "job_id": job.id,
+                "kind": "competitor" if job.competitor_id is not None else "location",
+                "onebox_location_id": job.onebox_location_id,
+                "competitor_id": job.competitor_id,
+                **snapshot,
+            }
+        )
+    if not snapshots:
+        return None
+    if len(snapshots) == 1:
+        return snapshots[0]
+    return {"targets": snapshots}
+
+
 class CrawlQueueError(ValueError):
     def __init__(self, status_code: int, code: str, message: str):
         super().__init__(message)
@@ -55,6 +138,7 @@ class ClaimedCrawlJob:
     company_id: int
     location_id: int | None
     target_review_count: int
+    sort_by: str | None
     date_from: datetime | None
     date_to: datetime | None
     attempts: int
@@ -507,6 +591,7 @@ class CrawlJobService:
                 location_id=job.location_id,
                 competitor_id=job.competitor_id,
                 target_review_count=job.target_review_count,
+                sort_by=job.sort_by,
                 date_from=job.date_from,
                 date_to=job.date_to,
                 attempts=job.attempts,
@@ -617,8 +702,10 @@ class CrawlJobService:
                 claimed.id, n, seen
             ),
         )
-        if result.get("status") in {"success", "partial_success"}:
+        if result.get("status") == "success":
             return self._finish(claimed, status="succeeded", result=result)
+        if result.get("status") == "partial_success":
+            return self._finish(claimed, status="partial_success", result=result)
         return self._retry_or_fail(
             claimed,
             error_code="CRAWL_FAILED",
@@ -716,6 +803,7 @@ class CrawlJobService:
     def _serialize_batch(
         session: Session, batch: CrawlBatch, include_jobs: bool = True
     ) -> dict:
+        now = datetime.now(timezone.utc)
         jobs = list(
             session.scalars(
                 select(CrawlJob)
@@ -744,53 +832,37 @@ class CrawlJobService:
             "inserted": 0,
             "duplicate": 0,
             "failed": 0,
-            # Dibuang karena di luar rentang tanggal yang diminta. Tanpa angka
-            # ini layar hanya bisa menampilkan "terbaca 20, baru 0, duplikat 0"
-            # tanpa alasan, dan itu terbaca sebagai kerusakan.
-            "out_of_range": 0,
-            # Ulasan yang ditelusuri, termasuk yang dilewati saringan tanggal.
-            "scanned": 0,
         }
         for job in jobs:
             counts[job.status] = counts.get(job.status, 0) + 1
             review_counts["target"] += job.target_review_count
             result = job.result_json or {}
-            # Job yang masih berjalan belum punya total_fetched; yang ada baru
-            # progress_fetched dari loop gulir. Dipakai supaya layar bisa
-            # menampilkan "n dari target" selagi crawl berlangsung.
-            review_counts["fetched"] += int(
-                result.get("total_fetched") or result.get("progress_fetched") or 0
-            )
             metadata = result.get("metadata") or {}
-            fetched_count = int(result.get("total_fetched") or 0)
-            out_of_range_count = int(result.get("total_skipped_out_of_range") or 0)
-            review_counts["scanned"] += int(
+            fetched_count = _as_int(
+                result.get("total_fetched") or result.get("progress_fetched")
+            )
+            scanned_count = _as_int(
                 metadata.get("reviews_scanned")
                 or metadata.get("loaded_review_cards")
+                or result.get("reviews_scanned")
+                or result.get("progress_scanned")
                 or fetched_count
-                or result.get("progress_fetched")
-                or 0
             )
-            review_counts["matched"] += int(
+            out_of_range_count = _as_int(result.get("total_skipped_out_of_range"))
+            matched_count = _as_int(
                 metadata.get("matched_review_cards")
                 if metadata.get("matched_review_cards") is not None
-                else max(0, fetched_count - out_of_range_count)
+                else result.get("matched_review_cards")
             )
+            if matched_count == 0 and fetched_count:
+                matched_count = max(0, fetched_count - out_of_range_count)
+            review_counts["scanned"] += scanned_count
+            review_counts["fetched"] += fetched_count
+            review_counts["matched"] += matched_count
             review_counts["out_of_range"] += out_of_range_count
-            review_counts["inserted"] += int(result.get("total_inserted") or 0)
-            review_counts["duplicate"] += int(result.get("total_duplicate") or 0)
-            review_counts["failed"] += int(result.get("total_failed") or 0)
-            review_counts["out_of_range"] += int(
-                result.get("total_skipped_out_of_range") or 0
-            )
-            # Selagi berjalan, jumlah yang ditelusuri hanya ada di progress_*.
-            # Sesudah selesai, total_fetched yang berlaku.
-            review_counts["scanned"] += int(
-                result.get("reviews_scanned")
-                or result.get("progress_scanned")
-                or result.get("total_fetched")
-                or 0
-            )
+            review_counts["inserted"] += _as_int(result.get("total_inserted"))
+            review_counts["duplicate"] += _as_int(result.get("total_duplicate"))
+            review_counts["failed"] += _as_int(result.get("total_failed"))
         data = {
             "batch_id": batch.public_id,
             "status": batch.status,
@@ -801,6 +873,10 @@ class CrawlJobService:
             "created_at": batch.created_at,
             "started_at": batch.started_at,
             "finished_at": batch.finished_at,
+            "duration_seconds": _duration_seconds(
+                batch.started_at, batch.finished_at, now
+            ),
+            "platform_snapshot": _batch_platform_snapshot(jobs),
             # Jobs sudah dimuat di atas, jadi ini tidak menambah query.
             # Disertakan juga saat include_jobs False: daftar batch tanpa
             # penyebut cabang memaksa OneBox memanggil detail tiap batch.
@@ -834,6 +910,7 @@ class CrawlJobService:
                     "attempts": job.attempts,
                     "max_attempts": job.max_attempts,
                     "result": job.result_json,
+                    "platform_snapshot": _platform_snapshot(job.result_json),
                     "error": (
                         {"code": job.last_error_code, "message": job.last_error}
                         if job.last_error_code
@@ -841,6 +918,9 @@ class CrawlJobService:
                     ),
                     "started_at": job.started_at,
                     "finished_at": job.finished_at,
+                    "duration_seconds": _duration_seconds(
+                        job.started_at, job.finished_at, now
+                    ),
                 }
                 for job in jobs
             ]

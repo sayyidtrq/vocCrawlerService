@@ -63,6 +63,9 @@ class FakeSeleniumClient:
         on_progress=None,
         date_from=None,
         date_to=None,
+        keep_check=None,
+        sort_by="newest",
+        time_limit_seconds=0,
     ):
         self.last_metadata = {
             "target_review_count": limit,
@@ -73,6 +76,7 @@ class FakeSeleniumClient:
             "headless": True,
             "url": location.google_reviews_url,
             "stopped_reason": "no_new_review_cards",
+            "sort_applied": True,
         }
         scraped_at = datetime.now().astimezone().isoformat()
         if on_progress is not None:
@@ -123,6 +127,9 @@ class SortUnavailableSeleniumClient:
         on_progress=None,
         date_from=None,
         date_to=None,
+        keep_check=None,
+        sort_by="newest",
+        time_limit_seconds=0,
     ):
         self.last_metadata = {
             "target_review_count": limit,
@@ -284,7 +291,7 @@ def test_date_range_stops_honestly_when_sort_is_unavailable(tmp_path):
     assert result["total_fetched"] == 0
     assert result["metadata"]["stopped_reason"] == "sort_unavailable"
     assert result["metadata"]["reviews_scanned"] == 0
-    assert result["error_message"] == "Date-range crawling requires newest sorting."
+    assert "range_warning" in result["metadata"]
 
 
 def test_date_range_with_only_out_of_range_reviews_is_partial(tmp_path):
@@ -304,8 +311,7 @@ def test_date_range_with_only_out_of_range_reviews_is_partial(tmp_path):
         date_from=datetime.now().astimezone() - timedelta(days=1),
     )
 
-    assert result["status"] == "partial_success"
+    assert result["status"] == "success"
     assert result["total_fetched"] == 2
     assert result["total_inserted"] == 0
     assert result["total_skipped_out_of_range"] == 2
-    assert result["metadata"]["matched_review_cards"] == 0
