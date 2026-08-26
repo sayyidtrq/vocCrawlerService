@@ -63,6 +63,14 @@ def _rotate(args: argparse.Namespace) -> None:
         print("Old token was revoked immediately.")
 
 
+def _grant_scope(args: argparse.Namespace) -> None:
+    client = _service().grant_scopes(args.key_id, args.scope)
+    print(
+        f"updated key_id={client.key_id} company_id={client.company_id} "
+        f"scopes={','.join(client.scopes or [])}"
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Manage VOC service-to-service tokens")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -87,6 +95,13 @@ def build_parser() -> argparse.ArgumentParser:
     rotate.add_argument("--key-id", required=True)
     rotate.add_argument("--overlap-hours", type=int, default=0)
     rotate.set_defaults(func=_rotate)
+
+    grant_scope = sub.add_parser(
+        "grant-scope", help="add scopes to an existing token without rotating it"
+    )
+    grant_scope.add_argument("--key-id", required=True)
+    grant_scope.add_argument("--scope", action="append", required=True)
+    grant_scope.set_defaults(func=_grant_scope)
     return parser
 
 

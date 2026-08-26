@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import logging
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import exists, func, select
@@ -12,7 +14,6 @@ from app.db.models import Location, Review, ReviewAnalysis
 from app.db.session import get_session_factory
 from app.integrations.gemini_client import GeminiClientBase
 from app.integrations.local_llm_client import LocalLLMClient
-
 
 logger = logging.getLogger(__name__)
 RATING_FALLBACK_MODEL = "rating-fallback-v1"
@@ -51,6 +52,15 @@ REQUIRED_ANALYSIS_FIELDS = (
 )
 
 
+class LlmCallError(RuntimeError):
+    """Retry-exhausted call with safe timing/count metadata for run metrics."""
+
+    def __init__(self, attempts: int, call_seconds: float):
+        super().__init__("LLM call failed after retries.")
+        self.attempts = attempts
+        self.call_seconds = call_seconds
+
+
 class AnalysisService:
     def __init__(
         self,
@@ -58,14 +68,20 @@ class AnalysisService:
         session_factory: sessionmaker[Session] | None = None,
         settings: Settings | None = None,
         client: GeminiClientBase | None = None,
+        client_factory=None,
     ):
         self.company_id = company_id
         self.session_factory = session_factory or get_session_factory()
         self.settings = settings or get_settings()
         if client:
             self.client = client
+            self._client_factory = client_factory
         else:
             self.client = LocalLLMClient(self.settings)
+            self._client_factory = client_factory or (
+                lambda: LocalLLMClient(self.settings)
+            )
+        self._worker_local = threading.local()
 
     def analyze_pending(
         self, location_id: int | None = None, rating: int | None = None
@@ -145,12 +161,20 @@ class AnalysisService:
             # sungguhan, supaya bottleneck ditentukan dari angka nyata.
             "duration_ms": 0.0,
             "llm_calls": 0,
+            "llm_retries": 0,
             "llm_call_ms_total": 0.0,
             "quality": {"valid": 0, "corrected": 0},
             "not_attempted": 0,
             "circuit_breaker_tripped": False,
+            "concurrency": (
+                max(1, int(self.settings.analysis_llm_concurrency or 1))
+                if self._client_factory is not None
+                else 1
+            ),
+            "max_in_flight": 0,
         }
         batch_size = max(1, self.settings.analysis_batch_size)
+        result["concurrency"] = min(batch_size, result["concurrency"])
         ai_config = self._location_ai_config(
             {review.get("location_id") for review in reviews}
         )
@@ -172,11 +196,14 @@ class AnalysisService:
                 "analysis.run.summary total=%s success=%s failed=%s not_attempted=%s "
                 "rating_fallback=%s skipped_ai_disabled=%s duration_ms=%s "
                 "llm_calls=%s llm_call_ms_total=%s quality_corrected=%s "
+                "llm_retries=%s concurrency=%s max_in_flight=%s "
                 "circuit_breaker_tripped=%s",
                 result["total"], result["success"], result["failed"], result["not_attempted"],
                 result["rating_fallback"], result["skipped_ai_disabled"],
                 result["duration_ms"], result["llm_calls"], result["llm_call_ms_total"],
-                result["quality"]["corrected"], result["circuit_breaker_tripped"],
+                result["quality"]["corrected"], result["llm_retries"],
+                result["concurrency"], result["max_in_flight"],
+                result["circuit_breaker_tripped"],
             )
         return result
 
@@ -188,85 +215,167 @@ class AnalysisService:
         result: dict,
         default_model: str | None,
     ) -> None:
-        # FALLBACK (DNGO19-3407): berhenti memanggil model setelah N
-        # kegagalan BERURUTAN, bukan terus menghajar model yang sedang turun
-        # sampai seluruh antrean habis. Kegagalan rating-fallback/skip TIDAK
-        # ikut dihitung — keduanya tidak memanggil model, jadi tidak
-        # membuktikan model-nya bermasalah. 0 = mati (perilaku lama).
+        """Run bounded LLM waves, then persist results on this thread.
+
+        Only model calls run concurrently. Validation and database writes stay
+        ordered and serial, preserving append-only history and sync watermarks.
+        The breaker is checked between waves, so at most ``concurrency - 1``
+        calls that already started can finish after its threshold is reached.
+        """
         breaker_threshold = max(0, int(self.settings.analysis_circuit_breaker_threshold or 0))
         consecutive_failures = 0
+        concurrency = max(1, min(batch_size, int(result["concurrency"])))
+        executor = (
+            ThreadPoolExecutor(
+                max_workers=concurrency, thread_name_prefix="voc-analysis"
+            )
+            if concurrency > 1
+            else None
+        )
 
-        for start in range(0, len(reviews), batch_size):
-            for review in reviews[start : start + batch_size]:
-                if result["circuit_breaker_tripped"]:
-                    result["not_attempted"] += 1
-                    continue
+        try:
+            for batch_start in range(0, len(reviews), batch_size):
+                batch = reviews[batch_start : batch_start + batch_size]
 
-                config = ai_config.get(review.get("location_id"))
+                for wave_start in range(0, len(batch), concurrency):
+                    wave = batch[wave_start : wave_start + concurrency]
 
-                # OneBox switched this branch off. Checked BEFORE the empty-text
-                # fallback below, because that path also writes an analysis row:
-                # skipping only the model call would still leave rows behind for
-                # a branch whose analysis was explicitly disabled.
-                if config is not None and not config["enabled"]:
-                    result["skipped_ai_disabled"] += 1
-                    continue
+                    if result["circuit_breaker_tripped"]:
+                        result["not_attempted"] += len(reviews) - (
+                            batch_start + wave_start
+                        )
+                        return
 
-                # OneBox picks the model when it has an opinion. When it does
-                # not, the client keeps the model it was built with — restored
-                # explicitly here rather than left as-is, because the previous
-                # location in this same run may have overridden it.
-                #
-                # Deliberately NOT falling back to settings.local_llm_model: the
-                # client is injectable, and a caller that passed a Gemini or mock
-                # client would find its model silently swapped for the local one.
-                if config is not None and config["model"]:
-                    self.client.model_name = config["model"]
-                elif default_model is not None:
-                    self.client.model_name = default_model
+                    calls = []
+                    for review in wave:
+                        config = ai_config.get(review.get("location_id"))
 
-                if not review["review_text"].strip():
-                    raw_result = self._rating_only_result(review.get("rating"))
-                    cleaned, corrected = self._validate_result(raw_result)
-                    self._record_quality(result, corrected)
-                    self._store_analysis(
-                        review["id"],
-                        cleaned,
-                        raw_result,
-                        model_name=RATING_FALLBACK_MODEL,
+                        if config is not None and not config["enabled"]:
+                            result["skipped_ai_disabled"] += 1
+                            continue
+
+                        model_name = (
+                            config["model"]
+                            if config is not None and config["model"]
+                            else default_model
+                        )
+
+                        if not review["review_text"].strip():
+                            raw_result = self._rating_only_result(review.get("rating"))
+                            cleaned, corrected = self._validate_result(raw_result)
+                            self._record_quality(result, corrected)
+                            self._store_analysis(
+                                review["id"],
+                                cleaned,
+                                raw_result,
+                                model_name=RATING_FALLBACK_MODEL,
+                            )
+                            result["success"] += 1
+                            result["rating_fallback"] += 1
+                            result["sentiments"][cleaned["sentiment"]] += 1
+                            continue
+
+                        future = (
+                            executor.submit(
+                                self._run_llm_task, review, model_name, True
+                            )
+                            if executor is not None
+                            else None
+                        )
+                        calls.append((review, model_name, future))
+
+                    result["max_in_flight"] = max(
+                        result["max_in_flight"], len(calls)
                     )
-                    result["success"] += 1
-                    result["rating_fallback"] += 1
-                    result["sentiments"][cleaned["sentiment"]] += 1
-                    continue
-                try:
-                    raw_result, elapsed = self._call_llm_with_retry(self.client, review)
-                except Exception:
-                    self._store_failure_status(review["id"])
-                    result["failed"] += 1
-                    result["errors"].append(
-                        {"review_id": review["id"], "error": "Analysis failed."}
-                    )
-                    logger.exception("Analysis failed for review %s", review["id"])
-                    consecutive_failures += 1
-                    if breaker_threshold and consecutive_failures >= breaker_threshold:
-                        result["circuit_breaker_tripped"] = True
-                    continue
 
-                consecutive_failures = 0
-                result["llm_calls"] += 1
-                result["llm_call_ms_total"] += round(elapsed * 1000, 1)
-                usage = getattr(self.client, "last_usage", {}) or {}
-                for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
-                    result["token_usage"][key] += int(usage.get(key, 0) or 0)
-                result["tokens_used"] = result["token_usage"]["total_tokens"]
-                cleaned, corrected = self._validate_result(raw_result)
-                self._record_quality(result, corrected)
-                self._store_analysis(review["id"], cleaned, raw_result)
-                result["success"] += 1
-                result["sentiments"][cleaned["sentiment"]] += 1
+                    for review, model_name, future in calls:
+                        try:
+                            outcome = (
+                                future.result()
+                                if future is not None
+                                else self._run_llm_task(review, model_name, False)
+                            )
+                        except LlmCallError as exc:
+                            self._record_call_metrics(
+                                result, exc.attempts, exc.call_seconds
+                            )
+                            self._store_failure_status(review["id"])
+                            result["failed"] += 1
+                            result["errors"].append(
+                                {"review_id": review["id"], "error": "Analysis failed."}
+                            )
+                            logger.exception(
+                                "Analysis failed for review %s", review["id"]
+                            )
+                            consecutive_failures += 1
+                            if (
+                                breaker_threshold
+                                and consecutive_failures >= breaker_threshold
+                            ):
+                                result["circuit_breaker_tripped"] = True
+                            continue
 
-    def _call_llm_with_retry(self, client, review: dict) -> tuple[dict, float]:
+                        consecutive_failures = 0
+                        self._record_call_metrics(
+                            result, outcome["attempts"], outcome["call_seconds"]
+                        )
+                        for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+                            result["token_usage"][key] += int(
+                                outcome["usage"].get(key, 0) or 0
+                            )
+                        result["tokens_used"] = result["token_usage"]["total_tokens"]
+                        cleaned, corrected = self._validate_result(
+                            outcome["raw_result"]
+                        )
+                        self._record_quality(result, corrected)
+                        self._store_analysis(
+                            review["id"],
+                            cleaned,
+                            outcome["raw_result"],
+                            model_name=outcome["model_name"],
+                        )
+                        result["success"] += 1
+                        result["sentiments"][cleaned["sentiment"]] += 1
+        finally:
+            if executor is not None:
+                executor.shutdown(wait=True, cancel_futures=False)
+
+    def _run_llm_task(
+        self, review: dict, model_name: str | None, isolated_client: bool
+    ) -> dict:
+        client = self._worker_client() if isolated_client else self.client
+        if model_name is not None:
+            client.model_name = model_name
+
+        raw_result, call_seconds, attempts = self._call_llm_with_retry(
+            client, review
+        )
+        return {
+            "raw_result": raw_result,
+            "call_seconds": call_seconds,
+            "attempts": attempts,
+            "usage": dict(getattr(client, "last_usage", {}) or {}),
+            "model_name": getattr(client, "model_name", model_name),
+        }
+
+    def _worker_client(self):
+        client = getattr(self._worker_local, "client", None)
+        if client is None:
+            if self._client_factory is None:
+                return self.client
+            client = self._client_factory()
+            self._worker_local.client = client
+        return client
+
+    @staticmethod
+    def _record_call_metrics(
+        result: dict, attempts: int, call_seconds: float
+    ) -> None:
+        result["llm_calls"] += attempts
+        result["llm_retries"] += max(0, attempts - 1)
+        result["llm_call_ms_total"] += round(call_seconds * 1000, 1)
+
+    def _call_llm_with_retry(self, client, review: dict) -> tuple[dict, float, int]:
         """client.analyze_review dengan retry + backoff eksponensial (DNGO19-3407).
 
         Pola backoff SAMA dengan OneBoxWorklistClient._backoff
@@ -278,27 +387,35 @@ class AnalysisService:
         dari JSON yang rusak, keduanya tiba sebagai Exception biasa. Percobaan
         yang gagal permanen tetap dibatasi max_retries, jadi biayanya terbatas.
 
-        @return (raw_result, elapsed_seconds) dari panggilan yang BERHASIL —
-            dipakai baseline durasi ("berapa lama model menjawab", bukan
-            "berapa lama proses menunggu gangguan jaringan").
+        Timing includes every actual model attempt but excludes backoff sleep;
+        run duration separately captures the full wall-clock cost.
         """
         max_retries = max(0, int(self.settings.analysis_llm_max_retries or 0))
         base_backoff = max(0.0, float(self.settings.analysis_llm_retry_backoff_seconds or 0))
 
-        attempt = 0
+        retries_done = 0
+        attempts = 0
+        call_seconds = 0.0
         while True:
             started = time.perf_counter()
+            attempts += 1
             try:
                 raw_result = client.analyze_review(review)
-                return raw_result, time.perf_counter() - started
+                call_seconds += time.perf_counter() - started
+                return raw_result, call_seconds, attempts
             except Exception as exc:
-                if attempt >= max_retries:
-                    raise
-                delay = min(8.0, base_backoff * (2**attempt)) if base_backoff > 0 else 0.0
-                attempt += 1
+                call_seconds += time.perf_counter() - started
+                if retries_done >= max_retries:
+                    raise LlmCallError(attempts, call_seconds) from exc
+                delay = (
+                    min(8.0, base_backoff * (2**retries_done))
+                    if base_backoff > 0
+                    else 0.0
+                )
+                retries_done += 1
                 logger.warning(
                     "LLM call failed for review %s (attempt %s/%s), retry in %.1fs: %s",
-                    review.get("id"), attempt, max_retries, delay, exc,
+                    review.get("id"), attempts, max_retries + 1, delay, exc,
                 )
                 if delay > 0:
                     time.sleep(delay)

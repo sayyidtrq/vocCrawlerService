@@ -43,6 +43,29 @@ python -m scripts.manage_api_client revoke --key-id OLD_KEY_ID --yes
 
 Rotation tanpa overlap langsung mematikan token lama. Dengan overlap-hours, token lama tetap aktif dan harus direvoke setelah OneBox memakai token replacement.
 
+## Tambahkan aksi AI ke token Fetch Jobs yang sudah ada
+
+DNGO19-3407 memakai **token yang sama** dengan antrean Fetch Jobs. Jangan
+menerbitkan token baru dan jangan menyalin username/password user ke setiap
+Connection. Tambahkan scope pada metadata token yang sudah tersimpan:
+
+```sh
+python -m scripts.manage_api_client grant-scope \
+  --key-id EXISTING_KEY_ID \
+  --scope analysis:write
+```
+
+Secret token tidak berubah dan tidak ditampilkan ulang. Setelah scope tersedia,
+OneBox dapat memakai endpoint berikut:
+
+- `POST /api/integration/v1/analysis/pending`
+- `POST /api/integration/v1/analysis/reviews/{review_id}/rerun`
+- `GET /api/integration/v1/analysis/quality-summary`
+- `POST /api/integration/v1/analysis/rollback`
+
+Semua endpoint mengambil `company_id` dari service token. `company_id` tidak
+diterima dari body/query, dan ID lokasi/review milik tenant lain menjawab 404.
+
 ## JWT user tetap terpisah
 POST /api/auth/login dan GET /api/auth/me tetap menggunakan JWT user untuk FE. Token voc_ hanya berlaku pada endpoint integration.
 

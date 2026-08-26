@@ -128,6 +128,22 @@ class ApiClientService:
             session.refresh(client)
             return client
 
+    def grant_scopes(self, key_id: str, scopes: list[str]) -> ApiClient:
+        """Add permissions without rotating or exposing the existing secret."""
+
+        requested = {scope.strip() for scope in scopes if scope.strip()}
+        if not requested:
+            raise ValueError("at least one scope is required")
+
+        with self.session_factory() as session:
+            client = session.scalar(select(ApiClient).where(ApiClient.key_id == key_id))
+            if client is None:
+                raise ValueError("key_id not found")
+            client.scopes = sorted(set(client.scopes or []) | requested)
+            session.commit()
+            session.refresh(client)
+            return client
+
     def rotate(self, key_id: str, overlap_hours: int = 0) -> IssuedServiceToken:
         with self.session_factory() as session:
             old = session.scalar(select(ApiClient).where(ApiClient.key_id == key_id))

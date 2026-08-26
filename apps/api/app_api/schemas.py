@@ -185,6 +185,16 @@ class AnalysisPendingResponse(_Base):
     tokens_used: int | None = None
     token_usage: dict[str, int] | None = None
     errors: list[Any] | None = None
+    skipped_ai_disabled: int | None = None
+    duration_ms: float | None = None
+    llm_calls: int | None = None
+    llm_retries: int | None = None
+    llm_call_ms_total: float | None = None
+    quality: dict[str, int] | None = None
+    not_attempted: int | None = None
+    circuit_breaker_tripped: bool | None = None
+    concurrency: int | None = None
+    max_in_flight: int | None = None
 
 
 # --------------------------------------------------------------------------- #

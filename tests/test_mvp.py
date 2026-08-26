@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import threading
+import time
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -488,10 +490,50 @@ def test_analysis_retries_a_transient_llm_failure_then_succeeds(
 
     assert result["success"] == 10
     assert result["failed"] == 0
-    assert result["llm_calls"] == 10
+    assert result["llm_calls"] == 11
+    assert result["llm_retries"] == 1
     # Two attempts for the first review (1 failure + 1 success), one each
     # for the rest.
     assert client.calls == 11
+
+
+def test_analysis_runs_llm_calls_with_bounded_concurrency(
+    session_factory, settings, company_id
+):
+    """Network calls overlap, while the service still persists serially."""
+
+    fetched_location(session_factory, settings, company_id)
+    concurrent_settings = replace(settings, analysis_llm_concurrency=3)
+    state = {"active": 0, "max_active": 0}
+    lock = threading.Lock()
+
+    class ProbeClient(MockGeminiClient):
+        model_name = "concurrency-probe-v1"
+
+        def analyze_review(self, review):
+            with lock:
+                state["active"] += 1
+                state["max_active"] = max(state["max_active"], state["active"])
+            try:
+                time.sleep(0.02)
+                return super().analyze_review(review)
+            finally:
+                with lock:
+                    state["active"] -= 1
+
+    result = AnalysisService(
+        company_id=company_id,
+        session_factory=session_factory,
+        settings=concurrent_settings,
+        client=ProbeClient(),
+        client_factory=ProbeClient,
+    ).analyze_pending()
+
+    assert result["success"] == 10
+    assert result["failed"] == 0
+    assert result["concurrency"] == 3
+    assert result["max_in_flight"] == 3
+    assert state["max_active"] == 3
 
 
 def test_analysis_gives_up_after_max_retries(session_factory, settings, company_id):

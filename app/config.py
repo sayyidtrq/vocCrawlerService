@@ -123,6 +123,9 @@ class Settings:
     # Fallback: berhenti setelah N kegagalan LLM beruntun dalam satu run.
     # 0 = mati (perilaku lama).
     analysis_circuit_breaker_threshold: int = 5
+    # Bounded parallelism for network-bound LLM calls. Database writes remain
+    # serialized by AnalysisService so append-only history/watermarks stay safe.
+    analysis_llm_concurrency: int = 1
 
     def ensure_export_dir(self) -> Path:
         self.export_dir.mkdir(parents=True, exist_ok=True)
@@ -245,6 +248,9 @@ def get_settings() -> Settings:
         ),
         analysis_circuit_breaker_threshold=max(
             0, _as_int("ANALYSIS_CIRCUIT_BREAKER_THRESHOLD", 5)
+        ),
+        analysis_llm_concurrency=min(
+            16, max(1, _as_int("ANALYSIS_LLM_CONCURRENCY", 4))
         ),
         prompt_version=os.getenv("PROMPT_VERSION", "v1").strip(),
         page_size=_as_int("PAGE_SIZE", 20),

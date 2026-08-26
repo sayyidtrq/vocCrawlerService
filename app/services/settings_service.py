@@ -8,7 +8,6 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.config import Settings, get_settings
 from app.db.session import get_engine
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -103,6 +102,7 @@ class SettingsService:
                 else ""
             ),
             "ANALYSIS_BATCH_SIZE": self.settings.analysis_batch_size,
+            "ANALYSIS_LLM_CONCURRENCY": self.settings.analysis_llm_concurrency,
             "PROMPT_VERSION": self.settings.prompt_version,
             "PAGE_SIZE": self.settings.page_size,
             "SHOW_RAW_PAYLOAD": self.settings.show_raw_payload,

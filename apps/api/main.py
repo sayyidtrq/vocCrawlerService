@@ -13,21 +13,22 @@ from app.services.integration_review_service import IntegrationRequestError
 from apps.api.app_api.errors import register_exception_handlers
 from apps.api.app_api.routers import (
     analysis,
+    auth,
+    competitors,
     dashboard,
     exports,
     fetch_jobs,
     fetch_logs,
     health,
-    integration_reviews,
-    integration_crawl_jobs,
+    integration_analysis,
     integration_competitor_reviews,
+    integration_crawl_jobs,
+    integration_reviews,
     locations,
     pipeline,
+    places,
     reviews,
     settings,
-    auth,
-    places,
-    competitors,
 )
 
 INTEGRATION_PREFIX = "/api/integration/"
@@ -123,6 +124,7 @@ def create_app() -> FastAPI:
     app.include_router(pipeline.router, prefix="/api")
     app.include_router(fetch_logs.router, prefix="/api")
     app.include_router(integration_reviews.router, prefix="/api")
+    app.include_router(integration_analysis.router, prefix="/api")
     app.include_router(integration_crawl_jobs.router, prefix="/api")
     app.include_router(integration_competitor_reviews.router, prefix="/api")
     _drop_advertised_422_from_integration_paths(app)

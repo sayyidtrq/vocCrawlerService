@@ -4,18 +4,18 @@ from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+import apps.api.app_api.service_auth as service_auth_module
 from app.config import get_settings
 from app.db.base import Base
 from app.db.models import ApiClient, Company
 from app.services.api_client_service import ApiClientService, InvalidServiceToken
-from fastapi.testclient import TestClient
 from apps.api.app_api.routers.integration_reviews import get_integration_session_factory
 from apps.api.main import create_app
-import apps.api.app_api.service_auth as service_auth_module
 
 
 @pytest.fixture()
@@ -90,6 +90,15 @@ def test_rotation_can_overlap_or_revoke_immediately(service):
     with pytest.raises(InvalidServiceToken):
         service.verify(replacement.token)
     assert service.verify(final.token).company_id == 1
+
+
+def test_grant_scopes_keeps_the_existing_token_valid(service):
+    issued = service.issue(1, "onebox", scopes=["reviews:read", "crawl:enqueue"])
+
+    updated = service.grant_scopes(issued.client.key_id, ["analysis:write"])
+
+    assert updated.scopes == ["analysis:write", "crawl:enqueue", "reviews:read"]
+    assert service.verify(issued.token).scopes == updated.scopes
 
 
 def test_token_company_binding_cannot_be_changed_by_request_data(service):
