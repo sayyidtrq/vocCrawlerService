@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 from pydantic import BaseModel, Field
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -17,6 +19,14 @@ router = APIRouter(prefix="/analysis", tags=["analysis"])
 class AnalyzePendingRequest(BaseModel):
     location_id: int | None = None
     rating: int | None = Field(default=None, ge=1, le=5)
+
+
+class RollbackAnalysesRequest(BaseModel):
+    model_name: str = Field(min_length=1, description="Model yang hasilnya dibuang.")
+    since: datetime | None = Field(
+        default=None,
+        description="Hanya baris dari model_name yang dibuat setelah waktu ini. Kosong = seluruh riwayat model_name.",
+    )
 
 
 def _require_ai_enabled(company_id: int) -> None:
@@ -67,3 +77,37 @@ def rerun_location(location_id: int, current_user: User = Depends(get_current_us
 def rerun_review(review_id: int, current_user: User = Depends(get_current_user)) -> dict:
     _require_ai_enabled(current_user.company_id)
     return to_jsonable(AnalysisService(company_id=current_user.company_id).rerun_review(review_id))
+
+
+@router.post(
+    "/rollback",
+    summary="Prosedur rollback: buang hasil satu model AI",
+    description=(
+        "Buang seluruh ReviewAnalysis milik model_name (opsional dibatasi `since`). "
+        "Review yang terdampak kembali ke jawaban model sebelumnya bila ada, atau ke "
+        "pending untuk dianalisa ulang. Dipakai ketika sebuah model/prompt terbukti "
+        "menghasilkan analisa yang salah secara sistematis — bukan untuk satu review "
+        "yang gagal, itu cukup lewat /reviews/{id}/rerun."
+    ),
+)
+def rollback_analyses(
+    payload: RollbackAnalysesRequest, current_user: User = Depends(get_current_user),
+) -> dict:
+    try:
+        result = AnalysisService(company_id=current_user.company_id).rollback_analyses(
+            model_name=payload.model_name, since=payload.since,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return to_jsonable(result)
+
+
+@router.get(
+    "/quality-summary",
+    summary="Sebaran status analisa dalam N jam terakhir",
+    description="Sinyal kesehatan murah untuk monitoring/alerting — porsi failed yang melonjak menandakan AI bermasalah.",
+)
+def quality_summary(
+    hours: int = 24, current_user: User = Depends(get_current_user),
+) -> dict:
+    return AnalysisService(company_id=current_user.company_id).quality_summary(hours=hours)

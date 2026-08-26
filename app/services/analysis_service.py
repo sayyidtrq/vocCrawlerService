@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+import time
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import exists, func, select
 from sqlalchemy.orm import Session, sessionmaker
@@ -69,6 +70,16 @@ class AnalysisService:
     def analyze_pending(
         self, location_id: int | None = None, rating: int | None = None
     ) -> dict:
+        # DEDUPLICATION (DNGO19-3407): the WHERE below is the dedup — a review
+        # with any analysis row is never picked up again by this path.
+        #
+        # KNOWN GAP, accepted: analyze_pending/rerun_* and the pipeline endpoint
+        # (apps/api/app_api/routers/pipeline.py) all call this. Two overlapping
+        # runs can both read the same review as pending before either writes,
+        # producing a duplicate ReviewAnalysis row for it. Harmless: storage is
+        # append-only, the newest row always wins as "latest", and the review
+        # never ends up with a wrong or missing answer — just one wasted LLM
+        # call. Not worth a locking scheme for a narrow, self-healing race.
         pending_exists = exists(
             select(ReviewAnalysis.id).where(ReviewAnalysis.review_id == Review.id)
         )
@@ -130,6 +141,14 @@ class AnalysisService:
                 "completion_tokens": 0,
                 "total_tokens": 0,
             },
+            # BASELINE (DNGO19-3407): durasi dan kualitas dari run yang
+            # sungguhan, supaya bottleneck ditentukan dari angka nyata.
+            "duration_ms": 0.0,
+            "llm_calls": 0,
+            "llm_call_ms_total": 0.0,
+            "quality": {"valid": 0, "corrected": 0},
+            "not_attempted": 0,
+            "circuit_breaker_tripped": False,
         }
         batch_size = max(1, self.settings.analysis_batch_size)
         ai_config = self._location_ai_config(
@@ -140,11 +159,25 @@ class AnalysisService:
         # into the next run would be invisible and would only show up as the
         # wrong model_name recorded against unrelated reviews.
         default_model = getattr(self.client, "model_name", None)
+        started = time.perf_counter()
         try:
             self._run_batches(reviews, batch_size, ai_config, result, default_model)
         finally:
             if default_model is not None:
                 self.client.model_name = default_model
+            result["duration_ms"] = round((time.perf_counter() - started) * 1000, 1)
+            # Satu baris terstruktur per run, dipakai monitoring eksternal (grep
+            # atau log shipper) tanpa perlu membaca "errors" yang bisa panjang.
+            logger.info(
+                "analysis.run.summary total=%s success=%s failed=%s not_attempted=%s "
+                "rating_fallback=%s skipped_ai_disabled=%s duration_ms=%s "
+                "llm_calls=%s llm_call_ms_total=%s quality_corrected=%s "
+                "circuit_breaker_tripped=%s",
+                result["total"], result["success"], result["failed"], result["not_attempted"],
+                result["rating_fallback"], result["skipped_ai_disabled"],
+                result["duration_ms"], result["llm_calls"], result["llm_call_ms_total"],
+                result["quality"]["corrected"], result["circuit_breaker_tripped"],
+            )
         return result
 
     def _run_batches(
@@ -155,8 +188,20 @@ class AnalysisService:
         result: dict,
         default_model: str | None,
     ) -> None:
+        # FALLBACK (DNGO19-3407): berhenti memanggil model setelah N
+        # kegagalan BERURUTAN, bukan terus menghajar model yang sedang turun
+        # sampai seluruh antrean habis. Kegagalan rating-fallback/skip TIDAK
+        # ikut dihitung — keduanya tidak memanggil model, jadi tidak
+        # membuktikan model-nya bermasalah. 0 = mati (perilaku lama).
+        breaker_threshold = max(0, int(self.settings.analysis_circuit_breaker_threshold or 0))
+        consecutive_failures = 0
+
         for start in range(0, len(reviews), batch_size):
             for review in reviews[start : start + batch_size]:
+                if result["circuit_breaker_tripped"]:
+                    result["not_attempted"] += 1
+                    continue
+
                 config = ai_config.get(review.get("location_id"))
 
                 # OneBox switched this branch off. Checked BEFORE the empty-text
@@ -182,7 +227,8 @@ class AnalysisService:
 
                 if not review["review_text"].strip():
                     raw_result = self._rating_only_result(review.get("rating"))
-                    cleaned = self._validate_result(raw_result)
+                    cleaned, corrected = self._validate_result(raw_result)
+                    self._record_quality(result, corrected)
                     self._store_analysis(
                         review["id"],
                         cleaned,
@@ -194,15 +240,7 @@ class AnalysisService:
                     result["sentiments"][cleaned["sentiment"]] += 1
                     continue
                 try:
-                    raw_result = self.client.analyze_review(review)
-                    usage = getattr(self.client, "last_usage", {}) or {}
-                    for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
-                        result["token_usage"][key] += int(usage.get(key, 0) or 0)
-                    result["tokens_used"] = result["token_usage"]["total_tokens"]
-                    cleaned = self._validate_result(raw_result)
-                    self._store_analysis(review["id"], cleaned, raw_result)
-                    result["success"] += 1
-                    result["sentiments"][cleaned["sentiment"]] += 1
+                    raw_result, elapsed = self._call_llm_with_retry(self.client, review)
                 except Exception:
                     self._store_failure_status(review["id"])
                     result["failed"] += 1
@@ -210,6 +248,64 @@ class AnalysisService:
                         {"review_id": review["id"], "error": "Analysis failed."}
                     )
                     logger.exception("Analysis failed for review %s", review["id"])
+                    consecutive_failures += 1
+                    if breaker_threshold and consecutive_failures >= breaker_threshold:
+                        result["circuit_breaker_tripped"] = True
+                    continue
+
+                consecutive_failures = 0
+                result["llm_calls"] += 1
+                result["llm_call_ms_total"] += round(elapsed * 1000, 1)
+                usage = getattr(self.client, "last_usage", {}) or {}
+                for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+                    result["token_usage"][key] += int(usage.get(key, 0) or 0)
+                result["tokens_used"] = result["token_usage"]["total_tokens"]
+                cleaned, corrected = self._validate_result(raw_result)
+                self._record_quality(result, corrected)
+                self._store_analysis(review["id"], cleaned, raw_result)
+                result["success"] += 1
+                result["sentiments"][cleaned["sentiment"]] += 1
+
+    def _call_llm_with_retry(self, client, review: dict) -> tuple[dict, float]:
+        """client.analyze_review dengan retry + backoff eksponensial (DNGO19-3407).
+
+        Pola backoff SAMA dengan OneBoxWorklistClient._backoff
+        (min(8.0, base * 2**attempt)), supaya "seberapa sabar sebelum menyerah"
+        konsisten di seluruh crawler, bukan konvensi berbeda-beda per klien.
+
+        SEMUA exception dianggap layak dicoba ulang: GeminiClientBase generik
+        ini tidak melempar tipe exception yang membedakan gangguan jaringan
+        dari JSON yang rusak, keduanya tiba sebagai Exception biasa. Percobaan
+        yang gagal permanen tetap dibatasi max_retries, jadi biayanya terbatas.
+
+        @return (raw_result, elapsed_seconds) dari panggilan yang BERHASIL —
+            dipakai baseline durasi ("berapa lama model menjawab", bukan
+            "berapa lama proses menunggu gangguan jaringan").
+        """
+        max_retries = max(0, int(self.settings.analysis_llm_max_retries or 0))
+        base_backoff = max(0.0, float(self.settings.analysis_llm_retry_backoff_seconds or 0))
+
+        attempt = 0
+        while True:
+            started = time.perf_counter()
+            try:
+                raw_result = client.analyze_review(review)
+                return raw_result, time.perf_counter() - started
+            except Exception as exc:
+                if attempt >= max_retries:
+                    raise
+                delay = min(8.0, base_backoff * (2**attempt)) if base_backoff > 0 else 0.0
+                attempt += 1
+                logger.warning(
+                    "LLM call failed for review %s (attempt %s/%s), retry in %.1fs: %s",
+                    review.get("id"), attempt, max_retries, delay, exc,
+                )
+                if delay > 0:
+                    time.sleep(delay)
+
+    @staticmethod
+    def _record_quality(result: dict, corrected: bool) -> None:
+        result["quality"]["corrected" if corrected else "valid"] += 1
 
     def _location_ai_config(self, location_ids: set) -> dict:
         """Per-location AI config as delivered by the OneBox worklist.
@@ -391,25 +487,41 @@ class AnalysisService:
         }
 
     @staticmethod
-    def _validate_result(result: dict) -> dict:
+    def _validate_result(result: dict) -> tuple[dict, bool]:
+        """Normalisasi hasil mentah model, DAN tandai kalau ada yang dikoreksi.
+
+        Bendera `corrected` adalah sinyal kualitas baseline (DNGO19-3407):
+        model yang sering mengirim bentuk di luar kontrak adalah model yang
+        perlu diganti atau prompt-nya diperbaiki — tanpa bendera ini, koreksi
+        yang terjadi diam-diam di sini tidak pernah terlihat siapa pun.
+        """
+        corrected = False
+
         sentiment = str(result.get("sentiment") or "unknown").lower()
         if sentiment not in ALLOWED_SENTIMENTS:
+            corrected = True
             sentiment = "unknown"
         urgency = str(result.get("urgency") or "unknown").lower()
         if urgency not in ALLOWED_URGENCIES:
+            corrected = True
             urgency = "unknown"
         category = str(result.get("issue_category") or "other").lower()
         if category not in ALLOWED_CATEGORIES:
+            corrected = True
             category = "other"
         try:
             score = float(result.get("sentiment_score", 0))
         except (TypeError, ValueError):
+            corrected = True
             score = 0.0
-        score = max(0.0, min(1.0, score))
+        clamped = max(0.0, min(1.0, score))
+        corrected = corrected or clamped != score
+        score = clamped
         keywords = result.get("keywords")
         if not isinstance(keywords, list):
+            corrected = True
             keywords = []
-        return {
+        cleaned = {
             "sentiment": sentiment,
             "sentiment_score": score,
             "issue_category": category,
@@ -421,4 +533,140 @@ class AnalysisService:
             "is_patient_safety_issue": bool(
                 result.get("is_patient_safety_issue", False)
             ),
+        }
+        return cleaned, corrected
+
+    def rollback_analyses(
+        self, model_name: str, since: datetime | None = None,
+    ) -> dict:
+        """Prosedur rollback (DNGO19-3407): buang hasil satu model, kembalikan
+        review yang terdampak ke jawaban SEBELUMNYA bila ada.
+
+        DIPAKAI KETIKA. Sebuah model (atau versi prompt) ternyata menghasilkan
+        analisa yang salah secara sistematis — bukan satu review yang gagal,
+        tetapi satu ROLLOUT yang buruk. Yang dibutuhkan operator adalah "buang
+        semua yang berasal dari model X, biarkan yang berikutnya menganalisa
+        ulang", bukan memperbaiki review satu per satu.
+
+        KENAPA AMAN. ReviewAnalysis bersifat append-only (lihat catatan di
+        _store_analysis) — setiap analisa ulang MENAMBAH baris, tidak pernah
+        menimpa yang lama. Rollback di sini memakai sifat itu: baris milik
+        model_name yang ditarget dihapus, lalu setiap review yang terdampak
+        diperiksa apakah masih punya baris analisa LEBIH LAMA dari model lain
+        — kalau ada, review itu "kembali" ke jawaban itu (status dihitung
+        ulang dari baris tersebut); kalau tidak ada sama sekali, review itu
+        kembali menjadi pending dan dianalisa ulang pada run berikutnya.
+
+        model_name WAJIB DIISI dengan sengaja — rollback tanpa target adalah
+        cara tercepat menghapus riwayat analisa yang sah tanpa niat.
+
+        @return ringkasan: berapa baris dibuang, berapa review terdampak,
+            berapa yang kembali ke jawaban lama vs kembali ke pending.
+        """
+        model_name = (model_name or "").strip()
+        if not model_name:
+            raise ValueError(
+                "rollback_analyses butuh model_name — rollback tanpa target "
+                "akan menghapus riwayat analisa yang sah tanpa niat."
+            )
+
+        with self.session_factory() as session:
+            statement = select(ReviewAnalysis).where(
+                ReviewAnalysis.model_name == model_name
+            )
+            if since is not None:
+                statement = statement.where(ReviewAnalysis.created_at >= since)
+            if self.company_id is not None:
+                statement = statement.join(
+                    Review, Review.id == ReviewAnalysis.review_id
+                ).where(Review.company_id == self.company_id)
+
+            bad_rows = list(session.scalars(statement))
+            review_ids = sorted({row.review_id for row in bad_rows})
+            removed = len(bad_rows)
+
+            for row in bad_rows:
+                session.delete(row)
+            session.flush()
+
+            reverted_to_prior = 0
+            reset_to_pending = 0
+
+            for review_id in review_ids:
+                prior = session.scalar(
+                    select(ReviewAnalysis)
+                    .where(ReviewAnalysis.review_id == review_id)
+                    .order_by(ReviewAnalysis.id.desc())
+                    .limit(1)
+                )
+                review = session.get(Review, review_id)
+                if review is None:
+                    continue
+
+                if prior is not None:
+                    review.analysis_status = self._result_status(
+                        {
+                            "urgency": prior.urgency,
+                            "issue_category": prior.issue_category,
+                            "summary": prior.summary,
+                            "recommended_action": prior.recommended_action,
+                        }
+                    )
+                    reverted_to_prior += 1
+                else:
+                    review.analysis_status = "pending"
+                    reset_to_pending += 1
+
+                review.sync_updated_at = (
+                    func.clock_timestamp()
+                    if session.bind.dialect.name == "postgresql"
+                    else datetime.now(timezone.utc)
+                )
+
+            session.commit()
+
+        summary = {
+            "model_name": model_name,
+            "analyses_removed": removed,
+            "reviews_affected": len(review_ids),
+            "reverted_to_prior_analysis": reverted_to_prior,
+            "reset_to_pending": reset_to_pending,
+        }
+        logger.warning("analysis.rollback %s", summary)
+        return summary
+
+    def quality_summary(self, hours: int = 24) -> dict:
+        """Sebaran analysis_status baru-baru ini — sinyal kesehatan murah
+        untuk MONITORING (DNGO19-3407).
+
+        Dipakai alerting eksternal: kalau porsi "failed" melonjak dibanding
+        biasanya, itu tanda AI-nya bermasalah sebelum ada operator yang lapor.
+
+        Memakai Review.updated_at yang sudah ada di skema, TANPA migrasi baru
+        — harganya, kolom itu juga ikut bergerak pada pembaruan review yang
+        bukan analisa (mis. hasil scrape ulang), sehingga angkanya adalah
+        perkiraan aktivitas terbaru, bukan jejak analisa yang presisi.
+        """
+        since = datetime.now(timezone.utc) - timedelta(hours=max(0, hours))
+
+        with self.session_factory() as session:
+            statement = (
+                select(Review.analysis_status, func.count())
+                .where(Review.updated_at >= since)
+                .group_by(Review.analysis_status)
+            )
+            if self.company_id is not None:
+                statement = statement.where(Review.company_id == self.company_id)
+            rows = session.execute(statement).all()
+
+        counts = {status: int(count) for status, count in rows}
+        total = sum(counts.values())
+        failed = counts.get("failed", 0)
+
+        return {
+            "hours": hours,
+            "since": since.isoformat(),
+            "total": total,
+            "by_status": counts,
+            "failure_rate": round(failed / total, 4) if total else None,
         }

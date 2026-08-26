@@ -259,6 +259,8 @@ Contoh response:
   "total": 40,
   "success": 38,
   "failed": 2,
+  "not_attempted": 0,
+  "circuit_breaker_tripped": false,
   "skipped_empty": 0,
   "rating_fallback": 4,
   "sentiments": {
@@ -274,6 +276,10 @@ Contoh response:
     "completion_tokens": 4720,
     "total_tokens": 19420
   },
+  "duration_ms": 41230.5,
+  "llm_calls": 38,
+  "llm_call_ms_total": 39870.2,
+  "quality": { "valid": 35, "corrected": 3 },
   "errors": [
     {
       "review_id": 59280,
@@ -283,7 +289,59 @@ Contoh response:
 }
 ```
 
-## 8. Endpoint Pendukung Untuk Melihat Output Analysis
+`not_attempted` dan `circuit_breaker_tripped` hanya naik dari nol kalau kegagalan LLM beruntun melewati `ANALYSIS_CIRCUIT_BREAKER_THRESHOLD` (default 5) — sisanya dibiarkan `pending`, bukan ditandai gagal, supaya run berikutnya otomatis mengambilnya lagi. `quality.corrected` menghitung berapa hasil model yang bentuknya di luar kontrak dan harus dinormalisasi (mis. `issue_category` yang tidak dikenal jatuh ke `"other"`) — porsi yang naik terus adalah tanda model/prompt-nya perlu ditinjau.
+
+## 8. Rollback Model AI
+
+Prosedur rollback DNGO19-3388/3407: dipakai ketika satu model/prompt terbukti menghasilkan analisa yang salah secara sistematis, bukan untuk satu review yang gagal (untuk itu cukup endpoint 6). Riwayat analisa bersifat *append-only*, jadi rollback tidak menghapus data secara membabi buta — setiap review yang terdampak dikembalikan ke jawaban model SEBELUMNYA kalau ada, atau ke `pending` untuk dianalisa ulang.
+
+```http
+POST {{BASE_URL}}/api/analysis/rollback
+Authorization: Bearer {{ACCESS_TOKEN}}
+Content-Type: application/json
+
+{
+  "model_name": "llama3.2-1b",
+  "since": "2026-08-20T00:00:00Z"
+}
+```
+
+`model_name` **wajib diisi** — server menolak (400) kalau kosong, supaya rollback tidak pernah membuang riwayat analisa yang sah tanpa target yang jelas. `since` opsional; kosongkan untuk membuang seluruh riwayat model tersebut.
+
+Contoh response:
+
+```json
+{
+  "model_name": "llama3.2-1b",
+  "analyses_removed": 40,
+  "reviews_affected": 40,
+  "reverted_to_prior_analysis": 12,
+  "reset_to_pending": 28
+}
+```
+
+## 9. Ringkasan Kualitas (Monitoring)
+
+Sebaran `analysis_status` review dalam N jam terakhir — dipakai monitoring/alerting eksternal untuk melihat kalau porsi `failed` melonjak sebelum ada operator yang lapor manual.
+
+```http
+GET {{BASE_URL}}/api/analysis/quality-summary?hours=24
+Authorization: Bearer {{ACCESS_TOKEN}}
+```
+
+Contoh response:
+
+```json
+{
+  "hours": 24,
+  "since": "2026-08-25T10:00:00+00:00",
+  "total": 120,
+  "by_status": { "completed": 108, "failed": 6, "incomplete": 4, "pending": 2 },
+  "failure_rate": 0.05
+}
+```
+
+## 10. Endpoint Pendukung Untuk Melihat Output Analysis
 
 ### Dashboard Overview
 
@@ -388,7 +446,7 @@ Contoh response:
 }
 ```
 
-## 9. Catatan Penting
+## 11. Catatan Penting
 
 Endpoint async analysis yang ada di implementation plan berikut **belum tersedia di code backend Crawler System saat ini**:
 
@@ -403,6 +461,8 @@ Jadi untuk testing Postman sekarang, gunakan endpoint yang sudah executable:
 2. `GET /api/reviews/{review_id}`
 3. `POST /api/analysis/pending`
 4. `POST /api/analysis/locations/{location_id}/rerun`
+5. `POST /api/analysis/rollback`
+6. `GET /api/analysis/quality-summary`
 
 Untuk flow satu ulasan, urutan minimum adalah:
 

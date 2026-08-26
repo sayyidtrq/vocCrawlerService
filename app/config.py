@@ -116,6 +116,13 @@ class Settings:
     crawl_worker_max_attempts: int = 3
     crawl_worker_poll_seconds: int = 5
     crawl_worker_retry_base_seconds: int = 60
+    # DNGO19-3407: retry sesuai permintaan PBI. Backoff sama polanya dengan
+    # OneBoxWorklistClient._backoff (min(8.0, base * 2**attempt)).
+    analysis_llm_max_retries: int = 2
+    analysis_llm_retry_backoff_seconds: float = 1.0
+    # Fallback: berhenti setelah N kegagalan LLM beruntun dalam satu run.
+    # 0 = mati (perilaku lama).
+    analysis_circuit_breaker_threshold: int = 5
 
     def ensure_export_dir(self) -> Path:
         self.export_dir.mkdir(parents=True, exist_ok=True)
@@ -232,6 +239,13 @@ def get_settings() -> Settings:
         selenium_wait_timeout_seconds=_as_int("SELENIUM_WAIT_TIMEOUT_SECONDS", 20),
         selenium_user_data_dir=selenium_user_data_dir,
         analysis_batch_size=_as_int("ANALYSIS_BATCH_SIZE", 20),
+        analysis_llm_max_retries=max(0, _as_int("ANALYSIS_LLM_MAX_RETRIES", 2)),
+        analysis_llm_retry_backoff_seconds=max(
+            0.0, _as_float("ANALYSIS_LLM_RETRY_BACKOFF_SECONDS", 1.0)
+        ),
+        analysis_circuit_breaker_threshold=max(
+            0, _as_int("ANALYSIS_CIRCUIT_BREAKER_THRESHOLD", 5)
+        ),
         prompt_version=os.getenv("PROMPT_VERSION", "v1").strip(),
         page_size=_as_int("PAGE_SIZE", 20),
         show_raw_payload=_as_bool("SHOW_RAW_PAYLOAD", False),

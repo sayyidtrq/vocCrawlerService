@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -440,3 +441,275 @@ def test_analysis_skips_a_location_onebox_disabled(
     assert result["skipped_ai_disabled"] == 10
     with session_factory() as session:
         assert session.scalar(select(func.count(ReviewAnalysis.id))) == 0
+
+
+class FlakyClient(MockGeminiClient):
+    """Fails a fixed number of times, then succeeds — for retry tests."""
+
+    model_name = "flaky-v1"
+
+    def __init__(self, fail_times):
+        self.fail_times = fail_times
+        self.calls = 0
+
+    def analyze_review(self, review):
+        self.calls += 1
+        if self.calls <= self.fail_times:
+            raise RuntimeError("transient failure")
+        return super().analyze_review(review)
+
+
+class AlwaysFailingClient(MockGeminiClient):
+    model_name = "always-fail-v1"
+
+    def analyze_review(self, review):
+        raise RuntimeError("boom")
+
+
+def test_analysis_retries_a_transient_llm_failure_then_succeeds(
+    session_factory, settings, company_id
+):
+    """A network blip must not permanently fail a review (DNGO19-3407).
+
+    Backoff is forced to 0 so the test does not actually sleep — what is
+    being checked is that the retry happens and the review still succeeds,
+    not the exact delay.
+    """
+    fetched_location(session_factory, settings, company_id)
+    fast_settings = replace(settings, analysis_llm_retry_backoff_seconds=0.0)
+    client = FlakyClient(fail_times=1)
+
+    result = AnalysisService(
+        company_id=company_id,
+        session_factory=session_factory,
+        settings=fast_settings,
+        client=client,
+    ).analyze_pending()
+
+    assert result["success"] == 10
+    assert result["failed"] == 0
+    assert result["llm_calls"] == 10
+    # Two attempts for the first review (1 failure + 1 success), one each
+    # for the rest.
+    assert client.calls == 11
+
+
+def test_analysis_gives_up_after_max_retries(session_factory, settings, company_id):
+    """A model that is genuinely down must still fail — retry is bounded.
+
+    Circuit breaker disabled here on purpose: this test isolates PER-REVIEW
+    retry exhaustion, not the run-level breaker (covered separately below).
+    """
+    fetched_location(session_factory, settings, company_id)
+    fast_settings = replace(
+        settings,
+        analysis_llm_max_retries=1,
+        analysis_llm_retry_backoff_seconds=0.0,
+        analysis_circuit_breaker_threshold=0,
+    )
+
+    result = AnalysisService(
+        company_id=company_id,
+        session_factory=session_factory,
+        settings=fast_settings,
+        client=AlwaysFailingClient(),
+    ).analyze_pending()
+
+    assert result["success"] == 0
+    assert result["failed"] == 10
+    assert len(result["errors"]) == 10
+    assert result["circuit_breaker_tripped"] is False
+    with session_factory() as session:
+        assert session.scalar(select(func.count(ReviewAnalysis.id))) == 0
+
+
+def test_analysis_circuit_breaker_stops_after_consecutive_failures(
+    session_factory, settings, company_id
+):
+    """FALLBACK (DNGO19-3407): a model that is down must not be hammered
+
+    for every remaining review in the queue — stop after N failures in a
+    row and leave the rest untouched (not marked failed) so a normal
+    re-run picks them straight back up as pending.
+    """
+    fetched_location(session_factory, settings, company_id)
+    fast_settings = replace(
+        settings,
+        analysis_llm_max_retries=0,
+        analysis_circuit_breaker_threshold=3,
+    )
+
+    result = AnalysisService(
+        company_id=company_id,
+        session_factory=session_factory,
+        settings=fast_settings,
+        client=AlwaysFailingClient(),
+    ).analyze_pending()
+
+    assert result["failed"] == 3
+    assert result["not_attempted"] == 7
+    assert result["circuit_breaker_tripped"] is True
+    with session_factory() as session:
+        # Untouched, not failed: analysis_status is still the column default.
+        pending = session.scalar(
+            select(func.count(Review.id)).where(Review.analysis_status == "pending")
+        )
+    assert pending == 7
+
+
+def test_analysis_quality_flags_a_result_the_model_got_wrong(
+    session_factory, settings, company_id
+):
+    """A model that ignores the contract must be visible as a quality signal.
+
+    An out-of-contract issue_category is silently normalized to "other" so
+    storage never breaks — but that correction has to be COUNTED somewhere,
+    or a model that is quietly wrong 40% of the time looks identical to one
+    that is not.
+    """
+    fetched_location(session_factory, settings, company_id)
+
+    class WrongCategoryClient(MockGeminiClient):
+        model_name = "wrong-category-v1"
+
+        def analyze_review(self, review):
+            result = super().analyze_review(review)
+            result["issue_category"] = "not_a_real_category"
+            return result
+
+    result = AnalysisService(
+        company_id=company_id,
+        session_factory=session_factory,
+        settings=settings,
+        client=WrongCategoryClient(),
+    ).analyze_pending()
+
+    assert result["success"] == 10
+    assert result["quality"]["corrected"] == 10
+    assert result["quality"]["valid"] == 0
+    with session_factory() as session:
+        categories = {
+            row.issue_category for row in session.scalars(select(ReviewAnalysis))
+        }
+    assert categories == {"other"}
+
+
+class NamedModelClient(MockGeminiClient):
+    """MockGeminiClient with a caller-chosen model_name, for rollback tests."""
+
+    def __init__(self, model_name):
+        self.model_name = model_name
+
+
+def test_rollback_analyses_reverts_to_the_prior_model_when_one_exists(
+    session_factory, settings, company_id
+):
+    """Prosedur rollback (DNGO19-3407): a bad rollout must not leave a hole.
+
+    model-a analyzes everything first, then model-b (the bad rollout) reruns
+    all of it, appending a second row per review. Rolling back model-b must
+    bring every review back to model-a's answer, not to nothing.
+    """
+    location = fetched_location(session_factory, settings, company_id)
+    AnalysisService(
+        company_id=company_id, session_factory=session_factory, settings=settings,
+        client=NamedModelClient("model-a"),
+    ).analyze_pending()
+    AnalysisService(
+        company_id=company_id, session_factory=session_factory, settings=settings,
+        client=NamedModelClient("model-b"),
+    ).rerun_location(location.id)
+
+    with session_factory() as session:
+        assert session.scalar(select(func.count(ReviewAnalysis.id))) == 20
+
+    summary = AnalysisService(
+        company_id=company_id, session_factory=session_factory, settings=settings,
+    ).rollback_analyses(model_name="model-b")
+
+    assert summary["analyses_removed"] == 10
+    assert summary["reviews_affected"] == 10
+    assert summary["reverted_to_prior_analysis"] == 10
+    assert summary["reset_to_pending"] == 0
+
+    with session_factory() as session:
+        remaining = list(session.scalars(select(ReviewAnalysis)))
+        statuses = {row.analysis_status for row in session.scalars(select(Review))}
+    assert {row.model_name for row in remaining} == {"model-a"}
+    assert len(remaining) == 10
+    assert statuses == {"completed"}
+
+
+def test_rollback_analyses_resets_to_pending_with_no_prior_model(
+    session_factory, settings, company_id
+):
+    """No earlier answer to fall back to -> the review goes back to pending,
+
+    so the next normal run picks it up rather than it silently staying
+    unanalyzed forever.
+    """
+    fetched_location(session_factory, settings, company_id)
+    AnalysisService(
+        company_id=company_id, session_factory=session_factory, settings=settings,
+        client=NamedModelClient("only-model"),
+    ).analyze_pending()
+
+    summary = AnalysisService(
+        company_id=company_id, session_factory=session_factory, settings=settings,
+    ).rollback_analyses(model_name="only-model")
+
+    assert summary["analyses_removed"] == 10
+    assert summary["reverted_to_prior_analysis"] == 0
+    assert summary["reset_to_pending"] == 10
+    with session_factory() as session:
+        assert session.scalar(select(func.count(ReviewAnalysis.id))) == 0
+        statuses = {row.analysis_status for row in session.scalars(select(Review))}
+    assert statuses == {"pending"}
+
+
+def test_rollback_analyses_requires_a_model_name(session_factory, settings, company_id):
+    """No target = wipe the wrong thing by accident. Refuse it outright."""
+    service = AnalysisService(
+        company_id=company_id, session_factory=session_factory, settings=settings,
+    )
+    with pytest.raises(ValueError):
+        service.rollback_analyses(model_name="")
+
+
+def test_quality_summary_reports_the_recent_status_distribution(
+    session_factory, settings, company_id
+):
+    """Monitoring (DNGO19-3407): failed vs completed must be visible without
+
+    an operator noticing manually first.
+    """
+    fetched_location(session_factory, settings, company_id)
+    fast_settings = replace(
+        settings, analysis_llm_max_retries=0, analysis_circuit_breaker_threshold=0,
+    )
+
+    class HalfFailingClient(MockGeminiClient):
+        model_name = "half-failing-v1"
+
+        def __init__(self):
+            self.calls = 0
+
+        def analyze_review(self, review):
+            self.calls += 1
+            if self.calls % 2 == 0:
+                raise RuntimeError("boom")
+            return super().analyze_review(review)
+
+    AnalysisService(
+        company_id=company_id, session_factory=session_factory, settings=fast_settings,
+        client=HalfFailingClient(),
+    ).analyze_pending()
+
+    summary = AnalysisService(
+        company_id=company_id, session_factory=session_factory, settings=settings,
+    ).quality_summary(hours=24)
+
+    assert summary["total"] == 10
+    assert summary["by_status"]["completed"] == 5
+    assert summary["by_status"]["failed"] == 5
+    assert summary["failure_rate"] == 0.5
