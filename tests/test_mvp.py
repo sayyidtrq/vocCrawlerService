@@ -10,7 +10,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.config import Settings
 from app.db.base import Base
-from app.db.models import Company, FetchLog, Review, ReviewAnalysis
+from app.db.models import Company, FetchLog, Location, Review, ReviewAnalysis
 from app.integrations.local_llm_client import LocalLLMClient
 from app.integrations.mock_gemini_client import MockGeminiClient
 from app.services.analysis_service import AnalysisService
@@ -356,3 +356,87 @@ def test_summary_and_exports(session_factory, settings, company_id):
         path.exists()
         for path in [reviews_csv, location_csv, summary_csv, raw_json]
     )
+
+
+def set_ai_config(session_factory, location_id, **fields):
+    with session_factory() as session:
+        row = session.get(Location, location_id)
+        for key, value in fields.items():
+            setattr(row, key, value)
+        session.commit()
+
+
+def fetched_location(session_factory, settings, company_id):
+    location = add_location(session_factory, company_id)
+    FetchService(
+        company_id=company_id, session_factory=session_factory, settings=settings
+    ).fetch_location(location.id)
+    return location
+
+
+def test_analysis_uses_the_model_onebox_chose(session_factory, settings, company_id):
+    """The model recorded against the analysis is the one OneBox picked."""
+    location = fetched_location(session_factory, settings, company_id)
+    set_ai_config(session_factory, location.id, ai_model="llama3.2-1b")
+
+    result = AnalysisService(
+        company_id=company_id,
+        session_factory=session_factory,
+        settings=settings,
+        client=MockGeminiClient(),
+    ).analyze_pending()
+
+    assert result["success"] == 10
+    assert result["skipped_ai_disabled"] == 0
+    with session_factory() as session:
+        models = {row.model_name for row in session.scalars(select(ReviewAnalysis))}
+    assert models == {"llama3.2-1b"}
+
+
+def test_analysis_leaves_the_injected_client_alone_when_onebox_is_silent(
+    session_factory, settings, company_id
+):
+    """No choice from OneBox must not mean "swap in the local LLM".
+
+    The client is injectable. Falling back to settings.local_llm_model here
+    would silently retag every analysis with a model that never ran.
+    """
+    fetched_location(session_factory, settings, company_id)
+
+    client = MockGeminiClient()
+    AnalysisService(
+        company_id=company_id,
+        session_factory=session_factory,
+        settings=settings,
+        client=client,
+    ).analyze_pending()
+
+    with session_factory() as session:
+        models = {row.model_name for row in session.scalars(select(ReviewAnalysis))}
+    assert models == {"mock-gemini-v1"}
+    assert client.model_name == "mock-gemini-v1"
+
+
+def test_analysis_skips_a_location_onebox_disabled(
+    session_factory, settings, company_id
+):
+    """ai_enabled=0 must stop the write, not just the model call.
+
+    Checked before the rating-only fallback, which also writes an analysis
+    row: skipping only the model call would still leave rows behind for a
+    branch whose analysis was explicitly switched off.
+    """
+    location = fetched_location(session_factory, settings, company_id)
+    set_ai_config(session_factory, location.id, ai_enabled=False)
+
+    result = AnalysisService(
+        company_id=company_id,
+        session_factory=session_factory,
+        settings=settings,
+        client=MockGeminiClient(),
+    ).analyze_pending()
+
+    assert result["success"] == 0
+    assert result["skipped_ai_disabled"] == 10
+    with session_factory() as session:
+        assert session.scalar(select(func.count(ReviewAnalysis.id))) == 0

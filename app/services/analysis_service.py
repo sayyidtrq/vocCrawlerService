@@ -7,7 +7,7 @@ from sqlalchemy import exists, func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import Settings, get_settings
-from app.db.models import Review, ReviewAnalysis
+from app.db.models import Location, Review, ReviewAnalysis
 from app.db.session import get_session_factory
 from app.integrations.gemini_client import GeminiClientBase
 from app.integrations.local_llm_client import LocalLLMClient
@@ -15,6 +15,10 @@ from app.integrations.local_llm_client import LocalLLMClient
 
 logger = logging.getLogger(__name__)
 RATING_FALLBACK_MODEL = "rating-fallback-v1"
+# Shape of the analysis fields this build emits on the integration contract.
+# Kept in step with apps.api.app_api.integration_schemas.API_VERSION, which is
+# what OneBox actually compares against.
+OUTPUT_SCHEMA_VERSION = "v1"
 ALLOWED_SENTIMENTS = {"positive", "neutral", "negative", "mixed", "unknown"}
 ALLOWED_URGENCIES = {"low", "medium", "high", "critical", "unknown"}
 ALLOWED_CATEGORIES = {
@@ -119,6 +123,7 @@ class AnalysisService:
                 "unknown": 0,
             },
             "errors": [],
+            "skipped_ai_disabled": 0,
             "tokens_used": 0,
             "token_usage": {
                 "prompt_tokens": 0,
@@ -127,8 +132,54 @@ class AnalysisService:
             },
         }
         batch_size = max(1, self.settings.analysis_batch_size)
+        ai_config = self._location_ai_config(
+            {review.get("location_id") for review in reviews}
+        )
+        # Restored in the finally below. The client is reused across batches and
+        # may be shared with the caller, so leaking one location's model choice
+        # into the next run would be invisible and would only show up as the
+        # wrong model_name recorded against unrelated reviews.
+        default_model = getattr(self.client, "model_name", None)
+        try:
+            self._run_batches(reviews, batch_size, ai_config, result, default_model)
+        finally:
+            if default_model is not None:
+                self.client.model_name = default_model
+        return result
+
+    def _run_batches(
+        self,
+        reviews: list[dict],
+        batch_size: int,
+        ai_config: dict,
+        result: dict,
+        default_model: str | None,
+    ) -> None:
         for start in range(0, len(reviews), batch_size):
             for review in reviews[start : start + batch_size]:
+                config = ai_config.get(review.get("location_id"))
+
+                # OneBox switched this branch off. Checked BEFORE the empty-text
+                # fallback below, because that path also writes an analysis row:
+                # skipping only the model call would still leave rows behind for
+                # a branch whose analysis was explicitly disabled.
+                if config is not None and not config["enabled"]:
+                    result["skipped_ai_disabled"] += 1
+                    continue
+
+                # OneBox picks the model when it has an opinion. When it does
+                # not, the client keeps the model it was built with — restored
+                # explicitly here rather than left as-is, because the previous
+                # location in this same run may have overridden it.
+                #
+                # Deliberately NOT falling back to settings.local_llm_model: the
+                # client is injectable, and a caller that passed a Gemini or mock
+                # client would find its model silently swapped for the local one.
+                if config is not None and config["model"]:
+                    self.client.model_name = config["model"]
+                elif default_model is not None:
+                    self.client.model_name = default_model
+
                 if not review["review_text"].strip():
                     raw_result = self._rating_only_result(review.get("rating"))
                     cleaned = self._validate_result(raw_result)
@@ -159,7 +210,45 @@ class AnalysisService:
                         {"review_id": review["id"], "error": "Analysis failed."}
                     )
                     logger.exception("Analysis failed for review %s", review["id"])
-        return result
+
+    def _location_ai_config(self, location_ids: set) -> dict:
+        """Per-location AI config as delivered by the OneBox worklist.
+
+        Read once per run rather than per review: a catch-up pass sweeps
+        thousands of rows and the answer is identical for every review of the
+        same branch.
+
+        Locations missing from the map — a review whose location was deleted, or
+        a crawler running standalone with no worklist behind it — get no entry,
+        and the caller treats that as "no opinion from OneBox" rather than as
+        disabled. Silence from the control plane must not stop analysis.
+        """
+        wanted = {int(value) for value in location_ids if value is not None}
+        if not wanted:
+            return {}
+
+        with self.session_factory() as session:
+            statement = select(Location).where(Location.id.in_(wanted))
+            if self.company_id is not None:
+                statement = statement.where(Location.company_id == self.company_id)
+            rows = list(session.scalars(statement))
+
+        config = {}
+        for row in rows:
+            expected = row.ai_output_schema_version
+            if expected and expected != OUTPUT_SCHEMA_VERSION:
+                # Logged, never fatal. OneBox asking for a schema this build
+                # cannot produce is a real mismatch worth seeing, but refusing to
+                # analyze would turn a version skew into an outage — and OneBox
+                # already validates the shape it receives on its own side.
+                logger.warning(
+                    "Location %s expects output schema %s but this build emits %s.",
+                    row.id,
+                    expected,
+                    OUTPUT_SCHEMA_VERSION,
+                )
+            config[row.id] = {"enabled": bool(row.ai_enabled), "model": row.ai_model}
+        return config
 
     def _store_analysis(
         self,

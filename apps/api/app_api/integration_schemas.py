@@ -81,6 +81,11 @@ class IntegrationReviewItem(_Base):
 
     analysis_status: AnalysisStatus
     analyzed: bool
+    # Names the shape of the analysis fields below, so the consumer can tell a
+    # field it does not recognise from a field this version never promised.
+    # OneBox compares it against the version stored per connection and warns on
+    # a mismatch; without it emitted here, that check silently never fires.
+    output_schema_version: Literal["v1"] = API_VERSION
     # Null for every one of these when analyzed is false. keywords and the two
     # flags stay non-null with empty/false defaults so consumers never have to
     # null-check a collection; see api-contract-v1.md.

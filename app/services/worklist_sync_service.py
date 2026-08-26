@@ -80,6 +80,22 @@ def _bool(value: Any, default: bool) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
+def _optional_str(value: Any, limit: int) -> str | None:
+    """Trimmed string, or None for anything that means "not set".
+
+    Empty and whitespace-only collapse to None deliberately: OneBox sends null
+    for "operator did not choose", but hand-edited Options rows reach the
+    worklist carrying "" for the same intent, and storing the two differently
+    would give the fallback below two cases to handle forever.
+    """
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    return text[:limit]
+
+
 def _optional_int(value: Any, field: str) -> int | None:
     if value is None or value == "":
         return None
@@ -219,6 +235,17 @@ class WorklistSyncService:
                 "crawl_enabled": _bool(raw.get("crawl_enabled"), default_crawl),
                 "ingest_reviews": _bool(raw.get("ingest_reviews"), default_ingest),
                 "is_mock": _bool(raw.get("mock", raw.get("is_mock")), False),
+                # AI config chosen by OneBox (DNGO19-3388).
+                #
+                # Absent keys are NOT an error. The worklist is served by a
+                # OneBox that may be older than this crawler, and refusing rows
+                # without these keys would take crawling down during a deploy
+                # window for a field that has a perfectly good default.
+                "ai_enabled": _bool(raw.get("ai_enabled"), True),
+                "ai_model": _optional_str(raw.get("ai_model"), 100),
+                "ai_output_schema_version": _optional_str(
+                    raw.get("ai_output_schema_version"), 20
+                ),
             }
             if not item["branch_name"]:
                 raise WorklistSyncError(f"Worklist item {index} has no branch/name.")
@@ -363,6 +390,12 @@ class WorklistSyncService:
         entity.ingest_reviews = item["ingest_reviews"]
         entity.is_mock = item["is_mock"]
         entity.is_active = item["active"]
+        # Locations only. Competitors are crawled but never analyzed into
+        # tickets (ingest_reviews is false for them), so giving them an AI
+        # config would create a setting that looks live and controls nothing.
+        entity.ai_enabled = item["ai_enabled"]
+        entity.ai_model = item["ai_model"]
+        entity.ai_output_schema_version = item["ai_output_schema_version"]
         entity.worklist_synced_at = now
 
     @staticmethod

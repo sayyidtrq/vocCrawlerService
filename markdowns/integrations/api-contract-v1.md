@@ -88,6 +88,7 @@ Semua timestamp **UTC ISO 8601 dengan suffix `Z`** (mis. `2026-07-12T03:00:00Z`)
 | `sync_updated_at` | datetime | tidak | **Watermark sinkronisasi. Ini yang dipakai untuk delta-sync.** Lihat §3. |
 | `analysis_status` | enum | tidak | Status authoritative: `pending`, `completed`, `failed`, atau `incomplete`. |
 | `analyzed` | boolean | tidak | `false` = analisis AI belum jalan. |
+| `output_schema_version` | enum | tidak | Selalu `"v1"`. Menyebut BENTUK field analisis di bawah, bukan isinya — karena itu tetap terisi walau `analyzed=false`. OneBox membandingkannya dengan versi yang tersimpan per Connection dan mencatat peringatan bila berbeda. |
 | `sentiment` | enum | **ya** | Null ⟺ `analyzed=false`. |
 | `sentiment_score` | float | **ya** | 0.0–1.0. Null ⟺ `analyzed=false`. |
 | `issue_category` | enum | **ya** | Null ⟺ `analyzed=false`. |

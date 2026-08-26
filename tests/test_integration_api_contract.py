@@ -68,6 +68,10 @@ EXPECTED_ITEM_FIELDS = {
     "sync_updated_at",
     "analysis_status",
     "analyzed",
+    # Names the shape of the analysis fields, not their content, so it is
+    # present even when analyzed is false, and is deliberately NOT part of
+    # ANALYSIS_ONLY_FIELDS below.
+    "output_schema_version",
     "sentiment",
     "sentiment_score",
     "issue_category",

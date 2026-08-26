@@ -66,6 +66,15 @@ Authorization: Bearer <JWT>
       "crawl_enabled": true,           // StatusId CNS1 → boleh masuk penjadwal; kompetitor false (CNS3)
       "ingest_reviews": true,          // hanya lokasi; kompetitor false (review-nya TIDAK jadi tiket OneBox)
       "mock": false,                   // koneksi dev dummy — boleh skip crawl asli
+
+      // Konfigurasi AI milik OneBox (DNGO19-3388). OneBox yang MEMILIH model;
+      // crawler menyimpannya di kolom locations.ai_* dan memakainya saat analisa.
+      // Ketiganya OPSIONAL: baris worklist dari OneBox versi lama tidak
+      // membawanya, dan ketiadaannya TIDAK boleh dibaca sebagai "matikan AI".
+      "ai_enabled": true,              // sakelar per koneksi; default true bila tidak ada
+      "ai_model": "llama3.2-1b",       // null/"" = OneBox tidak memilih → pakai default crawler
+      "ai_output_schema_version": "v1",// bentuk hasil analisa yang diharapkan OneBox
+
       "voc_target_id": null,           // id lama di VoC bila pernah di-provision (transisi)
       "provisioning_status": "pending",
       "updated_at": "2026-07-23 10:00:00"

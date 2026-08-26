@@ -313,6 +313,24 @@ class Location(Base):
     crawl_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     ingest_reviews: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     is_mock: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # AI analysis config owned by OneBox and delivered through the worklist.
+    #
+    # OneBox is the control plane for these three (ADR-0003): it picks the
+    # model, flips the per-connection switch, and names the output schema it
+    # expects back. They are cached here rather than re-fetched per analysis
+    # run so that a worklist outage degrades to "use the last known config"
+    # instead of "analyze every branch with the wrong model".
+    #
+    # ai_enabled defaults to True to match OneBox's own default. A worklist row
+    # that predates the contract carries none of these keys, and reading that
+    # absence as False would silently stop analysis for every branch running
+    # today — a regression with no configuration change behind it to explain it.
+    ai_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    # Null means "OneBox did not choose", which falls back to LOCAL_LLM_MODEL.
+    # Distinct from the empty string, which would read as a model whose name
+    # happens to be blank.
+    ai_model: Mapped[str | None] = mapped_column(String(100))
+    ai_output_schema_version: Mapped[str | None] = mapped_column(String(20))
     worklist_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(

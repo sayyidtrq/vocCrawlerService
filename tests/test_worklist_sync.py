@@ -299,3 +299,101 @@ def test_postman_mock_collection_matches_worklist_consumer(
 
     assert result.status == "synced"
     assert result.fetched == result.upserted == 2
+
+
+def ai_payload(location_extra):
+    """One location row, with whatever AI keys the caller wants on it."""
+    item = {
+        "kind": "location",
+        "onebox_connection_id": 2001,
+        "onebox_location_id": 7,
+        "external_place_id": "place-ai",
+        "branch_name": "Hermina AI",
+        "hospital_name": "Hermina",
+        "city": "Depok",
+        "target_review_count": 10,
+        "active": True,
+        "crawl_enabled": True,
+        "ingest_reviews": True,
+    }
+    item.update(location_extra)
+    return {"meta": {"site_id": 169}, "data": [item]}
+
+
+def sync_once(session_factory, settings, company_id, payload_doc):
+    service = WorklistSyncService(
+        company_id=company_id,
+        session_factory=session_factory,
+        settings=onebox_settings(settings, company_id),
+        client=FakeWorklistClient(payload_doc),
+    )
+    assert service.refresh().status == "synced"
+    with session_factory() as session:
+        return session.scalar(
+            select(Location).where(Location.external_place_id == "place-ai")
+        )
+
+
+def test_worklist_stores_the_ai_config_onebox_chose(
+    session_factory, settings, company_id
+):
+    """OneBox owns the model choice, so it has to survive the sync.
+
+    Before this contract the crawler parsed the worklist row and dropped these
+    three keys, so the model OneBox picked never reached the code that calls
+    the model. The regression was invisible from both sides: OneBox showed the
+    setting saved, and the crawler kept analyzing with its env default.
+    """
+    location = sync_once(
+        session_factory,
+        settings,
+        company_id,
+        ai_payload(
+            {
+                "ai_enabled": False,
+                "ai_model": "llama3.2-1b",
+                "ai_output_schema_version": "v1",
+            }
+        ),
+    )
+
+    assert location.ai_enabled is False
+    assert location.ai_model == "llama3.2-1b"
+    assert location.ai_output_schema_version == "v1"
+
+
+def test_worklist_without_ai_keys_leaves_analysis_enabled(
+    session_factory, settings, company_id
+):
+    """A worklist row predating the contract must not disable analysis.
+
+    The worklist is served by a OneBox that can be older than this crawler.
+    Reading a missing key as False would stop analysis for every branch during
+    a deploy window, with no configuration change behind it to explain it.
+    """
+    location = sync_once(session_factory, settings, company_id, ai_payload({}))
+
+    assert location.ai_enabled is True
+    assert location.ai_model is None
+    assert location.ai_output_schema_version is None
+
+
+def test_worklist_treats_a_blank_model_as_no_choice(
+    session_factory, settings, company_id
+):
+    """"" and null both mean "operator did not pick", and must store alike.
+
+    OneBox sends null, but a hand-edited Connection.Options row reaches the
+    worklist carrying an empty string for the same intent. Storing the two
+    differently would leave the model fallback with two cases to handle
+    forever, and the empty one would read as a model with a blank name.
+    """
+    location = sync_once(
+        session_factory,
+        settings,
+        company_id,
+        ai_payload({"ai_model": "   ", "ai_output_schema_version": ""}),
+    )
+
+    assert location.ai_model is None
+    assert location.ai_output_schema_version is None
