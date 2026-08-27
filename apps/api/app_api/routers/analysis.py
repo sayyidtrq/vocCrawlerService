@@ -2,16 +2,17 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, Field
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
 
+from app.config import get_settings
 from app.db.models import User
+from app.integrations.local_llm_client import LocalLLMClient
 from app.services.analysis_service import AnalysisService
 from app.services.entitlement_service import EntitlementError, EntitlementService
 from apps.api.app_api.dependencies import get_current_user
 from apps.api.app_api.schemas import AnalysisPendingResponse
 from apps.api.app_api.serializers import to_jsonable
-
 
 router = APIRouter(prefix="/analysis", tags=["analysis"])
 
@@ -34,6 +35,23 @@ def _require_ai_enabled(company_id: int) -> None:
         EntitlementService(company_id).require_ai_enabled()
     except EntitlementError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
+@router.get(
+    "/models",
+    summary="Daftar model AI yang tersedia pada deployment Crawler ini",
+)
+def available_models(current_user: User = Depends(get_current_user)) -> dict:
+    _require_ai_enabled(current_user.company_id)
+    settings = get_settings()
+    try:
+        models = LocalLLMClient(settings).list_models()
+    except Exception as exc:  # noqa: BLE001 - provider SDKs expose varied errors
+        raise HTTPException(
+            status_code=502,
+            detail="AI provider tidak dapat mengembalikan daftar model.",
+        ) from exc
+    return {"models": models, "default_model": settings.local_llm_model}
 
 
 @router.post(
@@ -76,7 +94,13 @@ def rerun_location(location_id: int, current_user: User = Depends(get_current_us
 )
 def rerun_review(review_id: int, current_user: User = Depends(get_current_user)) -> dict:
     _require_ai_enabled(current_user.company_id)
-    return to_jsonable(AnalysisService(company_id=current_user.company_id).rerun_review(review_id))
+    result = AnalysisService(company_id=current_user.company_id).rerun_review(review_id)
+    if int(result.get("failed") or 0) > 0:
+        raise HTTPException(
+            status_code=502,
+            detail="AI provider gagal menganalisis review setelah retry.",
+        )
+    return to_jsonable(result)
 
 
 @router.post(

@@ -164,6 +164,8 @@ class AnalysisService:
             "llm_retries": 0,
             "llm_call_ms_total": 0.0,
             "quality": {"valid": 0, "corrected": 0},
+            "model_fallbacks": 0,
+            "warnings": [],
             "not_attempted": 0,
             "circuit_breaker_tripped": False,
             "concurrency": (
@@ -183,6 +185,9 @@ class AnalysisService:
         # into the next run would be invisible and would only show up as the
         # wrong model_name recorded against unrelated reviews.
         default_model = getattr(self.client, "model_name", None)
+        ai_config = self._resolve_configured_models(
+            ai_config, default_model, result
+        )
         started = time.perf_counter()
         try:
             self._run_batches(reviews, batch_size, ai_config, result, default_model)
@@ -196,16 +201,75 @@ class AnalysisService:
                 "analysis.run.summary total=%s success=%s failed=%s not_attempted=%s "
                 "rating_fallback=%s skipped_ai_disabled=%s duration_ms=%s "
                 "llm_calls=%s llm_call_ms_total=%s quality_corrected=%s "
-                "llm_retries=%s concurrency=%s max_in_flight=%s "
+                "llm_retries=%s model_fallbacks=%s concurrency=%s max_in_flight=%s "
                 "circuit_breaker_tripped=%s",
                 result["total"], result["success"], result["failed"], result["not_attempted"],
                 result["rating_fallback"], result["skipped_ai_disabled"],
                 result["duration_ms"], result["llm_calls"], result["llm_call_ms_total"],
                 result["quality"]["corrected"], result["llm_retries"],
+                result["model_fallbacks"],
                 result["concurrency"], result["max_in_flight"],
                 result["circuit_breaker_tripped"],
             )
         return result
+
+    def _resolve_configured_models(
+        self,
+        ai_config: dict,
+        default_model: str | None,
+        result: dict,
+    ) -> dict:
+        """Resolve OneBox model choices against this deployment's live models.
+
+        A stale model choice must not take the whole analysis pipeline down.
+        When discovery is supported and the requested model is absent, use the
+        Crawler deployment's configured default and report the fallback in both
+        structured output and logs.  If discovery itself is unavailable, keep
+        the requested value: the normal retry/error path will then expose a
+        real provider failure instead of silently changing models.
+        """
+
+        list_models = getattr(self.client, "list_models", None)
+        if not callable(list_models):
+            return ai_config
+
+        try:
+            available = set(list_models())
+        except Exception as exc:  # noqa: BLE001 - provider SDKs expose varied errors
+            warning = "Model discovery failed; configured model was used unchanged."
+            result["warnings"].append(warning)
+            logger.warning("analysis.model.discovery_failed: %s", exc)
+            return ai_config
+
+        if not available:
+            warning = "Model discovery returned no available models."
+            result["warnings"].append(warning)
+            logger.warning("analysis.model.discovery_empty")
+            return ai_config
+
+        resolved = {}
+        for location_id, config in ai_config.items():
+            item = dict(config)
+            requested = str(item.get("model") or "").strip()
+            if requested and requested not in available:
+                if default_model and default_model in available:
+                    item["model"] = default_model
+                    result["model_fallbacks"] += 1
+                    warning = (
+                        f"Model '{requested}' is unavailable for location "
+                        f"{location_id}; using deployment default '{default_model}'."
+                    )
+                    result["warnings"].append(warning)
+                    logger.warning("analysis.model.fallback: %s", warning)
+                else:
+                    warning = (
+                        f"Model '{requested}' is unavailable for location "
+                        f"{location_id}, and the deployment default is unavailable."
+                    )
+                    result["warnings"].append(warning)
+                    logger.error("analysis.model.unavailable: %s", warning)
+            resolved[location_id] = item
+        return resolved
 
     def _run_batches(
         self,

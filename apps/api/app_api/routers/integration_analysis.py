@@ -10,8 +10,10 @@ from fastapi import APIRouter, Depends, Header, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
+from app.config import get_settings
 from app.db.models import Location
 from app.db.session import get_session_factory
+from app.integrations.local_llm_client import LocalLLMClient
 from app.services.analysis_service import AnalysisService
 from app.services.entitlement_service import EntitlementError, EntitlementService
 from app.services.integration_review_service import IntegrationRequestError
@@ -94,6 +96,51 @@ def _response(data: dict, request_id: str) -> dict:
     }
 
 
+def _raise_if_single_review_failed(result: dict) -> None:
+    """A rerun is synchronous; HTTP success must mean the review succeeded."""
+
+    if int(result.get("failed") or 0) <= 0:
+        return
+    raise IntegrationRequestError(
+        502,
+        "ANALYSIS_FAILED",
+        "The AI provider could not analyze this review after retries.",
+    )
+
+
+@router.get(
+    "/models",
+    responses={
+        401: {"model": IntegrationErrorResponse},
+        403: {"model": IntegrationErrorResponse},
+        502: {"model": IntegrationErrorResponse},
+    },
+    summary="List AI models available in this Crawler deployment",
+)
+def available_models(
+    request: Request,
+    principal: ServicePrincipalDependency,
+    session_factory: SessionFactoryDependency,
+    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+) -> dict:
+    _authorize(principal)
+    request_id = _request_id(request, x_request_id)
+    _require_entitlement(principal.company_id, session_factory)
+    settings = get_settings()
+    try:
+        models = LocalLLMClient(settings).list_models()
+    except Exception as exc:  # noqa: BLE001 - provider SDKs expose varied errors
+        raise IntegrationRequestError(
+            502,
+            "MODEL_DISCOVERY_FAILED",
+            "The configured AI provider did not return its model list.",
+        ) from exc
+    return _response(
+        {"models": models, "default_model": settings.local_llm_model},
+        request_id,
+    )
+
+
 @router.post(
     "/pending",
     responses={
@@ -148,6 +195,7 @@ def rerun_review(
         raise IntegrationRequestError(
             404, "REVIEW_NOT_FOUND", "Review was not found for this tenant."
         ) from exc
+    _raise_if_single_review_failed(result)
     return _response(result, request_id)
 
 

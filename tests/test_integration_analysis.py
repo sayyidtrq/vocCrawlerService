@@ -8,6 +8,7 @@ from sqlalchemy.pool import StaticPool
 from app.db.base import Base
 from app.db.models import Company, Location, Review, ReviewAnalysis
 from app.services.analysis_service import RATING_FALLBACK_MODEL
+from apps.api.app_api.routers import integration_analysis as integration_analysis_router
 from apps.api.app_api.routers.integration_analysis import (
     get_integration_analysis_session_factory,
 )
@@ -124,6 +125,43 @@ def test_service_token_cannot_rerun_another_tenants_review():
 
     assert response.status_code == 404
     assert response.json()["error"]["code"] == "REVIEW_NOT_FOUND"
+
+
+def test_failed_single_review_rerun_is_not_reported_as_http_success(monkeypatch):
+    factory = make_database()
+    client = make_client(factory, principal(1))
+
+    monkeypatch.setattr(
+        integration_analysis_router.AnalysisService,
+        "rerun_review",
+        lambda self, review_id: {
+            "total": 1,
+            "success": 0,
+            "failed": 1,
+            "errors": [{"review_id": review_id, "error": "Analysis failed."}],
+        },
+    )
+
+    response = client.post("/api/integration/v1/analysis/reviews/1/rerun")
+
+    assert response.status_code == 502
+    assert response.json()["error"]["code"] == "ANALYSIS_FAILED"
+
+
+def test_service_token_lists_models_from_the_active_provider(monkeypatch):
+    factory = make_database()
+    client = make_client(factory, principal(1))
+    monkeypatch.setattr(
+        integration_analysis_router.LocalLLMClient,
+        "list_models",
+        lambda self: ["model-a", "model-b:latest"],
+    )
+
+    response = client.get("/api/integration/v1/analysis/models")
+
+    assert response.status_code == 200
+    assert response.json()["data"]["models"] == ["model-a", "model-b:latest"]
+    assert response.json()["data"]["default_model"]
 
 
 def test_analysis_scope_is_required():

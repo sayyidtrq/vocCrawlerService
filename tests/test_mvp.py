@@ -468,6 +468,35 @@ class AlwaysFailingClient(MockGeminiClient):
         raise RuntimeError("boom")
 
 
+class DiscoverableModelClient(MockGeminiClient):
+    model_name = "mock"
+
+    def list_models(self):
+        return ["mock"]
+
+
+def test_unavailable_onebox_model_falls_back_to_deployment_default(
+    session_factory, settings, company_id
+):
+    location = fetched_location(session_factory, settings, company_id)
+    set_ai_config(session_factory, location.id, ai_model="llama3.2-1b")
+
+    result = AnalysisService(
+        company_id=company_id,
+        session_factory=session_factory,
+        settings=settings,
+        client=DiscoverableModelClient(),
+    ).analyze_pending()
+
+    assert result["success"] == 10
+    assert result["failed"] == 0
+    assert result["model_fallbacks"] == 1
+    assert "using deployment default 'mock'" in result["warnings"][0]
+    with session_factory() as session:
+        models = {row.model_name for row in session.scalars(select(ReviewAnalysis))}
+    assert models == {"mock"}
+
+
 def test_analysis_retries_a_transient_llm_failure_then_succeeds(
     session_factory, settings, company_id
 ):

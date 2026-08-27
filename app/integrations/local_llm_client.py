@@ -8,7 +8,6 @@ from openai import OpenAI
 from app.config import Settings
 from app.integrations.gemini_client import GeminiClientBase, ReviewAnalysisResult
 
-
 ALLOWED_ISSUE_CATEGORIES = {
     "doctor_service",
     "nurse_service",
@@ -117,6 +116,24 @@ class LocalLLMClient(GeminiClientBase):
             f"{json.dumps(example, indent=2, ensure_ascii=False)}\n\n"
             "Do not include markdown code blocks, explanations, or any other text."
         )
+
+    def list_models(self) -> list[str]:
+        """Return model IDs exposed by the configured OpenAI-compatible server.
+
+        Model availability belongs to the deployment, not the source tree.  In
+        particular Ollama model IDs include tags (for example ``name:tag``), so
+        keeping a second hardcoded list in OneBox is both brittle and prone to
+        subtle spelling errors.  This method is intentionally small so it also
+        works with other OpenAI-compatible providers that implement
+        ``GET /v1/models``.
+        """
+
+        response = self.client.models.list()
+        models = {
+            str(getattr(item, "id", "") or "").strip()
+            for item in getattr(response, "data", [])
+        }
+        return sorted(model for model in models if model)
 
     def analyze_review(self, review: dict) -> dict:
         prompt = (
