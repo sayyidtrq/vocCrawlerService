@@ -389,7 +389,13 @@ def test_worker_marks_partial_success_without_failed_retry(session_factory):
     assert completed["batch_id"] == queued["batch_id"]
     assert completed["status"] == "completed"
     assert completed["counts"]["partial_success"] == 1
+    assert completed["stop_reason"] == "sort_unavailable"
+    assert completed["stop_reasons"] == {"sort_unavailable": 1}
     assert completed["jobs"][0]["status"] == "partial_success"
     assert completed["jobs"][0]["result"]["metadata"]["stopped_reason"] == (
         "sort_unavailable"
     )
+    latest = service.list_batches(company_id=1, limit=1)[0]
+    assert "jobs" not in latest
+    assert latest["stop_reason"] == "sort_unavailable"
+    assert latest["stop_reasons"] == {"sort_unavailable": 1}

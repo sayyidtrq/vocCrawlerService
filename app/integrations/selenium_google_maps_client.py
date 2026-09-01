@@ -445,15 +445,7 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
                         source_url=driver.current_url or source_url,
                         scraped_at=scraped_at,
                     )
-                    review_key = "|".join(
-                        [
-                            str(review.get("external_review_id") or ""),
-                            str(review.get("reviewer_name") or ""),
-                            str(review.get("rating") or ""),
-                            str(review.get("review_text") or ""),
-                            str(review.get("review_relative_time") or ""),
-                        ]
-                    )
+                    review_key = self._review_identity(review)
                     if review_key not in review_keys:
                         review_keys.add(review_key)
                         reviews.append(review)
@@ -688,6 +680,23 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
             )
         except WebDriverException:
             return card.id
+
+    @staticmethod
+    def _review_identity(review: dict) -> str:
+        external_review_id = " ".join(
+            str(review.get("external_review_id") or "").split()
+        )
+        if external_review_id:
+            return f"external:{external_review_id}"
+        parts = [
+            review.get("reviewer_profile_url"),
+            review.get("reviewer_name"),
+            review.get("rating"),
+            review.get("review_text"),
+        ]
+        return "fallback:" + "|".join(
+            " ".join(str(part or "").split()) for part in parts
+        )
 
     # Kata kunci menu urutan Google Maps, Inggris dan Indonesia. Google tidak
     # menyediakan penyaring tanggal sama sekali — hanya empat urutan ini — jadi

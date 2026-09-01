@@ -13,6 +13,7 @@ from app.integrations.selenium_google_maps_client import (
     SeleniumGoogleMapsReviewClient,
 )
 from app.services.location_service import LocationService
+from app.services.review_service import ReviewService
 from app.services.selenium_fetch_service import SeleniumFetchService
 from app.utils.hashing import generate_selenium_review_hash
 from app.utils.rating_parser import parse_compact_count, parse_rating
@@ -279,15 +280,72 @@ def test_selenium_hash_uses_scraping_identity_fields():
     review = {
         "source": "selenium_google_maps",
         "location_id": 1,
+        "external_review_id": "review-1",
         "reviewer_name": "Andi",
         "rating": 5,
         "review_text": "Pelayanan baik.",
         "review_relative_time": "2 minggu lalu",
         "reviewer_profile_url": "https://google.com/maps/contrib/1",
     }
+    updated_relative_time = dict(review, review_relative_time="3 minggu lalu")
     assert generate_selenium_review_hash(review) == generate_selenium_review_hash(
-        dict(review)
+        updated_relative_time
     )
+
+
+def test_selenium_hash_fallback_does_not_use_relative_time():
+    review = {
+        "source": "selenium_google_maps",
+        "location_id": 1,
+        "external_review_id": None,
+        "reviewer_name": "Andi",
+        "rating": 5,
+        "review_text": "Pelayanan baik.",
+        "review_time": None,
+        "review_relative_time": "2 minggu lalu",
+        "reviewer_profile_url": "https://google.com/maps/contrib/1",
+    }
+    updated_relative_time = dict(review, review_relative_time="3 minggu lalu")
+
+    assert generate_selenium_review_hash(review) == generate_selenium_review_hash(
+        updated_relative_time
+    )
+
+
+def test_review_insert_deduplicates_legacy_hash_by_external_review_id(tmp_path):
+    session_factory = make_session_factory()
+    company_id, location = seed_location(session_factory)
+    service = ReviewService(company_id=company_id, session_factory=session_factory)
+    base_review = {
+        "company_id": company_id,
+        "location_id": location.id,
+        "source": "selenium_google_maps",
+        "external_place_id": location.external_place_id,
+        "external_review_id": "stable-google-review-id",
+        "reviewer_name": "Andi",
+        "rating": 5,
+        "review_text": "Pelayanan baik.",
+        "review_relative_time": "2 minggu lalu",
+        "review_language": "id",
+        "language": "id",
+        "like_count": 0,
+        "raw_payload": {},
+        "review_hash": "legacy-relative-time-hash",
+    }
+    inserted, duplicate = service.insert_review(dict(base_review))
+
+    assert duplicate is False
+    assert inserted is not None
+
+    next_review = dict(
+        base_review,
+        review_relative_time="3 minggu lalu",
+        review_hash=generate_selenium_review_hash(base_review),
+    )
+    inserted_again, duplicate_again = service.insert_review(next_review)
+
+    assert inserted_again is None
+    assert duplicate_again is True
 
 
 def test_selenium_fetch_stores_metadata_and_deduplicates(tmp_path):
