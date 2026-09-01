@@ -146,6 +146,8 @@ def test_enqueue_is_non_blocking_and_idempotent(session_factory):
         "fetched": 0,
         "matched": 0,
         "out_of_range": 0,
+        "out_of_range_newer": 0,
+        "out_of_range_older": 0,
         "inserted": 0,
         "duplicate": 0,
         "failed": 0,
@@ -189,6 +191,56 @@ def test_idempotency_rejects_different_target_review_count(session_factory):
     assert response.status_code == 409
     assert response.json()["error"]["code"] == "IDEMPOTENCY_CONFLICT"
 
+
+def test_new_window_payload_normalizes_options(session_factory):
+    client = make_client(session_factory, principal(1, 1))
+    response = client.post(
+        "/api/integration/v1/crawl-jobs",
+        headers={"Idempotency-Key": "169:2026-09-01:window-v2"},
+        json={
+            "slot": "manual",
+            "crawl_mode": "custom_range",
+            "max_reviews_to_collect": 5,
+            "scan_limit": 40,
+            "date_range": {
+                "from": "2026-08-01T00:00:00+07:00",
+                "to": "2026-09-01T00:00:00+07:00",
+            },
+            "targets": [{"onebox_location_id": 101}],
+        },
+    )
+
+    assert response.status_code == 202
+    data = response.json()["data"]
+    job = data["jobs"][0]
+    assert job["target_review_count"] == 5
+    assert job["max_reviews_to_collect"] == 5
+    assert job["scan_limit"] == 40
+    assert job["crawl_mode"] == "custom_range"
+    assert data["limits"] == {"max_reviews_to_collect": 5, "scan_limit": 40}
+
+    with session_factory() as session:
+        stored = session.scalar(select(CrawlJob))
+        assert stored.target_review_count == 5
+        assert stored.result_json["request"]["crawl_mode"] == "custom_range"
+        assert stored.result_json["request"]["scan_limit"] == 40
+
+
+def test_same_target_window_returns_active_batch(session_factory):
+    client = make_client(session_factory, principal(1, 1))
+
+    first = enqueue(client, key="169:2026-09-01:first-active")
+    second = enqueue(client, key="169:2026-09-01:second-active")
+
+    assert first.status_code == 202
+    assert second.status_code == 202
+    assert second.json()["data"]["batch_id"] == first.json()["data"]["batch_id"]
+    assert second.json()["data"]["reused_existing_job"] is True
+    with session_factory() as session:
+        assert len(list(session.scalars(select(CrawlBatch)))) == 1
+        assert len(list(session.scalars(select(CrawlJob)))) == 1
+
+
 def test_tenant_cannot_enqueue_or_read_another_tenants_target(session_factory):
     tenant_a = make_client(session_factory, principal(1, 1))
     batch_id = enqueue(tenant_a).json()["data"]["batch_id"]
@@ -216,6 +268,9 @@ def test_worker_claims_and_completes_job(session_factory):
             date_from=None,
             date_to=None,
             on_progress=None,
+            sort_by="newest",
+            scan_limit=None,
+            time_limit_seconds=0,
         ):
             if on_progress is not None:
                 on_progress(1, target)
@@ -262,6 +317,8 @@ def test_worker_claims_and_completes_job(session_factory):
         "fetched": 2,
         "matched": 2,
         "out_of_range": 0,
+        "out_of_range_newer": 0,
+        "out_of_range_older": 0,
         "inserted": 2,
         "duplicate": 0,
         "failed": 0,
@@ -277,6 +334,9 @@ def test_worker_marks_partial_success_without_failed_retry(session_factory):
             date_from=None,
             date_to=None,
             on_progress=None,
+            sort_by="newest",
+            scan_limit=None,
+            time_limit_seconds=0,
         ):
             return {
                 "status": "partial_success",

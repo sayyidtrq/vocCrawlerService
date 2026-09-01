@@ -6,6 +6,19 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
+class CrawlDateRangeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    from_: datetime | None = Field(default=None, alias="from")
+    to: datetime | None = Field(default=None)
+
+    @model_validator(mode="after")
+    def _check_range(self):
+        if self.from_ and self.to and self.from_ > self.to:
+            raise ValueError("date_range.from must not be later than date_range.to.")
+        return self
+
+
 class CrawlTargetRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -17,7 +30,19 @@ class CrawlTargetRequest(BaseModel):
     external_place_id: str | None = Field(default=None, max_length=255)
     # Hanya untuk jejak audit dari OneBox; tidak dipakai untuk resolusi target.
     onebox_connection_id: int | None = Field(default=None, gt=0)
+    # Backward-compatible name used by OneBox today. Newer clients should send
+    # max_reviews_to_collect to make the semantics clearer: this is a maximum
+    # number of matching reviews to collect, not a promise that many new rows
+    # will be inserted.
     target_review_count: int | None = Field(default=None, ge=1, le=300)
+    max_reviews_to_collect: int | None = Field(default=None, ge=1, le=300)
+    # Safety limit for unique review cards scanned while trying to satisfy a
+    # date window. It lets crawler pass duplicates/out-of-range rows without
+    # holding the worker indefinitely.
+    scan_limit: int | None = Field(default=None, ge=1, le=5000)
+    crawl_mode: Literal["initial_backfill", "regular_delta", "custom_range"] | None = (
+        Field(default=None)
+    )
 
     # Opsional dan backward-compatible: tidak dikirim = ambil semua tanggal.
     date_from: datetime | None = Field(default=None)
@@ -33,6 +58,15 @@ class CrawlTargetRequest(BaseModel):
     def _check_range(self):
         if self.date_from and self.date_to and self.date_from > self.date_to:
             raise ValueError("date_from must not be later than date_to.")
+        if (
+            self.target_review_count is not None
+            and self.max_reviews_to_collect is not None
+            and self.target_review_count != self.max_reviews_to_collect
+        ):
+            raise ValueError(
+                "target_review_count and max_reviews_to_collect must match "
+                "when both are supplied."
+            )
         if self.kind == "location":
             if self.onebox_location_id is None:
                 raise ValueError(
@@ -44,12 +78,31 @@ class CrawlTargetRequest(BaseModel):
             )
         return self
 
+    @property
+    def effective_review_limit(self) -> int | None:
+        return self.max_reviews_to_collect or self.target_review_count
+
 
 class CrawlBatchCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     slot: str | None = Field(default=None, max_length=50)
+    crawl_mode: Literal["initial_backfill", "regular_delta", "custom_range"] | None = (
+        Field(default=None)
+    )
+    max_reviews_to_collect: int | None = Field(default=None, ge=1, le=300)
+    scan_limit: int | None = Field(default=None, ge=1, le=5000)
+    date_range: CrawlDateRangeRequest | None = None
+    dry_run: bool = False
     targets: list[CrawlTargetRequest] = Field(min_length=1, max_length=500)
+
+    @model_validator(mode="after")
+    def _check_batch_options(self):
+        if self.dry_run:
+            raise ValueError(
+                "dry_run is not supported by the durable crawl queue yet."
+            )
+        return self
 
 
 class CrawlJobErrorResponse(BaseModel):
@@ -59,6 +112,10 @@ class CrawlJobErrorResponse(BaseModel):
 
 class CrawlJobResponse(BaseModel):
     target_review_count: int
+    max_reviews_to_collect: int | None = None
+    scan_limit: int | None = None
+    crawl_mode: str | None = None
+    stop_reason: str | None = None
     job_id: int
     # Kosong untuk job kompetitor. Tanpa ini serialisasi batch yang memuat
     # kompetitor akan gagal validasi dan berbalik menjadi 500.
@@ -87,13 +144,15 @@ class CrawlBatchDataResponse(BaseModel):
     # Cabang yang dikerjakan batch ini. Ikut pada daftar maupun detail, supaya
     # layar Riwayat Fetch OneBox bisa menyebut cabangnya tanpa memanggil detail
     # tiap batch satu per satu. Hanya id-nya: nama cabang milik OneBox.
-    targets: list[int] = []
+    targets: list[int] = Field(default_factory=list)
     # location | competitor | mixed. Kompetitor tidak punya onebox_location_id,
     # jadi tanpa penanda ini batch kompetitor tak bisa dibedakan dari batch
     # cabang yang kebetulan tidak punya target.
     kind: str = "location"
-    competitors: list[int] = []
+    competitors: list[int] = Field(default_factory=list)
     jobs: list[CrawlJobResponse] | None = None
+    reused_existing_job: bool = False
+    limits: dict[str, Any] = Field(default_factory=dict)
 
 
 class CrawlBatchResponse(BaseModel):

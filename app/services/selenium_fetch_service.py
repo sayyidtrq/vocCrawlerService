@@ -95,6 +95,7 @@ class SeleniumFetchService:
         date_to: datetime | None = None,
         on_progress=None,
         sort_by: str = "newest",
+        scan_limit: int | None = None,
         time_limit_seconds: int = 600,
     ) -> dict:
         location = self.location_service.get_location(location_id)
@@ -114,6 +115,9 @@ class SeleniumFetchService:
         requested_target = self.validate_target(
             target or location.target_review_count
         )
+        requested_scan_limit = self.validate_scan_limit(
+            scan_limit, requested_target
+        )
         result = {
             "location_id": location.id,
             "location_name": location.branch_name,
@@ -128,6 +132,8 @@ class SeleniumFetchService:
             "error_message": None,
             "metadata": {
                 "target_review_count": requested_target,
+                "max_reviews_to_collect": requested_target,
+                "scan_limit": requested_scan_limit,
                 "headless": self.settings.selenium_headless,
                 "date_from": date_from.isoformat() if date_from else None,
                 "date_to": date_to.isoformat() if date_to else None,
@@ -177,12 +183,15 @@ class SeleniumFetchService:
                 on_progress=on_progress,
                 keep_check=_nilai_rentang,
                 sort_by=sort_by,
+                scan_limit=requested_scan_limit,
                 time_limit_seconds=time_limit_seconds,
             )
             result["metadata"] = dict(self.client.last_metadata)
             result["metadata"]["date_from"] = date_from.isoformat() if date_from else None
             result["metadata"]["date_to"] = date_to.isoformat() if date_to else None
             result["metadata"]["sort_forced_to_newest"] = sort_dipaksa
+            result["metadata"]["max_reviews_to_collect"] = requested_target
+            result["metadata"]["scan_limit"] = requested_scan_limit
 
             # Peringatan yang HARUS sampai ke layar: kalau urutan gagal
             # dipasang sementara rentang tanggal diminta, hasilnya tidak bisa
@@ -211,6 +220,18 @@ class SeleniumFetchService:
                     )
                     if not is_within_date_range(normalized["review_time"], date_from, date_to):
                         result["total_skipped_out_of_range"] += 1
+                        if self._is_older_than_range(
+                            normalized["review_time"], date_from
+                        ):
+                            result["metadata"]["out_of_range_older"] = (
+                                int(result["metadata"].get("out_of_range_older") or 0)
+                                + 1
+                            )
+                        else:
+                            result["metadata"]["out_of_range_newer"] = (
+                                int(result["metadata"].get("out_of_range_newer") or 0)
+                                + 1
+                            )
                         continue
                     _, duplicate = self.review_service.insert_review(normalized)
                     if duplicate:
@@ -248,6 +269,7 @@ class SeleniumFetchService:
         date_to: datetime | None = None,
         on_progress=None,
         sort_by: str = "newest",
+        scan_limit: int | None = None,
         time_limit_seconds: int = 600,
     ) -> dict:
         """Tarik ulasan satu kompetitor ke tabel competitor_reviews.
@@ -277,6 +299,9 @@ class SeleniumFetchService:
         requested_target = self.validate_target(
             target or sasaran.target_review_count
         )
+        requested_scan_limit = self.validate_scan_limit(
+            scan_limit, requested_target
+        )
         result = {
             "competitor_id": sasaran.id,
             "competitor_name": sasaran.branch_name,
@@ -291,6 +316,8 @@ class SeleniumFetchService:
             "error_message": None,
             "metadata": {
                 "target_review_count": requested_target,
+                "max_reviews_to_collect": requested_target,
+                "scan_limit": requested_scan_limit,
                 "headless": self.settings.selenium_headless,
                 "date_from": date_from.isoformat() if date_from else None,
                 "date_to": date_to.isoformat() if date_to else None,
@@ -331,6 +358,7 @@ class SeleniumFetchService:
                 on_progress=on_progress,
                 keep_check=_nilai_rentang,
                 sort_by=sort_by,
+                scan_limit=requested_scan_limit,
                 time_limit_seconds=time_limit_seconds,
             )
             result["metadata"] = dict(self.client.last_metadata)
@@ -339,6 +367,8 @@ class SeleniumFetchService:
             )
             result["metadata"]["date_to"] = date_to.isoformat() if date_to else None
             result["metadata"]["sort_forced_to_newest"] = sort_dipaksa
+            result["metadata"]["max_reviews_to_collect"] = requested_target
+            result["metadata"]["scan_limit"] = requested_scan_limit
             if (date_from is not None or date_to is not None) and not result[
                 "metadata"
             ].get("sort_applied", False):
@@ -359,6 +389,18 @@ class SeleniumFetchService:
                         normalized["review_time"], date_from, date_to
                     ):
                         result["total_skipped_out_of_range"] += 1
+                        if self._is_older_than_range(
+                            normalized["review_time"], date_from
+                        ):
+                            result["metadata"]["out_of_range_older"] = (
+                                int(result["metadata"].get("out_of_range_older") or 0)
+                                + 1
+                            )
+                        else:
+                            result["metadata"]["out_of_range_newer"] = (
+                                int(result["metadata"].get("out_of_range_newer") or 0)
+                                + 1
+                            )
                         continue
                     _, duplicate = self.competitor_review_service.insert_review(
                         sasaran.id, normalized
@@ -404,3 +446,26 @@ class SeleniumFetchService:
                 f"Target review count must be between 1 and {maximum}."
             )
         return value
+
+    @staticmethod
+    def _is_older_than_range(
+        review_time: datetime | None, date_from: datetime | None
+    ) -> bool:
+        if review_time is None or date_from is None:
+            return False
+        try:
+            return review_time < date_from
+        except TypeError:
+            return False
+
+    @staticmethod
+    def validate_scan_limit(scan_limit: object, target: int) -> int:
+        if scan_limit is None:
+            return target
+        try:
+            value = int(scan_limit)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Scan limit must be numeric.") from exc
+        if value < target:
+            return target
+        return min(value, 5000)

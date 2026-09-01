@@ -13,7 +13,12 @@ class ReviewSourceError(RuntimeError):
 
 class ReviewSourceClient(ABC):
     @abstractmethod
-    def fetch_reviews(self, location: Location, limit: int = 50) -> list[dict]:
+    def fetch_reviews(
+        self,
+        location: Location,
+        limit: int = 50,
+        **kwargs,
+    ) -> list[dict]:
         raise NotImplementedError
 
 
@@ -21,5 +26,10 @@ class UnsupportedReviewClient(ReviewSourceClient):
     def __init__(self, message: str):
         self.message = message
 
-    def fetch_reviews(self, location: Location, limit: int = 50) -> list[dict]:
+    def fetch_reviews(
+        self,
+        location: Location,
+        limit: int = 50,
+        **kwargs,
+    ) -> list[dict]:
         raise ReviewSourceError(self.message)

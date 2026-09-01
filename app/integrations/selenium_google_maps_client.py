@@ -42,22 +42,46 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
 
     def fetch_reviews(
         self, location: Location, limit: int = 50, on_progress=None,
-        keep_check=None, sort_by: str = "newest", time_limit_seconds: int = 0,
+        keep_check=None, sort_by: str = "newest", scan_limit: int | None = None,
+        time_limit_seconds: int = 0,
     ) -> list[dict]:
         target = min(
             max(1, int(limit)),
             self.settings.selenium_max_target_reviews,
             300,
         )
-        url = self._resolve_url(location)
+        max_scan = max(target, min(int(scan_limit or target), 5000))
+        url, url_strategy = self._resolve_url_with_source(location)
         self._validate_url(url)
+        fallback_from_url = None
         driver = None
         started_at = datetime.now().astimezone()
         try:
             driver = self.driver_factory()
-            driver.get(url)
-            self._accept_consent_if_present(driver)
-            cards = self._wait_for_review_cards_or_open_panel(driver)
+            try:
+                cards = self._open_review_panel(driver, url)
+            except ReviewSourceError as exc:
+                # Place ID dari master data kadang berbentuk valid, tetapi tidak
+                # lagi dikenali Google. Maps lalu membuka peta kosong tanpa
+                # panel ulasan. Dalam kasus itu, pencarian nama cabang adalah
+                # fallback satu kali yang lebih aman daripada mengulang Place
+                # ID rusak sampai retry habis.
+                fallback_url = self._name_search_url(location)
+                if (
+                    url_strategy != "external_place_id"
+                    or not self._can_try_name_search_fallback(exc)
+                    or fallback_url == url
+                ):
+                    raise
+                logger.warning(
+                    "Google Place ID tidak membuka panel ulasan untuk %s; "
+                    "mencoba pencarian nama cabang.",
+                    location.branch_name,
+                )
+                fallback_from_url = url
+                url = fallback_url
+                url_strategy = "branch_name_fallback"
+                cards = self._open_review_panel(driver, url)
             container = self._find_scroll_container(driver, cards[0])
             sort_applied = self._apply_sort(driver, sort_by)
             time.sleep(1)
@@ -92,6 +116,7 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
                 scraped_at=started_at,
                 on_progress=on_progress,
                 keep_check=keep_check,
+                scan_limit=max_scan,
                 time_limit_seconds=time_limit_seconds,
             )
             if not reviews:
@@ -102,6 +127,8 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
 
             self.last_metadata = {
                 "target_review_count": target,
+                "max_reviews_to_collect": target,
+                "scan_limit": max_scan,
                 "loaded_review_cards": loaded_review_cards,
                 "scraped_review_cards": len(reviews),
                 "failed_review_cards": failed_cards,
@@ -109,6 +136,8 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
                 "headless": self.settings.selenium_headless,
                 "url": url,
                 "final_url": driver.current_url,
+                "url_strategy": url_strategy,
+                "fallback_from_url": fallback_from_url,
                 "stopped_reason": stopped_reason,
                 "sort_by": sort_by,
                 # Penting bagi pemanggil: berhenti-awal berbasis tanggal HANYA
@@ -183,6 +212,54 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
             f"&query={query}&query_place_id={place_id}&hl=id"
         )
 
+    @staticmethod
+    def _name_search_url(location: Location) -> str | None:
+        """Google Maps search URL without Place ID as a recovery path."""
+        query = (location.branch_name or location.hospital_name or "").strip()
+        if not query:
+            return None
+        return (
+            "https://www.google.com/maps/search/?api=1"
+            f"&query={quote_plus(query)}&hl=id"
+        )
+
+    @classmethod
+    def _resolve_url_with_source(cls, location: Location) -> tuple[str, str]:
+        """Resolve a usable URL and retain its provenance for recovery."""
+        candidates = [
+            ("google_reviews_url", (location.google_reviews_url or "").strip()),
+            ("google_maps_url", (location.google_maps_url or "").strip()),
+            ("external_place_id", cls._place_id_url(location) or ""),
+        ]
+        rejected = []
+        for source, url in candidates:
+            if not url:
+                continue
+            try:
+                cls._validate_url(url)
+                if rejected:
+                    logger.warning(
+                        "URL dari %s tidak sah (%s); memakai %s sebagai gantinya",
+                        ", ".join(rejected),
+                        location.branch_name,
+                        source,
+                    )
+                return url, source
+            except ReviewSourceError:
+                rejected.append(source)
+
+        if rejected:
+            raise ReviewSourceError(
+                "URL ulasan Google tidak sah pada "
+                + ", ".join(rejected)
+                + ". Perbaiki kolom itu, atau isi external_place_id agar URL "
+                "bisa dibentuk otomatis. Tautan pendek maps.app.goo.gl tidak "
+                "didukung - pakai tautan lengkap google.com/maps."
+            )
+        raise ReviewSourceError(
+            "Lokasi ini belum punya URL ulasan Google maupun external_place_id."
+        )
+
     @classmethod
     def _resolve_url(cls, location: Location) -> str:
         """Kandidat pertama yang SAH, bukan kandidat pertama yang terisi.
@@ -197,41 +274,19 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
         crawl tiga kali berturut-turut karena tautan pendek, sementara cabang
         lain yang kolomnya kosong sama sekali justru berhasil lewat Place ID.
         """
-        kandidat = [
-            ("google_reviews_url", (location.google_reviews_url or "").strip()),
-            ("google_maps_url", (location.google_maps_url or "").strip()),
-            ("external_place_id", cls._place_id_url(location) or ""),
-        ]
+        return cls._resolve_url_with_source(location)[0]
 
-        ditolak = []
+    def _open_review_panel(self, driver, url: str) -> list[WebElement]:
+        driver.get(url)
+        self._accept_consent_if_present(driver)
+        return self._wait_for_review_cards_or_open_panel(driver)
 
-        for asal, url in kandidat:
-            if not url:
-                continue
-            try:
-                cls._validate_url(url)
-                if ditolak:
-                    logger.warning(
-                        "URL dari %s tidak sah (%s); memakai %s sebagai gantinya",
-                        ", ".join(ditolak),
-                        location.branch_name,
-                        asal,
-                    )
-                return url
-            except ReviewSourceError:
-                ditolak.append(asal)
-
-        if ditolak:
-            raise ReviewSourceError(
-                "URL ulasan Google tidak sah pada "
-                + ", ".join(ditolak)
-                + ". Perbaiki kolom itu, atau isi external_place_id agar URL "
-                "bisa dibentuk otomatis. Tautan pendek maps.app.goo.gl tidak "
-                "didukung — pakai tautan lengkap google.com/maps."
-            )
-
-        raise ReviewSourceError(
-            "Lokasi ini belum punya URL ulasan Google maupun external_place_id."
+    @staticmethod
+    def _can_try_name_search_fallback(error: ReviewSourceError) -> bool:
+        message = str(error)
+        return (
+            "Review container was not found" in message
+            or "No reviews were loaded" in message
         )
 
     @staticmethod
@@ -311,6 +366,7 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
         scraped_at: datetime,
         on_progress=None,
         keep_check=None,
+        scan_limit: int | None = None,
         time_limit_seconds: int = 0,
     ):
         reviews: list[dict] = []
@@ -329,6 +385,8 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
         # perilakunya persis seperti sebelumnya.
         kept = 0
         habis_jendela = False
+        max_scan = max(target, int(scan_limit or target))
+        scan_limit_tercapai = False
 
         # Batas waktu. Rentang tanggal ke periode lampau menuntut menelusuri
         # ratusan ulasan yang lebih baru lebih dulu, dan tanpa batas satu job
@@ -342,6 +400,7 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
 
         while (
             kept < target
+            and len(reviews) < max_scan
             and scroll_attempts < self.settings.selenium_max_scroll_attempts
             and no_new_attempts < self.max_no_new_scroll_attempts
         ):
@@ -364,7 +423,9 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
                     logger.debug('on_progress gagal', exc_info=True)
             cards = self._find_review_cards(driver)
             for card in cards:
-                if kept >= target or habis_jendela:
+                if kept >= target or habis_jendela or len(reviews) >= max_scan:
+                    if len(reviews) >= max_scan and kept < target:
+                        scan_limit_tercapai = True
                     break
                 if batas_waktu is not None and time.monotonic() >= batas_waktu:
                     kehabisan_waktu = True
@@ -416,13 +477,16 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
 
                         if putusan == "keep":
                             kept += 1
+                        if len(reviews) >= max_scan and kept < target:
+                            scan_limit_tercapai = True
+                            break
                 except StaleElementReferenceException:
                     seen_card_ids.discard(card_id)
                 except Exception as exc:
                     failed_card_ids.add(card_id)
                     logger.warning("Failed to extract one review card: %s", exc)
 
-            if kept >= target or habis_jendela or kehabisan_waktu:
+            if kept >= target or habis_jendela or kehabisan_waktu or scan_limit_tercapai:
                 break
             if len(reviews) == count_before:
                 no_new_attempts += 1
@@ -449,6 +513,8 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
 
         if kehabisan_waktu:
             stopped_reason = "time_limit"
+        elif scan_limit_tercapai or (len(reviews) >= max_scan and kept < target):
+            stopped_reason = "scan_limit_reached"
         elif habis_jendela:
             stopped_reason = "out_of_range"
         elif kept < target:

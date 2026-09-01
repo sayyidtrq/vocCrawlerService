@@ -5,7 +5,7 @@ from app.integrations.review_source_client import ReviewSourceClient
 
 
 class MockReviewClient(ReviewSourceClient):
-    def fetch_reviews(self, location: Location, limit: int = 50) -> list[dict]:
+    def fetch_reviews(self, location: Location, limit: int = 50, **kwargs) -> list[dict]:
         place_id = location.external_place_id
         samples = [
             (
@@ -83,4 +83,3 @@ class MockReviewClient(ReviewSourceClient):
                 }
             )
         return reviews[: max(0, limit)]
-

@@ -98,6 +98,9 @@ class Settings:
     prompt_version: str
     page_size: int
     show_raw_payload: bool
+    gemini_mode: str = "real"
+    gemini_api_key: str | None = None
+    gemini_model: str = "gemini-2.5-flash"
     # Default is for tests that build Settings directly; get_settings() still
     # refuses to boot outside local without a real INTEGRATION_CURSOR_SECRET.
     integration_cursor_secret: str = LOCAL_CURSOR_SECRET_FALLBACK
@@ -215,6 +218,9 @@ def get_settings() -> Settings:
             "GOOGLE_PLACES_LANGUAGE_CODE", "id"
         ).strip(),
         google_places_region_code=os.getenv("GOOGLE_PLACES_REGION_CODE", "ID").strip(),
+        gemini_mode=os.getenv("GEMINI_MODE", "real").strip().lower(),
+        gemini_api_key=os.getenv("GEMINI_API_KEY") or None,
+        gemini_model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip(),
         local_llm_base_url=os.getenv(
             "LOCAL_LLM_BASE_URL", "http://192.168.1.115:11434/v1/"
         ).strip(),

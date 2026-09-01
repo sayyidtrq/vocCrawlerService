@@ -61,18 +61,25 @@ class FakeSeleniumClient:
         location,
         limit=50,
         on_progress=None,
-        date_from=None,
-        date_to=None,
+        keep_check=None,
+        sort_by="newest",
+        scan_limit=None,
+        time_limit_seconds=0,
     ):
         self.last_metadata = {
             "target_review_count": limit,
+            "max_reviews_to_collect": limit,
+            "scan_limit": scan_limit or limit,
             "loaded_review_cards": 2,
+            "reviews_scanned": 2,
+            "matched_review_cards": 0 if keep_check is not None else 2,
             "scraped_review_cards": 2,
             "failed_review_cards": 0,
             "scroll_attempts": 3,
             "headless": True,
             "url": location.google_reviews_url,
             "stopped_reason": "no_new_review_cards",
+            "sort_applied": True,
         }
         scraped_at = datetime.now().astimezone().isoformat()
         if on_progress is not None:
@@ -121,11 +128,15 @@ class SortUnavailableSeleniumClient:
         location,
         limit=50,
         on_progress=None,
-        date_from=None,
-        date_to=None,
+        keep_check=None,
+        sort_by="newest",
+        scan_limit=None,
+        time_limit_seconds=0,
     ):
         self.last_metadata = {
             "target_review_count": limit,
+            "max_reviews_to_collect": limit,
+            "scan_limit": scan_limit or limit,
             "loaded_review_cards": 4,
             "reviews_scanned": 0,
             "scraped_review_cards": 0,
@@ -221,6 +232,28 @@ def test_selenium_driver_uses_container_browser_and_safe_flags(
     assert "--disable-dev-shm-usage" in captured["options"].arguments
     assert captured["service"].path == "/usr/bin/chromedriver"
 
+
+def test_place_id_resolution_keeps_source_and_has_name_search_fallback(tmp_path):
+    session_factory = make_session_factory()
+    _, location = seed_location(session_factory)
+    client = SeleniumGoogleMapsReviewClient(make_settings(tmp_path))
+
+    url, source = client._resolve_url_with_source(location)
+
+    assert source == "google_reviews_url"
+    assert url == location.google_reviews_url
+
+    location.google_reviews_url = None
+    url, source = client._resolve_url_with_source(location)
+
+    assert source == "external_place_id"
+    assert "query_place_id=place-bekasi" in url
+    assert (
+        client._name_search_url(location)
+        == "https://www.google.com/maps/search/?api=1&query=Hermina+Bekasi&hl=id"
+    )
+
+
 def test_selenium_hash_uses_scraping_identity_fields():
     review = {
         "source": "selenium_google_maps",
@@ -284,7 +317,11 @@ def test_date_range_stops_honestly_when_sort_is_unavailable(tmp_path):
     assert result["total_fetched"] == 0
     assert result["metadata"]["stopped_reason"] == "sort_unavailable"
     assert result["metadata"]["reviews_scanned"] == 0
-    assert result["error_message"] == "Date-range crawling requires newest sorting."
+    assert result["error_message"] is None
+    assert result["metadata"]["range_warning"] == (
+        "Urutan terbaru gagal dipasang, sehingga hasil rentang tanggal "
+        "tidak dijamin lengkap."
+    )
 
 
 def test_date_range_with_only_out_of_range_reviews_is_partial(tmp_path):
@@ -304,7 +341,7 @@ def test_date_range_with_only_out_of_range_reviews_is_partial(tmp_path):
         date_from=datetime.now().astimezone() - timedelta(days=1),
     )
 
-    assert result["status"] == "partial_success"
+    assert result["status"] == "success"
     assert result["total_fetched"] == 2
     assert result["total_inserted"] == 0
     assert result["total_skipped_out_of_range"] == 2
