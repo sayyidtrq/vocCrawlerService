@@ -82,6 +82,9 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
                 url = fallback_url
                 url_strategy = "branch_name_fallback"
                 cards = self._open_review_panel(driver, url)
+            rating_snapshot = self._extract_place_rating_snapshot(
+                driver, snapshot_at=started_at
+            )
             container = self._find_scroll_container(driver, cards[0])
             sort_applied = self._apply_sort(driver, sort_by)
             time.sleep(1)
@@ -146,6 +149,7 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
                 "sort_applied": sort_applied,
                 "time_limit_seconds": time_limit_seconds,
                 "reviews_scanned": total_seen,
+                **rating_snapshot,
             }
             return reviews
         except ReviewSourceError:
@@ -831,6 +835,90 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
             return " ".join(element.text.split())
         except WebDriverException:
             return ""
+
+    def _extract_place_rating_snapshot(
+        self, driver, snapshot_at: datetime
+    ) -> dict:
+        """Ambil rating agregat Google dari header Maps.
+
+        Snapshot ini berbeda dari rating tiap review. OneBox memakai angka
+        agregat Google untuk trend KPI, jadi nilainya harus diambil dari
+        halaman tempat, bukan dihitung dari review yang kebetulan berhasil
+        masuk dalam satu job.
+        """
+
+        text_parts: list[str] = []
+        for selector in selectors.PLACE_RATING_SNAPSHOT_SELECTORS:
+            try:
+                elements = driver.find_elements(By.CSS_SELECTOR, selector)
+            except WebDriverException:
+                continue
+            for element in elements:
+                try:
+                    if not element.is_displayed():
+                        continue
+                    text_parts.extend(
+                        [
+                            element.text or "",
+                            element.get_attribute("aria-label") or "",
+                        ]
+                    )
+                except WebDriverException:
+                    continue
+        try:
+            text_parts.append(driver.find_element(By.TAG_NAME, "body").text)
+        except WebDriverException:
+            pass
+
+        source_text = " ".join(part for part in text_parts if part)
+        place_rating = self._parse_place_rating(source_text)
+        place_review_count = self._parse_place_review_count(source_text)
+        snapshot = {
+            "source": "google_maps",
+            "place_rating": place_rating,
+            "place_review_count": place_review_count,
+            "snapshot_at": snapshot_at.isoformat(),
+        }
+        return {
+            "place_rating": place_rating,
+            "place_review_count": place_review_count,
+            "rating_snapshot_at": snapshot["snapshot_at"],
+            "rating_snapshot": snapshot,
+        }
+
+    @staticmethod
+    def _parse_place_rating(value: str) -> float | None:
+        text = str(value or "").replace("\xa0", " ")
+        match = re.search(r"(?<!\d)([1-5][.,]\d)(?!\d)", text)
+        if not match:
+            return None
+        try:
+            rating = float(match.group(1).replace(",", "."))
+        except ValueError:
+            return None
+        return rating if 1 <= rating <= 5 else None
+
+    @staticmethod
+    def _parse_place_review_count(value: str) -> int | None:
+        text = str(value or "").lower().replace("\xa0", " ")
+        match = re.search(
+            r"(\d[\d.,]*)\s*(rb|ribu|k|m|jt|juta)?\s*(?:reviews?|ulasan)",
+            text,
+            flags=re.IGNORECASE,
+        )
+        if not match:
+            return None
+        number_text, suffix = match.groups()
+        suffix = suffix or ""
+        if suffix:
+            try:
+                number = float(number_text.replace(",", "."))
+            except ValueError:
+                return None
+            multiplier = 1_000 if suffix in {"rb", "ribu", "k"} else 1_000_000
+            return int(number * multiplier)
+        digits = re.sub(r"\D", "", number_text)
+        return int(digits) if digits else None
 
     @staticmethod
     def _parse_reviewer_total_reviews(value: str) -> int | None:
