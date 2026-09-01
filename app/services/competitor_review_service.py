@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import inspect as sa_inspect, select
+from sqlalchemy import and_, inspect as sa_inspect, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -48,9 +48,7 @@ class CompetitorReviewService:
             payload["review_text"] = ""
         review = CompetitorReview(**payload)
         with self.session_factory() as session:
-            statement = select(CompetitorReview.id).where(
-                CompetitorReview.review_hash == review.review_hash
-            )
+            statement = self._dedupe_statement(review)
             existing = session.scalar(statement)
             if existing is not None:
                 return None, True
@@ -67,3 +65,17 @@ class CompetitorReviewService:
                 if existing is not None:
                     return None, True
                 raise
+
+    @staticmethod
+    def _dedupe_statement(review: CompetitorReview):
+        predicates = [CompetitorReview.review_hash == review.review_hash]
+        external_review_id = (review.external_review_id or "").strip()
+        if external_review_id:
+            predicates.append(
+                and_(
+                    CompetitorReview.competitor_id == review.competitor_id,
+                    CompetitorReview.source == review.source,
+                    CompetitorReview.external_review_id == external_review_id,
+                )
+            )
+        return select(CompetitorReview.id).where(or_(*predicates))

@@ -1,31 +1,48 @@
 from hashlib import sha256
 
 
+def _hash_value(value) -> str:
+    return " ".join(str(value or "").split())
+
+
+def _sha256_parts(parts: list[object]) -> str:
+    return sha256(
+        "|".join(_hash_value(part) for part in parts).encode("utf-8")
+    ).hexdigest()
+
+
 def generate_review_hash(review: dict) -> str:
-    hash_input = "|".join(
+    return _sha256_parts(
         [
-            str(review.get("source") or ""),
-            str(review.get("external_place_id") or ""),
-            str(review.get("external_review_id") or ""),
-            str(review.get("reviewer_name") or ""),
-            str(review.get("rating") or ""),
-            str(review.get("review_text") or ""),
-            str(review.get("review_time") or ""),
+            review.get("source"),
+            review.get("external_place_id"),
+            review.get("external_review_id"),
+            review.get("reviewer_name"),
+            review.get("rating"),
+            review.get("review_text"),
+            review.get("review_time"),
         ]
     )
-    return sha256(hash_input.encode("utf-8")).hexdigest()
 
 
 def generate_selenium_review_hash(review: dict) -> str:
-    hash_input = "|".join(
+    external_review_id = _hash_value(review.get("external_review_id"))
+    if external_review_id:
+        return _sha256_parts(
+            [
+                review.get("source"),
+                review.get("location_id"),
+                external_review_id,
+            ]
+        )
+    return _sha256_parts(
         [
-            str(review.get("source") or ""),
-            str(review.get("location_id") or ""),
-            str(review.get("reviewer_name") or ""),
-            str(review.get("rating") or ""),
-            str(review.get("review_text") or ""),
-            str(review.get("review_relative_time") or ""),
-            str(review.get("reviewer_profile_url") or ""),
+            review.get("source"),
+            review.get("location_id"),
+            review.get("reviewer_profile_url"),
+            review.get("reviewer_name"),
+            review.get("rating"),
+            review.get("review_text"),
+            review.get("review_time"),
         ]
     )
-    return sha256(hash_input.encode("utf-8")).hexdigest()

@@ -983,6 +983,7 @@ class CrawlJobService:
             review_counts["inserted"] += int(result.get("total_inserted") or 0)
             review_counts["duplicate"] += int(result.get("total_duplicate") or 0)
             review_counts["failed"] += int(result.get("total_failed") or 0)
+        stop_reason, stop_reasons = CrawlJobService._batch_stop_reasons(jobs)
         limits = {
             "max_reviews_to_collect": review_counts["target"],
             "scan_limit": sum(
@@ -1000,6 +1001,8 @@ class CrawlJobService:
             "created_at": batch.created_at,
             "started_at": batch.started_at,
             "finished_at": batch.finished_at,
+            "stop_reason": stop_reason,
+            "stop_reasons": stop_reasons,
             # Jobs sudah dimuat di atas, jadi ini tidak menambah query.
             # Disertakan juga saat include_jobs False: daftar batch tanpa
             # penyebut cabang memaksa OneBox memanggil detail tiap batch.
@@ -1064,6 +1067,20 @@ class CrawlJobService:
                 for job in jobs
             ]
         return data
+
+    @staticmethod
+    def _batch_stop_reasons(jobs) -> tuple[str | None, dict[str, int]]:
+        counts: dict[str, int] = {}
+        for job in jobs:
+            reason = CrawlJobService._public_stop_reason(job.result_json or {})
+            if not reason:
+                continue
+            counts[reason] = counts.get(reason, 0) + 1
+        if not counts:
+            return None, {}
+        if len(counts) == 1:
+            return next(iter(counts)), counts
+        return "mixed", counts
 
     @staticmethod
     def _rating_snapshot(result: dict) -> dict | None:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -38,9 +38,7 @@ class ReviewService:
             data["company_id"] = self.company_id
         review = Review(**data)
         with self.session_factory() as session:
-            statement = select(Review.id).where(Review.review_hash == review.review_hash)
-            if self.company_id is not None:
-                statement = statement.where(Review.company_id == self.company_id)
+            statement = self._dedupe_statement(review)
             existing = session.scalar(statement)
             if existing is not None:
                 return None, True
@@ -55,6 +53,24 @@ class ReviewService:
                 if existing is not None:
                     return None, True
                 raise
+
+    def _dedupe_statement(self, review: Review):
+        predicates = [Review.review_hash == review.review_hash]
+        external_review_id = (review.external_review_id or "").strip()
+        if external_review_id:
+            identity = [
+                Review.source == review.source,
+                Review.external_review_id == external_review_id,
+            ]
+            if review.external_place_id:
+                identity.append(Review.external_place_id == review.external_place_id)
+            else:
+                identity.append(Review.location_id == review.location_id)
+            predicates.append(and_(*identity))
+        statement = select(Review.id).where(or_(*predicates))
+        if self.company_id is not None:
+            statement = statement.where(Review.company_id == self.company_id)
+        return statement
 
     def get_review(self, review_id: int) -> dict | None:
         with self.session_factory() as session:
