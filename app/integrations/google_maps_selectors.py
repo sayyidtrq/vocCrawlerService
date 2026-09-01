@@ -91,3 +91,11 @@ SORT_BUTTON_SELECTORS = [
     "button[aria-label*='Sort reviews' i]",
     "button[aria-label*='Urutkan ulasan' i]",
 ]
+
+PLACE_RATING_SNAPSHOT_SELECTORS = [
+    "div.F7nice",
+    "div.fontDisplayLarge",
+    "button[jsaction*='pane.reviewChart.moreReviews']",
+    "button[aria-label*='reviews' i]",
+    "button[aria-label*='ulasan' i]",
+]

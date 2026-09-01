@@ -80,6 +80,15 @@ class FakeSeleniumClient:
             "url": location.google_reviews_url,
             "stopped_reason": "no_new_review_cards",
             "sort_applied": True,
+            "place_rating": 4.3,
+            "place_review_count": 9422,
+            "rating_snapshot_at": "2026-09-01T06:00:00+00:00",
+            "rating_snapshot": {
+                "source": "google_maps",
+                "place_rating": 4.3,
+                "place_review_count": 9422,
+                "snapshot_at": "2026-09-01T06:00:00+00:00",
+            },
         }
         scraped_at = datetime.now().astimezone().isoformat()
         if on_progress is not None:
@@ -197,6 +206,18 @@ def test_rating_and_count_parsers():
     assert parse_compact_count("37 ulasan") == 37
 
 
+def test_google_place_rating_snapshot_parsers(tmp_path):
+    client = SeleniumGoogleMapsReviewClient(make_settings(tmp_path))
+
+    assert client._parse_place_rating("4.3 9,422 reviews") == 4.3
+    assert client._parse_place_rating("Rating 4,8 dari 5") == 4.8
+    assert client._parse_place_rating("5 4 3 2 1") is None
+    assert client._parse_place_review_count("4.3 9,422 reviews") == 9422
+    assert client._parse_place_review_count("4,7 9.422 ulasan") == 9422
+    assert client._parse_place_review_count("4,7 9,4 rb ulasan") == 9400
+    assert client._parse_place_review_count("4.8 1.2k reviews") == 1200
+
+
 def test_selenium_driver_uses_container_browser_and_safe_flags(
     monkeypatch, tmp_path
 ):
@@ -293,6 +314,12 @@ def test_selenium_fetch_stores_metadata_and_deduplicates(tmp_path):
         )
         assert latest_log.source == "selenium_google_maps"
         assert latest_log.metadata_json["scroll_attempts"] == 3
+        assert latest_log.metadata_json["rating_snapshot"] == {
+            "source": "google_maps",
+            "place_rating": 4.3,
+            "place_review_count": 9422,
+            "snapshot_at": "2026-09-01T06:00:00+00:00",
+        }
 
 
 def test_date_range_stops_honestly_when_sort_is_unavailable(tmp_path):

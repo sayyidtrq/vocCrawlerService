@@ -1046,6 +1046,9 @@ class CrawlJobService:
                     "stop_reason": CrawlJobService._public_stop_reason(
                         job.result_json or {}
                     ),
+                    "rating_snapshot": CrawlJobService._rating_snapshot(
+                        job.result_json or {}
+                    ),
                     "status": job.status,
                     "attempts": job.attempts,
                     "max_attempts": job.max_attempts,
@@ -1061,6 +1064,28 @@ class CrawlJobService:
                 for job in jobs
             ]
         return data
+
+    @staticmethod
+    def _rating_snapshot(result: dict) -> dict | None:
+        metadata = result.get("metadata") or {}
+        snapshot = metadata.get("rating_snapshot")
+        if isinstance(snapshot, dict):
+            return snapshot
+        rating = metadata.get("place_rating") or result.get("place_rating")
+        review_count = metadata.get("place_review_count") or result.get(
+            "place_review_count"
+        )
+        snapshot_at = metadata.get("rating_snapshot_at") or result.get(
+            "rating_snapshot_at"
+        )
+        if rating is None and review_count is None and snapshot_at is None:
+            return None
+        return {
+            "source": "google_maps",
+            "place_rating": rating,
+            "place_review_count": review_count,
+            "snapshot_at": snapshot_at,
+        }
 
     @staticmethod
     def _public_stop_reason(result: dict) -> str | None:

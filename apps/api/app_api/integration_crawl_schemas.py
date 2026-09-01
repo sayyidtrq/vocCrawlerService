@@ -116,6 +116,7 @@ class CrawlJobResponse(BaseModel):
     scan_limit: int | None = None
     crawl_mode: str | None = None
     stop_reason: str | None = None
+    rating_snapshot: dict[str, Any] | None = None
     job_id: int
     # Kosong untuk job kompetitor. Tanpa ini serialisasi batch yang memuat
     # kompetitor akan gagal validasi dan berbalik menjadi 500.

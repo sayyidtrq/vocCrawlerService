@@ -278,7 +278,19 @@ def test_worker_claims_and_completes_job(session_factory):
                 "status": "success",
                 "location_id": location_id,
                 "target_review_count": target,
-                "metadata": {"reviews_scanned": 2, "matched_review_cards": 2},
+                "metadata": {
+                    "reviews_scanned": 2,
+                    "matched_review_cards": 2,
+                    "place_rating": 4.3,
+                    "place_review_count": 9422,
+                    "rating_snapshot_at": "2026-09-01T06:00:00+00:00",
+                    "rating_snapshot": {
+                        "source": "google_maps",
+                        "place_rating": 4.3,
+                        "place_review_count": 9422,
+                        "snapshot_at": "2026-09-01T06:00:00+00:00",
+                    },
+                },
                 "total_fetched": 2,
                 "total_inserted": 2,
                 "total_duplicate": 0,
@@ -311,6 +323,12 @@ def test_worker_claims_and_completes_job(session_factory):
     assert completed["jobs"][0]["status"] == "succeeded"
     assert completed["jobs"][0]["onebox_location_id"] == 101
     assert completed["jobs"][0]["result"]["total_inserted"] == 2
+    assert completed["jobs"][0]["rating_snapshot"] == {
+        "source": "google_maps",
+        "place_rating": 4.3,
+        "place_review_count": 9422,
+        "snapshot_at": "2026-09-01T06:00:00+00:00",
+    }
     assert completed["review_counts"] == {
         "target": 2,
         "scanned": 2,
