@@ -23,7 +23,7 @@ class GooglePlacesClient(ReviewSourceClient):
         self.settings = settings
         self.http_session = http_session or requests.Session()
 
-    def fetch_reviews(self, location: Location, limit: int = 50) -> list[dict]:
+    def fetch_reviews(self, location: Location, limit: int = 50, **kwargs) -> list[dict]:
         if not self.settings.google_maps_api_key:
             raise ReviewSourceError(
                 "Review source API key is missing. Please check your .env configuration."

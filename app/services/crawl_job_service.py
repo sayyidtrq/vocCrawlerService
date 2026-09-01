@@ -60,6 +60,11 @@ class ClaimedCrawlJob:
     attempts: int
     max_attempts: int
     competitor_id: int | None = None
+    sort_by: str = "newest"
+    crawl_mode: str = "regular_delta"
+    max_reviews_to_collect: int | None = None
+    scan_limit: int | None = None
+    dry_run: bool = False
 
 
 class CrawlJobService:
@@ -86,6 +91,7 @@ class CrawlJobService:
         target_review_counts: dict[int, int] | None = None,
         target_date_ranges: dict | None = None,
         target_sorts: dict | None = None,
+        target_crawl_options: dict | None = None,
         competitor_targets: dict | None = None,
     ) -> str:
         payload: dict = {
@@ -118,6 +124,15 @@ class CrawlJobService:
             payload["target_sorts"] = {
                 str(k): v for k, v in sorted(target_sorts.items())
             }
+        if target_crawl_options:
+            payload["target_crawl_options"] = {
+                str(k): {
+                    option_key: _iso(option_value)
+                    for option_key, option_value in sorted(options.items())
+                    if option_value is not None
+                }
+                for k, options in sorted(target_crawl_options.items())
+            }
         if target_date_ranges:
             # Rentang ikut sidik jari: idempotency key yang sama dengan rentang
             # berbeda adalah permintaan berbeda, bukan pengulangan.
@@ -147,6 +162,7 @@ class CrawlJobService:
         target_review_counts: dict[int, int] | None = None,
         target_date_ranges: dict | None = None,
         target_sorts: dict | None = None,
+        target_crawl_options: dict | None = None,
         competitor_targets: list[dict] | None = None,
     ) -> tuple[dict, bool]:
         key = idempotency_key.strip()
@@ -178,9 +194,10 @@ class CrawlJobService:
             )
         target_date_ranges = target_date_ranges or {}
         target_sorts = target_sorts or {}
+        target_crawl_options = target_crawl_options or {}
         fingerprint = self.request_fingerprint(
             slot, target_ids, target_review_counts, target_date_ranges,
-            target_sorts, competitor_specs,
+            target_sorts, target_crawl_options, competitor_specs,
         )
 
         with self.session_factory() as session:
@@ -280,6 +297,17 @@ class CrawlJobService:
                         "or outside this tenant.",
                     )
 
+            active_batch = self._find_active_batch_for_single_target(
+                session=session,
+                company_id=company_id,
+                locations=locations,
+                competitors=competitors,
+                target_date_ranges=target_date_ranges,
+                competitor_specs=competitor_specs,
+            )
+            if active_batch is not None:
+                return self._serialize_batch(session, active_batch), False
+
             batch = CrawlBatch(
                 public_id=str(uuid4()),
                 company_id=company_id,
@@ -293,6 +321,22 @@ class CrawlJobService:
             session.add(batch)
             session.flush()
             for location in locations:
+                options = dict(
+                    target_crawl_options.get(location.onebox_location_id) or {}
+                )
+                target_count = target_review_counts.get(
+                    location.onebox_location_id,
+                    location.target_review_count,
+                )
+                date_from, date_to = target_date_ranges.get(
+                    location.onebox_location_id, (None, None)
+                )
+                crawl_mode = self._normalize_crawl_mode(
+                    options.get("crawl_mode"), date_from, date_to
+                )
+                scan_limit = self._normalize_scan_limit(
+                    options.get("scan_limit"), target_count, crawl_mode
+                )
                 session.add(
                     CrawlJob(
                         batch_id=batch.id,
@@ -301,24 +345,40 @@ class CrawlJobService:
                         onebox_location_id=location.onebox_location_id,
                         status="queued",
                         source_snapshot=location.source,
-                        date_from=target_date_ranges.get(
-                            location.onebox_location_id, (None, None)
-                        )[0],
-                        date_to=target_date_ranges.get(
-                            location.onebox_location_id, (None, None)
-                        )[1],
+                        date_from=date_from,
+                        date_to=date_to,
                         sort_by=target_sorts.get(
                             location.onebox_location_id, "newest"
                         ),
-                        target_review_count=target_review_counts.get(
-                            location.onebox_location_id,
-                            location.target_review_count,
+                        target_review_count=target_count,
+                        result_json=self._initial_job_result(
+                            crawl_mode=crawl_mode,
+                            max_reviews_to_collect=target_count,
+                            scan_limit=scan_limit,
+                            dry_run=bool(options.get("dry_run", False)),
+                            date_from=date_from,
+                            date_to=date_to,
+                            sort_by=target_sorts.get(
+                                location.onebox_location_id, "newest"
+                            ),
                         ),
                         max_attempts=self.settings.crawl_worker_max_attempts,
                     )
                 )
             for competitor in competitors:
                 spec = competitor_specs[competitor.external_place_id]
+                target_count = (
+                    spec.get("target_review_count")
+                    or competitor.target_review_count
+                )
+                date_from = spec.get("date_from")
+                date_to = spec.get("date_to")
+                crawl_mode = self._normalize_crawl_mode(
+                    spec.get("crawl_mode"), date_from, date_to
+                )
+                scan_limit = self._normalize_scan_limit(
+                    spec.get("scan_limit"), target_count, crawl_mode
+                )
                 session.add(
                     CrawlJob(
                         batch_id=batch.id,
@@ -328,12 +388,18 @@ class CrawlJobService:
                         competitor_id=competitor.id,
                         status="queued",
                         source_snapshot=competitor.source,
-                        date_from=spec.get("date_from"),
-                        date_to=spec.get("date_to"),
+                        date_from=date_from,
+                        date_to=date_to,
                         sort_by=spec.get("sort_by") or "newest",
-                        target_review_count=(
-                            spec.get("target_review_count")
-                            or competitor.target_review_count
+                        target_review_count=target_count,
+                        result_json=self._initial_job_result(
+                            crawl_mode=crawl_mode,
+                            max_reviews_to_collect=target_count,
+                            scan_limit=scan_limit,
+                            dry_run=bool(spec.get("dry_run", False)),
+                            date_from=date_from,
+                            date_to=date_to,
+                            sort_by=spec.get("sort_by") or "newest",
                         ),
                         max_attempts=self.settings.crawl_worker_max_attempts,
                     )
@@ -361,6 +427,109 @@ class CrawlJobService:
                 },
             )
             return self._serialize_batch(session, batch), True
+
+    @staticmethod
+    def _normalize_crawl_mode(
+        crawl_mode: str | None,
+        date_from: datetime | None,
+        date_to: datetime | None,
+    ) -> str:
+        if crawl_mode in {"initial_backfill", "regular_delta", "custom_range"}:
+            return crawl_mode
+        if date_from is not None or date_to is not None:
+            return "custom_range"
+        return "regular_delta"
+
+    @staticmethod
+    def _normalize_scan_limit(
+        scan_limit: object,
+        max_reviews_to_collect: int,
+        crawl_mode: str,
+    ) -> int:
+        default_multiplier = 5 if crawl_mode == "custom_range" else 1
+        if crawl_mode == "initial_backfill":
+            default_multiplier = 10
+        default_limit = max(max_reviews_to_collect, max_reviews_to_collect * default_multiplier)
+        try:
+            value = int(scan_limit) if scan_limit is not None else default_limit
+        except (TypeError, ValueError):
+            value = default_limit
+        return max(max_reviews_to_collect, min(value, 5000))
+
+    @staticmethod
+    def _initial_job_result(
+        *,
+        crawl_mode: str,
+        max_reviews_to_collect: int,
+        scan_limit: int,
+        dry_run: bool,
+        date_from: datetime | None,
+        date_to: datetime | None,
+        sort_by: str,
+    ) -> dict:
+        return {
+            "request": {
+                "crawl_mode": crawl_mode,
+                "max_reviews_to_collect": max_reviews_to_collect,
+                "scan_limit": scan_limit,
+                "dry_run": dry_run,
+                "date_from": _iso(date_from),
+                "date_to": _iso(date_to),
+                "sort_by": sort_by or "newest",
+            }
+        }
+
+    @staticmethod
+    def _datetime_filter(column, value: datetime | None):
+        return column.is_(None) if value is None else column == value
+
+    def _find_active_batch_for_single_target(
+        self,
+        *,
+        session: Session,
+        company_id: int,
+        locations: list[Location],
+        competitors: list[Competitor],
+        target_date_ranges: dict,
+        competitor_specs: dict,
+    ) -> CrawlBatch | None:
+        if len(locations) + len(competitors) != 1:
+            return None
+        active_statuses = {"queued", "running", "retry_wait"}
+        conditions = [
+            CrawlJob.company_id == company_id,
+            CrawlJob.status.in_(active_statuses),
+        ]
+        if locations:
+            location = locations[0]
+            date_from, date_to = target_date_ranges.get(
+                location.onebox_location_id, (None, None)
+            )
+            conditions.extend(
+                [
+                    CrawlJob.location_id == location.id,
+                    CrawlJob.competitor_id.is_(None),
+                    self._datetime_filter(CrawlJob.date_from, date_from),
+                    self._datetime_filter(CrawlJob.date_to, date_to),
+                ]
+            )
+        else:
+            competitor = competitors[0]
+            spec = competitor_specs[competitor.external_place_id]
+            conditions.extend(
+                [
+                    CrawlJob.competitor_id == competitor.id,
+                    CrawlJob.location_id.is_(None),
+                    self._datetime_filter(CrawlJob.date_from, spec.get("date_from")),
+                    self._datetime_filter(CrawlJob.date_to, spec.get("date_to")),
+                ]
+            )
+        active_job = session.scalar(
+            select(CrawlJob).where(*conditions).order_by(CrawlJob.id.desc()).limit(1)
+        )
+        if active_job is None:
+            return None
+        return session.get(CrawlBatch, active_job.batch_id)
 
     def _report_progress(
         self, job_id: int, fetched: int, scanned: int = 0
@@ -498,6 +667,7 @@ class CrawlJobService:
             if batch is not None:
                 batch.status = "running"
                 batch.started_at = batch.started_at or now
+            request_options = dict((job.result_json or {}).get("request") or {})
             session.commit()
             return ClaimedCrawlJob(
                 id=job.id,
@@ -509,6 +679,14 @@ class CrawlJobService:
                 target_review_count=job.target_review_count,
                 date_from=job.date_from,
                 date_to=job.date_to,
+                sort_by=job.sort_by or request_options.get("sort_by") or "newest",
+                crawl_mode=request_options.get("crawl_mode") or "regular_delta",
+                max_reviews_to_collect=(
+                    request_options.get("max_reviews_to_collect")
+                    or job.target_review_count
+                ),
+                scan_limit=request_options.get("scan_limit"),
+                dry_run=bool(request_options.get("dry_run", False)),
                 attempts=job.attempts,
                 max_attempts=job.max_attempts,
             )
@@ -545,10 +723,11 @@ class CrawlJobService:
             fetch_service = self.fetch_service_factory(claimed.company_id)
             result = fetch_service.fetch_location(
                 claimed.location_id,
-                target=claimed.target_review_count,
+                target=claimed.max_reviews_to_collect or claimed.target_review_count,
                 date_from=claimed.date_from,
                 date_to=claimed.date_to,
-                sort_by=getattr(claimed, "sort_by", None) or "newest",
+                sort_by=claimed.sort_by or "newest",
+                scan_limit=claimed.scan_limit,
                 # Batas waktu per job. Tanpa ini satu permintaan rentang jauh
                 # ke belakang bisa menahan worker sampai batas gulir habis,
                 # sementara cabang lain mengantre.
@@ -608,10 +787,11 @@ class CrawlJobService:
         fetch_service = self.fetch_service_factory(claimed.company_id)
         result = fetch_service.fetch_competitor(
             claimed.competitor_id,
-            target=claimed.target_review_count,
+            target=claimed.max_reviews_to_collect or claimed.target_review_count,
             date_from=claimed.date_from,
             date_to=claimed.date_to,
-            sort_by=getattr(claimed, "sort_by", None) or "newest",
+            sort_by=claimed.sort_by or "newest",
+            scan_limit=claimed.scan_limit,
             time_limit_seconds=600,
             on_progress=lambda n, total, seen=0: self._report_progress(
                 claimed.id, n, seen
@@ -671,8 +851,25 @@ class CrawlJobService:
             job = session.get(CrawlJob, claimed.id)
             if job is None:
                 raise RuntimeError("Claimed crawl job disappeared.")
+            previous_request = dict((job.result_json or {}).get("request") or {})
             job.status = status
-            job.result_json = result
+            enriched_result = dict(result or {})
+            if previous_request:
+                enriched_result["request"] = previous_request
+                metadata = dict(enriched_result.get("metadata") or {})
+                metadata.setdefault("crawl_mode", previous_request.get("crawl_mode"))
+                metadata.setdefault(
+                    "max_reviews_to_collect",
+                    previous_request.get("max_reviews_to_collect"),
+                )
+                metadata.setdefault("scan_limit", previous_request.get("scan_limit"))
+                enriched_result["metadata"] = metadata
+            metadata = dict(enriched_result.get("metadata") or {})
+            public_stop_reason = self._public_stop_reason(enriched_result)
+            if public_stop_reason:
+                metadata["stop_reason"] = public_stop_reason
+                enriched_result["metadata"] = metadata
+            job.result_json = enriched_result
             job.last_error_code = error_code
             job.last_error = (error_message or "")[:2000] or None
             job.available_at = available_at or job.available_at
@@ -741,15 +938,11 @@ class CrawlJobService:
             "fetched": 0,
             "matched": 0,
             "out_of_range": 0,
+            "out_of_range_newer": 0,
+            "out_of_range_older": 0,
             "inserted": 0,
             "duplicate": 0,
             "failed": 0,
-            # Dibuang karena di luar rentang tanggal yang diminta. Tanpa angka
-            # ini layar hanya bisa menampilkan "terbaca 20, baru 0, duplikat 0"
-            # tanpa alasan, dan itu terbaca sebagai kerusakan.
-            "out_of_range": 0,
-            # Ulasan yang ditelusuri, termasuk yang dilewati saringan tanggal.
-            "scanned": 0,
         }
         for job in jobs:
             counts[job.status] = counts.get(job.status, 0) + 1
@@ -764,33 +957,39 @@ class CrawlJobService:
             metadata = result.get("metadata") or {}
             fetched_count = int(result.get("total_fetched") or 0)
             out_of_range_count = int(result.get("total_skipped_out_of_range") or 0)
-            review_counts["scanned"] += int(
-                metadata.get("reviews_scanned")
-                or metadata.get("loaded_review_cards")
-                or fetched_count
-                or result.get("progress_fetched")
-                or 0
-            )
+            scanned_count = metadata.get("reviews_scanned")
+            if scanned_count is None:
+                scanned_count = (
+                    result.get("reviews_scanned")
+                    or result.get("progress_scanned")
+                    or metadata.get("loaded_review_cards")
+                    or fetched_count
+                    or result.get("progress_fetched")
+                    or 0
+                )
+            review_counts["scanned"] += int(scanned_count)
             review_counts["matched"] += int(
                 metadata.get("matched_review_cards")
                 if metadata.get("matched_review_cards") is not None
                 else max(0, fetched_count - out_of_range_count)
             )
             review_counts["out_of_range"] += out_of_range_count
+            review_counts["out_of_range_newer"] += int(
+                metadata.get("out_of_range_newer") or 0
+            )
+            review_counts["out_of_range_older"] += int(
+                metadata.get("out_of_range_older") or 0
+            )
             review_counts["inserted"] += int(result.get("total_inserted") or 0)
             review_counts["duplicate"] += int(result.get("total_duplicate") or 0)
             review_counts["failed"] += int(result.get("total_failed") or 0)
-            review_counts["out_of_range"] += int(
-                result.get("total_skipped_out_of_range") or 0
-            )
-            # Selagi berjalan, jumlah yang ditelusuri hanya ada di progress_*.
-            # Sesudah selesai, total_fetched yang berlaku.
-            review_counts["scanned"] += int(
-                result.get("reviews_scanned")
-                or result.get("progress_scanned")
-                or result.get("total_fetched")
-                or 0
-            )
+        limits = {
+            "max_reviews_to_collect": review_counts["target"],
+            "scan_limit": sum(
+                int(((job.result_json or {}).get("request") or {}).get("scan_limit") or 0)
+                for job in jobs
+            ),
+        }
         data = {
             "batch_id": batch.public_id,
             "status": batch.status,
@@ -817,6 +1016,8 @@ class CrawlJobService:
             "competitors": [
                 job.competitor_id for job in jobs if job.competitor_id is not None
             ],
+            "reused_existing_job": False,
+            "limits": limits,
         }
         if include_jobs:
             data["jobs"] = [
@@ -830,6 +1031,21 @@ class CrawlJobService:
                         else "location"
                     ),
                     "target_review_count": job.target_review_count,
+                    "max_reviews_to_collect": (
+                        ((job.result_json or {}).get("request") or {}).get(
+                            "max_reviews_to_collect"
+                        )
+                        or job.target_review_count
+                    ),
+                    "scan_limit": ((job.result_json or {}).get("request") or {}).get(
+                        "scan_limit"
+                    ),
+                    "crawl_mode": ((job.result_json or {}).get("request") or {}).get(
+                        "crawl_mode"
+                    ),
+                    "stop_reason": CrawlJobService._public_stop_reason(
+                        job.result_json or {}
+                    ),
                     "status": job.status,
                     "attempts": job.attempts,
                     "max_attempts": job.max_attempts,
@@ -845,3 +1061,14 @@ class CrawlJobService:
                 for job in jobs
             ]
         return data
+
+    @staticmethod
+    def _public_stop_reason(result: dict) -> str | None:
+        metadata = result.get("metadata") or {}
+        reason = metadata.get("stop_reason") or metadata.get("stopped_reason")
+        mapping = {
+            "out_of_range": "older_than_window",
+            "time_limit": "timeout",
+            "no_new_review_cards": "no_more_reviews",
+        }
+        return mapping.get(reason, reason)
