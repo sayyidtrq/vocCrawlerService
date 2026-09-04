@@ -13,8 +13,6 @@ from app.services.integration_review_service import IntegrationRequestError
 from apps.api.app_api.errors import register_exception_handlers
 from apps.api.app_api.routers import (
     analysis,
-    auth,
-    competitors,
     dashboard,
     exports,
     fetch_jobs,
@@ -24,7 +22,6 @@ from apps.api.app_api.routers import (
     integration_competitor_reviews,
     integration_crawl_jobs,
     integration_reviews,
-    locations,
     pipeline,
     places,
     reviews,
@@ -111,11 +108,8 @@ def create_app() -> FastAPI:
     register_exception_handlers(app)
     register_integration_exception_handlers(app)
     app.include_router(health.router, prefix="/api")
-    app.include_router(auth.router, prefix="/api")
     app.include_router(places.router, prefix="/api")
-    app.include_router(competitors.router, prefix="/api")
     app.include_router(settings.router, prefix="/api")
-    app.include_router(locations.router, prefix="/api")
     app.include_router(reviews.router, prefix="/api")
     app.include_router(dashboard.router, prefix="/api")
     app.include_router(fetch_jobs.router, prefix="/api")

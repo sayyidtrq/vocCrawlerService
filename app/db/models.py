@@ -47,9 +47,6 @@ class Company(Base):
         nullable=False,
     )
 
-    users: Mapped[list["User"]] = relationship(
-        back_populates="company", cascade="all, delete-orphan"
-    )
     locations: Mapped[list["Location"]] = relationship(
         back_populates="company", cascade="all, delete-orphan"
     )
@@ -65,34 +62,6 @@ class Company(Base):
     crawl_batches: Mapped[list["CrawlBatch"]] = relationship(
         back_populates="company", cascade="all, delete-orphan"
     )
-
-
-class User(Base):
-    __tablename__ = "users"
-    __table_args__ = (
-        Index("idx_users_company_id", "company_id"),
-        Index("idx_users_email", "email", unique=True),
-    )
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    company_id: Mapped[int] = mapped_column(
-        ForeignKey("companies.id", ondelete="CASCADE"), nullable=False
-    )
-    email: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
-    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
-    full_name: Mapped[str | None] = mapped_column(String(255))
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        server_default=func.now(),
-        onupdate=func.now(),
-        nullable=False,
-    )
-
-    company: Mapped[Company] = relationship(back_populates="users")
 
 
 class ApiClient(Base):

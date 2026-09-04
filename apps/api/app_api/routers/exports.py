@@ -4,11 +4,10 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends
 
-from app.db.models import User
 from app.services.export_service import ExportService
-from apps.api.app_api.dependencies import get_current_user
 from apps.api.app_api.schemas import ExportResponse
 from apps.api.app_api.serializers import to_jsonable
+from apps.api.app_api.service_auth import ServicePrincipal, require_service_principal
 
 
 router = APIRouter(prefix="/exports", tags=["exports"])
@@ -35,8 +34,8 @@ def _export_response(path: Path) -> dict:
     summary="Export semua review ke CSV",
     description=_EXPORT_NOTE,
 )
-def export_all_reviews_csv(current_user: User = Depends(get_current_user)) -> dict:
-    return _export_response(ExportService(company_id=current_user.company_id).export_all_reviews_csv())
+def export_all_reviews_csv(principal: ServicePrincipal = Depends(require_service_principal)) -> dict:
+    return _export_response(ExportService(company_id=principal.company_id).export_all_reviews_csv())
 
 
 @router.post(
@@ -45,8 +44,8 @@ def export_all_reviews_csv(current_user: User = Depends(get_current_user)) -> di
     summary="Export review 1 lokasi ke CSV",
     description=_EXPORT_NOTE,
 )
-def export_location_reviews_csv(location_id: int, current_user: User = Depends(get_current_user)) -> dict:
-    return _export_response(ExportService(company_id=current_user.company_id).export_location_reviews_csv(location_id))
+def export_location_reviews_csv(location_id: int, principal: ServicePrincipal = Depends(require_service_principal)) -> dict:
+    return _export_response(ExportService(company_id=principal.company_id).export_location_reviews_csv(location_id))
 
 
 @router.post(
@@ -55,8 +54,8 @@ def export_location_reviews_csv(location_id: int, current_user: User = Depends(g
     summary="Export ringkasan analisis ke CSV",
     description=_EXPORT_NOTE,
 )
-def export_analysis_summary_csv(current_user: User = Depends(get_current_user)) -> dict:
-    return _export_response(ExportService(company_id=current_user.company_id).export_analysis_summary_csv())
+def export_analysis_summary_csv(principal: ServicePrincipal = Depends(require_service_principal)) -> dict:
+    return _export_response(ExportService(company_id=principal.company_id).export_analysis_summary_csv())
 
 
 @router.post(
@@ -65,5 +64,5 @@ def export_analysis_summary_csv(current_user: User = Depends(get_current_user)) 
     summary="Export review mentah ke JSON",
     description=_EXPORT_NOTE,
 )
-def export_raw_reviews_json(current_user: User = Depends(get_current_user)) -> dict:
-    return _export_response(ExportService(company_id=current_user.company_id).export_raw_reviews_json())
+def export_raw_reviews_json(principal: ServicePrincipal = Depends(require_service_principal)) -> dict:
+    return _export_response(ExportService(company_id=principal.company_id).export_raw_reviews_json())
