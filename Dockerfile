@@ -22,13 +22,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt /app/requirements.txt
 COPY apps/api/requirements.txt /app/apps/api/requirements.txt
 
-# The deploy host's link to PyPI drops mid-download (BrokenPipeError), so retry
-# the whole install a few times on top of pip's own per-file --retries.
-# --prefer-binary avoids sdist builds, cutting the number of fragile transfers.
-RUN pip install --upgrade pip \
-    && (pip install --prefer-binary -r /app/apps/api/requirements.txt \
-        || pip install --prefer-binary -r /app/apps/api/requirements.txt \
-        || pip install --prefer-binary -r /app/apps/api/requirements.txt)
+# Networks that build this image drop mid-download (BrokenPipeError), so retry
+# the whole install on top of pip's own per-file --retries. --prefer-binary
+# avoids sdist builds, cutting the number of fragile transfers. The base
+# image's pip installs every pinned wheel here, so it is not upgraded (that
+# was itself a failing download).
+RUN pip install --prefer-binary -r /app/apps/api/requirements.txt \
+    || pip install --prefer-binary -r /app/apps/api/requirements.txt \
+    || pip install --prefer-binary -r /app/apps/api/requirements.txt
 
 COPY app /app/app
 COPY apps /app/apps
