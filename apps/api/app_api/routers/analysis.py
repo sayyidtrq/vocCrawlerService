@@ -6,13 +6,12 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from app.config import get_settings
-from app.db.models import User
 from app.integrations.local_llm_client import LocalLLMClient
 from app.services.analysis_service import AnalysisService
 from app.services.entitlement_service import EntitlementError, EntitlementService
-from apps.api.app_api.dependencies import get_current_user
 from apps.api.app_api.schemas import AnalysisPendingResponse
 from apps.api.app_api.serializers import to_jsonable
+from apps.api.app_api.service_auth import ServicePrincipal, require_service_principal
 
 router = APIRouter(prefix="/analysis", tags=["analysis"])
 
@@ -41,8 +40,8 @@ def _require_ai_enabled(company_id: int) -> None:
     "/models",
     summary="Daftar model AI yang tersedia pada deployment Crawler ini",
 )
-def available_models(current_user: User = Depends(get_current_user)) -> dict:
-    _require_ai_enabled(current_user.company_id)
+def available_models(principal: ServicePrincipal = Depends(require_service_principal)) -> dict:
+    _require_ai_enabled(principal.company_id)
     settings = get_settings()
     try:
         models = LocalLLMClient(settings).list_models()
@@ -61,9 +60,9 @@ def available_models(current_user: User = Depends(get_current_user)) -> dict:
     description="Analisis semua review yang belum dianalisis (opsional difilter `location_id`/`rating`). Butuh `ai_enable_flag` aktif (else 403).",
     responses={403: {"description": "AI belum diaktifkan untuk company ini"}},
 )
-def analyze_pending(payload: AnalyzePendingRequest, current_user: User = Depends(get_current_user)) -> dict:
-    _require_ai_enabled(current_user.company_id)
-    result = AnalysisService(company_id=current_user.company_id).analyze_pending(
+def analyze_pending(payload: AnalyzePendingRequest, principal: ServicePrincipal = Depends(require_service_principal)) -> dict:
+    _require_ai_enabled(principal.company_id)
+    result = AnalysisService(company_id=principal.company_id).analyze_pending(
         location_id=payload.location_id, rating=payload.rating,
     )
     return to_jsonable(result)
@@ -78,9 +77,9 @@ def analyze_pending(payload: AnalyzePendingRequest, current_user: User = Depends
         403: {"description": "AI belum diaktifkan untuk company ini"},
     },
 )
-def rerun_location(location_id: int, current_user: User = Depends(get_current_user)) -> dict:
-    _require_ai_enabled(current_user.company_id)
-    return to_jsonable(AnalysisService(company_id=current_user.company_id).rerun_location(location_id))
+def rerun_location(location_id: int, principal: ServicePrincipal = Depends(require_service_principal)) -> dict:
+    _require_ai_enabled(principal.company_id)
+    return to_jsonable(AnalysisService(company_id=principal.company_id).rerun_location(location_id))
 
 
 @router.post(
@@ -92,9 +91,9 @@ def rerun_location(location_id: int, current_user: User = Depends(get_current_us
         403: {"description": "AI belum diaktifkan untuk company ini"},
     },
 )
-def rerun_review(review_id: int, current_user: User = Depends(get_current_user)) -> dict:
-    _require_ai_enabled(current_user.company_id)
-    result = AnalysisService(company_id=current_user.company_id).rerun_review(review_id)
+def rerun_review(review_id: int, principal: ServicePrincipal = Depends(require_service_principal)) -> dict:
+    _require_ai_enabled(principal.company_id)
+    result = AnalysisService(company_id=principal.company_id).rerun_review(review_id)
     if int(result.get("failed") or 0) > 0:
         raise HTTPException(
             status_code=502,
@@ -115,10 +114,10 @@ def rerun_review(review_id: int, current_user: User = Depends(get_current_user))
     ),
 )
 def rollback_analyses(
-    payload: RollbackAnalysesRequest, current_user: User = Depends(get_current_user),
+    payload: RollbackAnalysesRequest, principal: ServicePrincipal = Depends(require_service_principal),
 ) -> dict:
     try:
-        result = AnalysisService(company_id=current_user.company_id).rollback_analyses(
+        result = AnalysisService(company_id=principal.company_id).rollback_analyses(
             model_name=payload.model_name, since=payload.since,
         )
     except ValueError as exc:
@@ -132,6 +131,6 @@ def rollback_analyses(
     description="Sinyal kesehatan murah untuk monitoring/alerting — porsi failed yang melonjak menandakan AI bermasalah.",
 )
 def quality_summary(
-    hours: int = 24, current_user: User = Depends(get_current_user),
+    hours: int = 24, principal: ServicePrincipal = Depends(require_service_principal),
 ) -> dict:
-    return AnalysisService(company_id=current_user.company_id).quality_summary(hours=hours)
+    return AnalysisService(company_id=principal.company_id).quality_summary(hours=hours)

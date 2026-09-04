@@ -6,13 +6,12 @@ from pydantic import BaseModel, Field
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.config import get_settings
-from app.db.models import User
 from app.services.entitlement_service import EntitlementService
 from app.services.fetch_service import FetchService
 from app.services.selenium_fetch_service import SeleniumFetchService
 from app.utils.date_parser import resolve_date_range
-from apps.api.app_api.dependencies import get_current_user
 from apps.api.app_api.serializers import to_jsonable
+from apps.api.app_api.service_auth import ServicePrincipal, require_service_principal
 
 
 router = APIRouter(prefix="/fetch-jobs", tags=["fetch jobs"])
@@ -64,12 +63,12 @@ _FETCH_RESULT_EXAMPLE = {
     ),
     responses={200: {"content": {"application/json": {"example": _FETCH_RESULT_EXAMPLE}}}},
 )
-def run_fetch_job(payload: FetchJobRequest, current_user: User = Depends(get_current_user)) -> dict:
+def run_fetch_job(payload: FetchJobRequest, principal: ServicePrincipal = Depends(require_service_principal)) -> dict:
     source = (payload.source or get_settings().review_source_mode).lower()
     date_from, date_to = _resolve_range(payload)
 
     if payload.target_review_count is not None:
-        quota = EntitlementService(current_user.company_id).review_quota()
+        quota = EntitlementService(principal.company_id).review_quota()
         if quota > 0 and payload.target_review_count > quota:
             raise HTTPException(
                 status_code=400,
@@ -77,12 +76,12 @@ def run_fetch_job(payload: FetchJobRequest, current_user: User = Depends(get_cur
             )
 
     if payload.dry_run:
-        result = FetchService(company_id=current_user.company_id).dry_run_location(
+        result = FetchService(company_id=principal.company_id).dry_run_location(
             payload.location_id, date_from=date_from, date_to=date_to
         )
     elif source in {"selenium", "selenium_google_maps"}:
         try:
-            result = SeleniumFetchService(company_id=current_user.company_id).fetch_location(
+            result = SeleniumFetchService(company_id=principal.company_id).fetch_location(
                 payload.location_id,
                 target=payload.target_review_count,
                 date_from=date_from,
@@ -91,7 +90,7 @@ def run_fetch_job(payload: FetchJobRequest, current_user: User = Depends(get_cur
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
     else:
-        result = FetchService(company_id=current_user.company_id).fetch_location(
+        result = FetchService(company_id=principal.company_id).fetch_location(
             payload.location_id, date_from=date_from, date_to=date_to
         )
     return to_jsonable(result)
@@ -103,11 +102,11 @@ def run_fetch_job(payload: FetchJobRequest, current_user: User = Depends(get_cur
     description="Menjalankan crawling untuk seluruh lokasi aktif milik company. Mengembalikan ringkasan agregat beserta hasil per lokasi.",
     responses={200: {"content": {"application/json": {"example": {"status": "success", "total_locations": 12, "total_fetched": 2400, "results": [_FETCH_RESULT_EXAMPLE]}}}}},
 )
-def run_fetch_all_active(payload: FetchAllActiveRequest | None = None, current_user: User = Depends(get_current_user)) -> dict:
+def run_fetch_all_active(payload: FetchAllActiveRequest | None = None, principal: ServicePrincipal = Depends(require_service_principal)) -> dict:
     payload = payload or FetchAllActiveRequest()
     dry_run = bool(payload.dry_run)
     date_from, date_to = _resolve_range(payload)
-    service = FetchService(company_id=current_user.company_id)
+    service = FetchService(company_id=principal.company_id)
     if not dry_run:
         return to_jsonable(service.fetch_all_active_locations(date_from=date_from, date_to=date_to))
 

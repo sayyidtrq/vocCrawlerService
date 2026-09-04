@@ -19,14 +19,13 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.db.base import Base
-from app.db.models import Company, Location, Review, ReviewAnalysis, User
+from app.db.models import Company, Location, Review, ReviewAnalysis
 from app.services.analysis_service import (
     ANALYSIS_STATUSES,
     ALLOWED_CATEGORIES,
     ALLOWED_SENTIMENTS,
     ALLOWED_URGENCIES,
 )
-from apps.api.app_api.dependencies import get_current_user
 from apps.api.app_api.integration_schemas import (
     AnalysisStatus,
     IntegrationReviewListResponse,
@@ -34,11 +33,8 @@ from apps.api.app_api.integration_schemas import (
     Sentiment,
     Urgency,
 )
-from apps.api.app_api.routers.integration_reviews import (
-    ServicePrincipal,
-    get_integration_session_factory,
-    require_service_principal,
-)
+from apps.api.app_api.routers.integration_reviews import get_integration_session_factory
+from apps.api.app_api.service_auth import ServicePrincipal, require_service_principal
 from apps.api.main import create_app
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "voc_reviews_v1.json"
@@ -581,11 +577,14 @@ def test_existing_fe_reviews_route_is_untouched():
 def test_fe_validation_still_returns_422(seeded):
     """The 400 remap is scoped to /api/integration/; FE error behaviour must not move."""
     application = create_app()
-    # Stand in for the JWT so the request reaches parameter validation rather than
+    # Stand in for the service token so the request reaches parameter validation rather than
     # stopping at the 401. The bad `page` is rejected before the route body runs,
     # so no database access happens here.
-    application.dependency_overrides[get_current_user] = lambda: User(
-        id=1, company_id=seeded["company_id"], email="fe@test.local", is_active=True
+    application.dependency_overrides[require_service_principal] = lambda: ServicePrincipal(
+        client_id=1,
+        key_id="test",
+        company_id=seeded["company_id"],
+        scopes=frozenset(),
     )
     response = TestClient(application).get("/api/reviews", params={"page": "not-an-int"})
     assert response.status_code == 422

@@ -1,14 +1,12 @@
 from __future__ import annotations
 
 import httpx
-from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from app.config import get_settings
-from app.db.models import User
-from apps.api.app_api.dependencies import get_current_user
+from apps.api.app_api.service_auth import ServicePrincipal, require_service_principal
 
 router = APIRouter(prefix="/places", tags=["places"])
 
@@ -27,7 +25,7 @@ class PlaceResolveResponse(BaseModel):
 async def resolve_place_id(
     lat: float = Query(..., description="Latitude"),
     lng: float = Query(..., description="Longitude"),
-    current_user: User = Depends(get_current_user),
+    principal: ServicePrincipal = Depends(require_service_principal),
 ):
     settings = get_settings()
     if not settings.google_maps_api_key:

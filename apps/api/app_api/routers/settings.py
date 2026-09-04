@@ -3,10 +3,9 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 
 from app.config import get_settings
-from app.db.models import User
 from app.services.settings_service import SettingsService
-from apps.api.app_api.dependencies import get_current_user
 from apps.api.app_api.serializers import to_jsonable
+from apps.api.app_api.service_auth import ServicePrincipal, require_service_principal
 
 
 router = APIRouter(tags=["settings"])
@@ -18,7 +17,7 @@ router = APIRouter(tags=["settings"])
     description="Mengembalikan konfigurasi publik aplikasi dan status ketersediaan API key (nilai key selalu di-masking).",
     responses={200: {"content": {"application/json": {"example": {"app_env": "local", "app_name": "Review System", "review_source_mode": "selenium", "page_size": 20, "google_maps_api_key": "****", "google_maps_api_key_configured": True}}}}},
 )
-def get_public_settings(current_user: User = Depends(get_current_user)) -> dict:
+def get_public_settings(principal: ServicePrincipal = Depends(require_service_principal)) -> dict:
     settings = get_settings()
     service = SettingsService(settings)
     review_source_key = service.check_review_source_key()
@@ -65,5 +64,5 @@ def get_public_settings(current_user: User = Depends(get_current_user)) -> dict:
     description="Memeriksa apakah koneksi ke PostgreSQL berhasil.",
     responses={200: {"content": {"application/json": {"example": {"ok": True, "message": "Database connection successful."}}}}},
 )
-def check_database_connection(current_user: User = Depends(get_current_user)) -> dict:
+def check_database_connection(principal: ServicePrincipal = Depends(require_service_principal)) -> dict:
     return to_jsonable(SettingsService().check_database_connection())
