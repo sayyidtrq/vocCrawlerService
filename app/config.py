@@ -1,16 +1,17 @@
 from __future__ import annotations
 
-import os
-from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
+from typing import Annotated, Any
 
 from dotenv import load_dotenv
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env")
 
-# Only ever reachable when APP_ENV=local; get_settings refuses to start without a
+# Only ever reachable when APP_ENV=local; Settings refuses to validate without a
 # real INTEGRATION_CURSOR_SECRET anywhere else.
 LOCAL_CURSOR_SECRET_FALLBACK = "local-only-cursor-secret-never-deploy-this"
 LOCAL_JWT_SECRET_FALLBACK = "local-only-jwt-secret-never-deploy-this"
@@ -22,99 +23,135 @@ DEFAULT_CORS_ALLOWED_ORIGINS = (
     "http://127.0.0.1:3000",
     "https://localhost.onebox.co.id",
 )
+REVIEW_SOURCE_MODES = {
+    "mock",
+    "google_places",
+    "google_business_profile",
+    "third_party",
+    "selenium",
+}
+
+# Fields that go through the old _as_int/_as_bool/_as_float/_as_optional_int/
+# _as_list helpers, all of which treat a blank env value as absent (use the
+# default). Fields using plain os.getenv(name, default) with no such guard
+# (app_name, log_level, review_source_mode, etc.) are deliberately NOT in
+# this list - a blank value there stays blank, exactly like before.
+_BLANK_USES_DEFAULT_FIELDS = (
+    "export_dir",
+    "google_maps_api_key",
+    "gemini_api_key",
+    "onebox_base_url",
+    "onebox_service_email",
+    "onebox_service_password",
+    "fetch_limit_per_location",
+    "fetch_timeout_seconds",
+    "fetch_max_retry",
+    "selenium_headless",
+    "selenium_default_target_reviews",
+    "selenium_max_target_reviews",
+    "selenium_scroll_delay_seconds",
+    "selenium_max_scroll_attempts",
+    "selenium_wait_timeout_seconds",
+    "analysis_batch_size",
+    "page_size",
+    "show_raw_payload",
+    "onebox_site_id",
+    "onebox_company_id",
+    "onebox_worklist_path",
+    "onebox_timeout_seconds",
+    "onebox_max_retry",
+    "onebox_cache_stale_after_seconds",
+    "crawl_worker_lease_seconds",
+    "crawl_worker_max_attempts",
+    "crawl_worker_poll_seconds",
+    "crawl_worker_retry_base_seconds",
+    "analysis_llm_max_retries",
+    "analysis_llm_retry_backoff_seconds",
+    "analysis_circuit_breaker_threshold",
+    "analysis_llm_concurrency",
+)
+
+# Fields whose value floors at a fixed minimum (clamped, never rejected -
+# matches every max(N, _as_int(...)) call the old get_settings() made).
+_INT_FLOORS = {
+    "onebox_timeout_seconds": 1,
+    "onebox_max_retry": 0,
+    "onebox_cache_stale_after_seconds": 0,
+    "crawl_worker_lease_seconds": 60,
+    "crawl_worker_max_attempts": 1,
+    "crawl_worker_poll_seconds": 1,
+    "crawl_worker_retry_base_seconds": 1,
+    "analysis_llm_max_retries": 0,
+    "analysis_circuit_breaker_threshold": 0,
+}
 
 
-def _as_float(name: str, default: float) -> float:
-    """Baca setelan pecahan; jeda gulir kini boleh di bawah satu detik."""
-    raw = os.getenv(name)
-    if raw is None or str(raw).strip() == '':
-        return default
-    try:
-        return float(raw)
-    except (TypeError, ValueError):
-        return default
+class Settings(BaseModel):
+    """Plain, environment-blind value object - constructing Settings(...)
+    directly (as tests do) only ever uses what you pass plus the field
+    defaults below, exactly like the dataclass this replaced. It never
+    reads os.environ. Only _EnvSettings (used solely by get_settings())
+    does that."""
 
+    model_config = ConfigDict(
+        extra="ignore",
+        frozen=True,
+        validate_default=True,
+    )
 
-def _as_int(name: str, default: int) -> int:
-    value = os.getenv(name)
-    if value is None or not value.strip():
-        return default
-    try:
-        return int(value)
-    except ValueError as exc:
-        raise ValueError(f"{name} must be an integer.") from exc
-
-
-def _as_optional_int(name: str) -> int | None:
-    value = os.getenv(name)
-    if value is None or not value.strip():
-        return None
-    try:
-        return int(value)
-    except ValueError as exc:
-        raise ValueError(f"{name} must be an integer when set.") from exc
-
-
-def _as_bool(name: str, default: bool) -> bool:
-    value = os.getenv(name)
-    if value is None:
-        return default
-    return value.strip().lower() in {"1", "true", "yes", "y", "on"}
-
-
-def _as_list(name: str, default: list[str]) -> list[str]:
-    value = os.getenv(name)
-    if value is None or not value.strip():
-        return default
-    return [item.strip() for item in value.split(",") if item.strip()]
-
-
-@dataclass(frozen=True)
-class Settings:
-    app_env: str
-    app_name: str
-    log_level: str
-    export_dir: Path
+    app_env: str = "local"
+    app_name: str = "Review System"
+    log_level: str = "INFO"
+    export_dir: Path = Path("exports")
     database_url: str
-    cors_allowed_origins: tuple[str, ...]
-    review_source_mode: str
-    google_maps_api_key: str | None
-    google_places_language_code: str
-    google_places_region_code: str
-    local_llm_base_url: str
-    local_llm_api_key: str | None
-    local_llm_model: str
-    fetch_limit_per_location: int
-    fetch_timeout_seconds: int
-    fetch_max_retry: int
-    selenium_headless: bool
-    selenium_default_target_reviews: int
-    selenium_max_target_reviews: int
-    selenium_scroll_delay_seconds: float
-    selenium_max_scroll_attempts: int
-    selenium_wait_timeout_seconds: int
-    selenium_user_data_dir: Path | None
-    analysis_batch_size: int
-    prompt_version: str
-    page_size: int
-    show_raw_payload: bool
+    cors_allowed_origins: Annotated[tuple[str, ...], NoDecode] = (
+        DEFAULT_CORS_ALLOWED_ORIGINS
+    )
+    review_source_mode: str = "mock"
+    google_maps_api_key: str | None = None
+    google_places_language_code: str = "id"
+    google_places_region_code: str = "ID"
+    local_llm_base_url: str = "http://192.168.1.115:11434/v1/"
+    local_llm_api_key: str | None = "ollama"
+    local_llm_model: str = "qwen2.5:7b"
+    fetch_limit_per_location: int = 50
+    fetch_timeout_seconds: int = 30
+    fetch_max_retry: int = 3
+    selenium_headless: bool = False
+    selenium_default_target_reviews: int = 100
+    selenium_max_target_reviews: int = 300
+    selenium_scroll_delay_seconds: float = 1.0
+    selenium_max_scroll_attempts: int = 400
+    selenium_wait_timeout_seconds: int = 20
+    selenium_user_data_dir: Path | None = Path(".selenium-profile")
+    analysis_batch_size: int = 20
+    prompt_version: str = "v1"
+    page_size: int = 20
+    show_raw_payload: bool = False
     gemini_mode: str = "real"
     gemini_api_key: str | None = None
     gemini_model: str = "gemini-2.5-flash"
-    # Default is for tests that build Settings directly; get_settings() still
-    # refuses to boot outside local without a real INTEGRATION_CURSOR_SECRET.
     integration_cursor_secret: str = LOCAL_CURSOR_SECRET_FALLBACK
     jwt_secret_key: str = LOCAL_JWT_SECRET_FALLBACK
     service_token_pepper: str = LOCAL_SERVICE_TOKEN_PEPPER_FALLBACK
     onebox_base_url: str | None = None
-    onebox_service_email: str | None = None
-    onebox_service_password: str | None = None
+    # Env var abbreviates "service" to "svc" - the field name doesn't, so the
+    # default FIELD_NAME.upper() alias would miss it without this.
+    onebox_service_email: str | None = Field(
+        default=None, validation_alias="ONEBOX_SVC_EMAIL"
+    )
+    onebox_service_password: str | None = Field(
+        default=None, validation_alias="ONEBOX_SVC_PASSWORD"
+    )
     onebox_site_id: int | None = None
     onebox_company_id: int | None = None
     onebox_worklist_path: str = "/api/VocWorklist"
     onebox_timeout_seconds: int = 30
     onebox_max_retry: int = 3
-    onebox_cache_stale_after_seconds: int = 86400
+    # Env var carries a "WORKLIST_" segment the field name dropped.
+    onebox_cache_stale_after_seconds: int = Field(
+        default=86400, validation_alias="ONEBOX_WORKLIST_CACHE_STALE_AFTER_SECONDS"
+    )
     crawl_worker_lease_seconds: int = 900
     crawl_worker_max_attempts: int = 3
     crawl_worker_poll_seconds: int = 5
@@ -127,161 +164,192 @@ class Settings:
     # 0 = mati (perilaku lama).
     analysis_circuit_breaker_threshold: int = 5
     # Bounded parallelism for network-bound LLM calls. Database writes remain
-    # serialized by AnalysisService so append-only history/watermarks stay safe.
-    analysis_llm_concurrency: int = 1
+    # serialized by AnalysisService so append-only history/watermarks stay
+    # safe. This default (4, clamped to [1, 16]) is what get_settings() has
+    # always actually produced in production; the pre-pydantic dataclass
+    # field itself defaulted to 1, but that value was only ever reachable by
+    # constructing Settings() directly and skipping get_settings() entirely.
+    # Normalized to the one that's live, not silently kept split two ways.
+    analysis_llm_concurrency: int = 4
 
     def ensure_export_dir(self) -> Path:
         self.export_dir.mkdir(parents=True, exist_ok=True)
         return self.export_dir
 
 
-@lru_cache(maxsize=1)
-def get_settings() -> Settings:
-    review_mode = os.getenv("REVIEW_SOURCE_MODE", "mock").strip().lower()
-    if review_mode not in {
-        "mock",
-        "google_places",
-        "google_business_profile",
-        "third_party",
-        "selenium",
-    }:
-        raise ValueError(
-            "REVIEW_SOURCE_MODE must be mock, google_places, "
-            "google_business_profile, third_party, or selenium."
-        )
+class _EnvSettings(Settings, BaseSettings):
+    """The only env/.env-reading entry point - inherits every field from
+    Settings unchanged and adds the environment source plus every
+    normalization/clamping/validation rule the old get_settings() applied.
 
-    database_url = os.getenv("DATABASE_URL", "").strip()
-    if not database_url:
-        raise ValueError("DATABASE_URL is required in .env.")
+    All of that validation lives here, not on Settings, on purpose: the old
+    frozen dataclass ran zero validation on direct construction (no
+    __post_init__) - only get_settings() enforced blank-handling, clamps,
+    and the "real secrets outside local/test" rule. Settings(...) built
+    directly (as tests do throughout the suite) must keep behaving that way.
+    Used exclusively by get_settings(); nothing else should reference this
+    class directly."""
 
-    app_env = os.getenv("APP_ENV", "local").strip()
-    jwt_secret_key = os.getenv("JWT_SECRET_KEY", "").strip()
-    service_token_pepper = os.getenv("SERVICE_TOKEN_PEPPER", "").strip()
-    if app_env.lower() not in {"local", "test"}:
-        missing = [
-            name
-            for name, value in (
-                ("JWT_SECRET_KEY", jwt_secret_key),
-                ("SERVICE_TOKEN_PEPPER", service_token_pepper),
-            )
-            if not value or value.startswith("change-me")
-        ]
-        if missing:
-            raise ValueError(
-                ", ".join(missing)
-                + " must be set to a unique secret outside local/test."
-            )
-    jwt_secret_key = jwt_secret_key or LOCAL_JWT_SECRET_FALLBACK
-    service_token_pepper = service_token_pepper or LOCAL_SERVICE_TOKEN_PEPPER_FALLBACK
+    model_config = SettingsConfigDict(case_sensitive=False)
 
-    integration_cursor_secret = os.getenv("INTEGRATION_CURSOR_SECRET", "").strip()
-    if not integration_cursor_secret:
-        # This secret signs the pagination cursors. A shared or guessable value
-        # lets a caller forge a cursor for another tenant, so anywhere with real
-        # data must refuse to boot without its own.
-        if app_env.lower() != "local":
-            raise ValueError(
-                "INTEGRATION_CURSOR_SECRET is required when APP_ENV is not local. "
-                "Generate a unique value per environment."
-            )
-        integration_cursor_secret = LOCAL_CURSOR_SECRET_FALLBACK
+    @field_validator(*_BLANK_USES_DEFAULT_FIELDS, mode="before")
+    @classmethod
+    def _blank_uses_default(cls, value: Any, info) -> Any:
+        """A source value of "" (or whitespace) means unset, not "set to
+        blank" - matches every old _as_int/_as_bool/_as_float/_as_list/
+        _as_optional_int helper and every plain `os.getenv(x) or None`
+        field, all of which treated blank as absent."""
+        if isinstance(value, str) and not value.strip():
+            return cls.model_fields[info.field_name].default
+        return value
 
-    export_value = os.getenv("EXPORT_DIR", "exports").strip() or "exports"
-    export_dir = Path(export_value)
-    if not export_dir.is_absolute():
-        export_dir = BASE_DIR / export_dir
+    @field_validator("cors_allowed_origins", mode="before")
+    @classmethod
+    def _parse_cors_allowed_origins(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            if not value.strip():
+                return DEFAULT_CORS_ALLOWED_ORIGINS
+            items = [item.strip() for item in value.split(",") if item.strip()]
+            return tuple(items) if items else DEFAULT_CORS_ALLOWED_ORIGINS
+        return value
 
-    selenium_profile_value = os.getenv(
-        "SELENIUM_USER_DATA_DIR", ".selenium-profile"
-    ).strip()
-    selenium_user_data_dir = (
-        Path(selenium_profile_value) if selenium_profile_value else None
+    @field_validator("local_llm_api_key", mode="before")
+    @classmethod
+    def _blank_local_llm_api_key_is_none(cls, value: Any) -> Any:
+        # Absent -> default "ollama" (handled by the field default, this
+        # validator isn't even called). Explicitly blank -> None, matching
+        # the old os.getenv(..., "ollama") or None.
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @field_validator("selenium_user_data_dir", mode="before")
+    @classmethod
+    def _blank_selenium_profile_is_none(cls, value: Any) -> Any:
+        # Absent -> default ".selenium-profile". Explicitly blank -> None
+        # (profile dir disabled), matching Path(value) if value else None.
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @field_validator(
+        "app_name",
+        "google_places_language_code",
+        "google_places_region_code",
+        "local_llm_base_url",
+        "local_llm_model",
+        "prompt_version",
+        mode="after",
     )
-    if selenium_user_data_dir and not selenium_user_data_dir.is_absolute():
-        selenium_user_data_dir = BASE_DIR / selenium_user_data_dir
+    @classmethod
+    def _strip(cls, value: str) -> str:
+        return value.strip()
 
-    return Settings(
-        app_env=app_env,
-        app_name=os.getenv("APP_NAME", "Review System").strip(),
-        log_level=os.getenv("LOG_LEVEL", "INFO").strip().upper(),
-        export_dir=export_dir,
-        database_url=database_url,
-        cors_allowed_origins=tuple(
-            _as_list(
-                "CORS_ALLOWED_ORIGINS",
-                list(DEFAULT_CORS_ALLOWED_ORIGINS),
+    @field_validator("log_level", mode="after")
+    @classmethod
+    def _normalize_log_level(cls, value: str) -> str:
+        return value.strip().upper()
+
+    @field_validator("gemini_mode", mode="after")
+    @classmethod
+    def _normalize_gemini_mode(cls, value: str) -> str:
+        return value.strip().lower()
+
+    @field_validator("gemini_model", mode="after")
+    @classmethod
+    def _strip_gemini_model(cls, value: str) -> str:
+        return value.strip()
+
+    @field_validator("review_source_mode", mode="after")
+    @classmethod
+    def _validate_review_source_mode(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in REVIEW_SOURCE_MODES:
+            raise ValueError(
+                "REVIEW_SOURCE_MODE must be mock, google_places, "
+                "google_business_profile, third_party, or selenium."
             )
-        ),
-        review_source_mode=review_mode,
-        google_maps_api_key=os.getenv("GOOGLE_MAPS_API_KEY") or None,
-        google_places_language_code=os.getenv(
-            "GOOGLE_PLACES_LANGUAGE_CODE", "id"
-        ).strip(),
-        google_places_region_code=os.getenv("GOOGLE_PLACES_REGION_CODE", "ID").strip(),
-        gemini_mode=os.getenv("GEMINI_MODE", "real").strip().lower(),
-        gemini_api_key=os.getenv("GEMINI_API_KEY") or None,
-        gemini_model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip(),
-        local_llm_base_url=os.getenv(
-            "LOCAL_LLM_BASE_URL", "http://192.168.1.115:11434/v1/"
-        ).strip(),
-        local_llm_api_key=os.getenv("LOCAL_LLM_API_KEY", "ollama") or None,
-        local_llm_model=os.getenv("LOCAL_LLM_MODEL", "qwen2.5:7b").strip(),
-        fetch_limit_per_location=_as_int("FETCH_LIMIT_PER_LOCATION", 50),
-        fetch_timeout_seconds=_as_int("FETCH_TIMEOUT_SECONDS", 30),
-        fetch_max_retry=_as_int("FETCH_MAX_RETRY", 3),
-        selenium_headless=_as_bool("SELENIUM_HEADLESS", False),
-        selenium_default_target_reviews=_as_int("SELENIUM_DEFAULT_TARGET_REVIEWS", 100),
-        selenium_max_target_reviews=_as_int("SELENIUM_MAX_TARGET_REVIEWS", 300),
+        return normalized
+
+    @field_validator("export_dir", mode="after")
+    @classmethod
+    def _resolve_export_dir(cls, value: Path) -> Path:
+        return value if value.is_absolute() else BASE_DIR / value
+
+    @field_validator("selenium_user_data_dir", mode="after")
+    @classmethod
+    def _resolve_selenium_user_data_dir(cls, value: Path | None) -> Path | None:
+        if value is None:
+            return None
+        return value if value.is_absolute() else BASE_DIR / value
+
+    @field_validator("selenium_scroll_delay_seconds", mode="after")
+    @classmethod
+    def _floor_scroll_delay(cls, value: float) -> float:
         # Lantai 0.5 detik, bukan 2. Nol tidak diizinkan: kartu perlu waktu
         # dimuat setelah digulir, dan menggulir lebih cepat dari itu justru
         # menghasilkan lebih sedikit ulasan.
-        selenium_scroll_delay_seconds=max(
-            0.5, _as_float("SELENIUM_SCROLL_DELAY_SECONDS", 1.0)
-        ),
+        return max(0.5, value)
+
+    @field_validator("selenium_max_scroll_attempts", mode="after")
+    @classmethod
+    def _clamp_max_scroll_attempts(cls, value: int) -> int:
         # Plafon 1000, bukan 100. Rentang tanggal ke periode lampau harus
-        # menembus ratusan ulasan yang lebih baru sebelum sampai ke jendelanya;
-        # dengan plafon 100 crawl berhenti jauh sebelum itu. Batas waktu per
-        # job yang sekarang menjaga durasinya, bukan lagi jumlah gulir.
-        selenium_max_scroll_attempts=min(
-            1000, max(1, _as_int("SELENIUM_MAX_SCROLL_ATTEMPTS", 400))
-        ),
-        selenium_wait_timeout_seconds=_as_int("SELENIUM_WAIT_TIMEOUT_SECONDS", 20),
-        selenium_user_data_dir=selenium_user_data_dir,
-        analysis_batch_size=_as_int("ANALYSIS_BATCH_SIZE", 20),
-        analysis_llm_max_retries=max(0, _as_int("ANALYSIS_LLM_MAX_RETRIES", 2)),
-        analysis_llm_retry_backoff_seconds=max(
-            0.0, _as_float("ANALYSIS_LLM_RETRY_BACKOFF_SECONDS", 1.0)
-        ),
-        analysis_circuit_breaker_threshold=max(
-            0, _as_int("ANALYSIS_CIRCUIT_BREAKER_THRESHOLD", 5)
-        ),
-        analysis_llm_concurrency=min(
-            16, max(1, _as_int("ANALYSIS_LLM_CONCURRENCY", 4))
-        ),
-        prompt_version=os.getenv("PROMPT_VERSION", "v1").strip(),
-        page_size=_as_int("PAGE_SIZE", 20),
-        show_raw_payload=_as_bool("SHOW_RAW_PAYLOAD", False),
-        integration_cursor_secret=integration_cursor_secret,
-        jwt_secret_key=jwt_secret_key,
-        service_token_pepper=service_token_pepper,
-        onebox_base_url=os.getenv("ONEBOX_BASE_URL") or None,
-        onebox_service_email=os.getenv("ONEBOX_SVC_EMAIL") or None,
-        onebox_service_password=os.getenv("ONEBOX_SVC_PASSWORD") or None,
-        onebox_site_id=_as_optional_int("ONEBOX_SITE_ID"),
-        onebox_company_id=_as_optional_int("ONEBOX_COMPANY_ID"),
-        onebox_worklist_path=(
-            os.getenv("ONEBOX_WORKLIST_PATH", "/api/VocWorklist").strip()
-            or "/api/VocWorklist"
-        ),
-        onebox_timeout_seconds=max(1, _as_int("ONEBOX_TIMEOUT_SECONDS", 30)),
-        onebox_max_retry=max(0, _as_int("ONEBOX_MAX_RETRY", 3)),
-        onebox_cache_stale_after_seconds=max(
-            0, _as_int("ONEBOX_WORKLIST_CACHE_STALE_AFTER_SECONDS", 86400)
-        ),
-        crawl_worker_lease_seconds=max(60, _as_int("CRAWL_WORKER_LEASE_SECONDS", 900)),
-        crawl_worker_max_attempts=max(1, _as_int("CRAWL_WORKER_MAX_ATTEMPTS", 3)),
-        crawl_worker_poll_seconds=max(1, _as_int("CRAWL_WORKER_POLL_SECONDS", 5)),
-        crawl_worker_retry_base_seconds=max(
-            1, _as_int("CRAWL_WORKER_RETRY_BASE_SECONDS", 60)
-        ),
-    )
+        # menembus ratusan ulasan yang lebih baru sebelum sampai ke
+        # jendelanya; dengan plafon 100 crawl berhenti jauh sebelum itu.
+        return min(1000, max(1, value))
+
+    @field_validator("analysis_llm_retry_backoff_seconds", mode="after")
+    @classmethod
+    def _floor_backoff_seconds(cls, value: float) -> float:
+        return max(0.0, value)
+
+    @field_validator("analysis_llm_concurrency", mode="after")
+    @classmethod
+    def _clamp_llm_concurrency(cls, value: int) -> int:
+        return min(16, max(1, value))
+
+    @field_validator("onebox_worklist_path", mode="after")
+    @classmethod
+    def _normalize_worklist_path(cls, value: str) -> str:
+        return value.strip() or "/api/VocWorklist"
+
+    @field_validator(*_INT_FLOORS, mode="after")
+    @classmethod
+    def _floor_int(cls, value: int, info) -> int:
+        return max(_INT_FLOORS[info.field_name], value)
+
+    @model_validator(mode="after")
+    def _validate_secrets_outside_local(self) -> _EnvSettings:
+        if self.app_env.lower() not in {"local", "test"}:
+            missing = [
+                name
+                for name, value in (
+                    ("JWT_SECRET_KEY", self.jwt_secret_key),
+                    ("SERVICE_TOKEN_PEPPER", self.service_token_pepper),
+                )
+                if not value or value.startswith("change-me")
+            ]
+            if missing:
+                raise ValueError(
+                    ", ".join(missing)
+                    + " must be set to a unique secret outside local/test."
+                )
+        # This secret signs the pagination cursors. A shared or guessable
+        # value lets a caller forge a cursor for another tenant, so anywhere
+        # with real data must refuse to boot without its own. Only "local"
+        # is exempt here - "test" is not, unlike the jwt/pepper check above.
+        if (
+            self.integration_cursor_secret == LOCAL_CURSOR_SECRET_FALLBACK
+            and self.app_env.lower() != "local"
+        ):
+            raise ValueError(
+                "INTEGRATION_CURSOR_SECRET is required when APP_ENV is not "
+                "local. Generate a unique value per environment."
+            )
+        return self
+
+
+@lru_cache(maxsize=1)
+def get_settings() -> Settings:
+    return _EnvSettings()

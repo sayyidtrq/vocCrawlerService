@@ -1,6 +1,5 @@
 ﻿from __future__ import annotations
 
-from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -31,7 +30,9 @@ def session_factory():
 
 @pytest.fixture()
 def service(session_factory):
-    settings = replace(get_settings(), app_env="local", service_token_pepper="test-pepper")
+    settings = get_settings().model_copy(
+        update={"app_env": "local", "service_token_pepper": "test-pepper"}
+    )
     with session_factory() as session:
         session.add_all([Company(name="Tenant A"), Company(name="Tenant B")])
         session.commit()

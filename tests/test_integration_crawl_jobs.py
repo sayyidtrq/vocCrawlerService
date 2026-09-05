@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import replace
-
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
@@ -298,11 +296,12 @@ def test_worker_claims_and_completes_job(session_factory):
                 "total_skipped_out_of_range": 0,
             }
 
-    settings = replace(
-        get_settings(),
-        crawl_worker_max_attempts=3,
-        crawl_worker_lease_seconds=300,
-        crawl_worker_retry_base_seconds=1,
+    settings = get_settings().model_copy(
+        update={
+            "crawl_worker_max_attempts": 3,
+            "crawl_worker_lease_seconds": 300,
+            "crawl_worker_retry_base_seconds": 1,
+        }
     )
     queue = CrawlQueue(session_factory=session_factory, settings=settings)
     worker = CrawlWorker(

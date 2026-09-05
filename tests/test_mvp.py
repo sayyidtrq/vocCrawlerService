@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import threading
 import time
-from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -508,7 +507,9 @@ def test_analysis_retries_a_transient_llm_failure_then_succeeds(
     not the exact delay.
     """
     fetched_location(session_factory, settings, company_id)
-    fast_settings = replace(settings, analysis_llm_retry_backoff_seconds=0.0)
+    fast_settings = settings.model_copy(
+        update={"analysis_llm_retry_backoff_seconds": 0.0}
+    )
     client = FlakyClient(fail_times=1)
 
     result = AnalysisService(
@@ -533,7 +534,9 @@ def test_analysis_runs_llm_calls_with_bounded_concurrency(
     """Network calls overlap, while the service still persists serially."""
 
     fetched_location(session_factory, settings, company_id)
-    concurrent_settings = replace(settings, analysis_llm_concurrency=3)
+    concurrent_settings = settings.model_copy(
+        update={"analysis_llm_concurrency": 3}
+    )
     state = {"active": 0, "max_active": 0}
     lock = threading.Lock()
 
@@ -573,11 +576,12 @@ def test_analysis_gives_up_after_max_retries(session_factory, settings, company_
     retry exhaustion, not the run-level breaker (covered separately below).
     """
     fetched_location(session_factory, settings, company_id)
-    fast_settings = replace(
-        settings,
-        analysis_llm_max_retries=1,
-        analysis_llm_retry_backoff_seconds=0.0,
-        analysis_circuit_breaker_threshold=0,
+    fast_settings = settings.model_copy(
+        update={
+            "analysis_llm_max_retries": 1,
+            "analysis_llm_retry_backoff_seconds": 0.0,
+            "analysis_circuit_breaker_threshold": 0,
+        }
     )
 
     result = AnalysisService(
@@ -605,10 +609,11 @@ def test_analysis_circuit_breaker_stops_after_consecutive_failures(
     re-run picks them straight back up as pending.
     """
     fetched_location(session_factory, settings, company_id)
-    fast_settings = replace(
-        settings,
-        analysis_llm_max_retries=0,
-        analysis_circuit_breaker_threshold=3,
+    fast_settings = settings.model_copy(
+        update={
+            "analysis_llm_max_retries": 0,
+            "analysis_circuit_breaker_threshold": 3,
+        }
     )
 
     result = AnalysisService(
@@ -756,8 +761,11 @@ def test_quality_summary_reports_the_recent_status_distribution(
     an operator noticing manually first.
     """
     fetched_location(session_factory, settings, company_id)
-    fast_settings = replace(
-        settings, analysis_llm_max_retries=0, analysis_circuit_breaker_threshold=0,
+    fast_settings = settings.model_copy(
+        update={
+            "analysis_llm_max_retries": 0,
+            "analysis_circuit_breaker_threshold": 0,
+        }
     )
 
     class HalfFailingClient(MockGeminiClient):
