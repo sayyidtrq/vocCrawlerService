@@ -1,6 +1,14 @@
 # Voice of Customer (VoC) × OneBox — Project Status
 
-> Update: 2026-07-24 · Diverifikasi langsung ke kode hari ini (bukan sekadar salinan ADR lama).
+> ⚠️ **BASI per 2026-09 — jangan dijadikan sumber kebenaran.** Dokumen ini
+> bertanggal 2026-07-24, sebelum major refactor (R1–R11). Bagian "Belum/parsial"
+> dan "Blockers" sudah tidak akurat: FE Next.js + user-auth sudah dipensiun,
+> CRUD locations/competitors sudah di-drop, config sudah pindah ke
+> pydantic-settings, dsb. Sumber terbaru: riwayat git dan
+> `markdowns/04-implementation-plans/crawler-system/PLAN_MAJOR_REFACTOR.md`.
+> Segarkan dokumen ini sebelum dipakai untuk handoff.
+>
+> Update asli: 2026-07-24 · Diverifikasi langsung ke kode hari itu.
 > Otoritas keputusan: `markdowns/decisions/ADR-*`. Semua ADR **belum diratifikasi Pak Agung**.
 
 ---
