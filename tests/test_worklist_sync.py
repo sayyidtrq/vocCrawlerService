@@ -1,5 +1,4 @@
 import json
-from dataclasses import replace
 from pathlib import Path
 
 import httpx
@@ -84,13 +83,14 @@ class FakeWorklistClient:
 
 
 def onebox_settings(settings, company_id):
-    return replace(
-        settings,
-        onebox_base_url="http://onebox.test",
-        onebox_service_email="voc@test.invalid",
-        onebox_service_password="secret",
-        onebox_site_id=169,
-        onebox_company_id=company_id,
+    return settings.model_copy(
+        update={
+            "onebox_base_url": "http://onebox.test",
+            "onebox_service_email": "voc@test.invalid",
+            "onebox_service_password": "secret",
+            "onebox_site_id": 169,
+            "onebox_company_id": company_id,
+        }
     )
 
 
@@ -221,13 +221,14 @@ def test_worklist_outage_uses_last_successful_cache(session_factory, settings, c
 
 
 def test_worklist_requires_explicit_tenant(settings, session_factory):
-    cfg = replace(
-        settings,
-        onebox_base_url="http://onebox.test",
-        onebox_service_email="voc@test.invalid",
-        onebox_service_password="secret",
-        onebox_site_id=169,
-        onebox_company_id=None,
+    cfg = settings.model_copy(
+        update={
+            "onebox_base_url": "http://onebox.test",
+            "onebox_service_email": "voc@test.invalid",
+            "onebox_service_password": "secret",
+            "onebox_site_id": 169,
+            "onebox_company_id": None,
+        }
     )
     service = WorklistSyncService(
         session_factory=session_factory,
@@ -250,12 +251,13 @@ def test_onebox_client_logs_in_once_and_reuses_jwt(settings, monkeypatch):
             )
         return httpx.Response(200, json={"data": []})
 
-    cfg = replace(
-        settings,
-        onebox_base_url="http://onebox.test",
-        onebox_service_email="voc@test.invalid",
-        onebox_service_password="secret",
-        onebox_site_id=169,
+    cfg = settings.model_copy(
+        update={
+            "onebox_base_url": "http://onebox.test",
+            "onebox_service_email": "voc@test.invalid",
+            "onebox_service_password": "secret",
+            "onebox_site_id": 169,
+        }
     )
     client = OneBoxWorklistClient(
         cfg,

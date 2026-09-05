@@ -6,8 +6,9 @@
 #
 # Direct dependencies (what the app actually imports):
 #   SQLAlchemy alembic psycopg2-binary python-dotenv email-validator requests
-#   rich tabulate google-genai pydantic selenium beautifulsoup4 openai httpx
-#   pytest ruff  (+ fastapi uvicorn[standard] from apps/api/requirements.txt)
+#   rich tabulate google-genai pydantic pydantic-settings selenium
+#   beautifulsoup4 openai httpx pytest ruff
+#   (+ fastapi uvicorn[standard] from apps/api/requirements.txt)
 
 Mako==1.4.1
 MarkupSafe==3.0.3
@@ -50,6 +51,7 @@ pyasn1==0.6.4
 pyasn1_modules==0.4.2
 pycparser==3.0
 pydantic==2.13.5
+pydantic-settings==2.15.0
 pydantic_core==2.46.5
 pytest==8.4.2
 python-dotenv==1.2.3
