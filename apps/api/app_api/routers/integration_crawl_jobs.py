@@ -7,7 +7,7 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, Header, Query, Request, status
 
 from app.db.session import get_session_factory
-from app.services.crawl_job_service import CrawlJobService, CrawlQueueError
+from app.services.crawl_queue import CrawlQueue, CrawlQueueError
 from app.services.integration_review_service import IntegrationRequestError
 from apps.api.app_api.integration_crawl_schemas import (
     CrawlBatchCreateRequest,
@@ -90,7 +90,7 @@ def enqueue_crawl_jobs(
 ) -> dict:
     _require_scope(principal, "crawl:enqueue")
     request_id = _request_id(request, x_request_id)
-    service = CrawlJobService(session_factory=session_factory)
+    service = CrawlQueue(session_factory=session_factory)
     # Satu permintaan boleh memuat cabang dan kompetitor sekaligus. Keduanya
     # dipisah di sini supaya peta per-target di bawah tetap berkunci id cabang
     # dan tidak pernah bertabrakan dengan kompetitor yang tidak punya id itu.
@@ -176,7 +176,7 @@ def list_crawl_batches(
 ) -> dict:
     _require_scope(principal, "crawl:read")
     request_id = _request_id(request, x_request_id)
-    data = CrawlJobService(session_factory=session_factory).list_batches(
+    data = CrawlQueue(session_factory=session_factory).list_batches(
         company_id=principal.company_id, limit=limit
     )
     return {
@@ -205,7 +205,7 @@ def get_crawl_batch(
     _require_scope(principal, "crawl:read")
     request_id = _request_id(request, x_request_id)
     try:
-        batch = CrawlJobService(session_factory=session_factory).get_batch(
+        batch = CrawlQueue(session_factory=session_factory).get_batch(
             company_id=principal.company_id, public_id=batch_id
         )
     except CrawlQueueError as exc:

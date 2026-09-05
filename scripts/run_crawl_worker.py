@@ -7,7 +7,7 @@ import socket
 import time
 
 from app.config import get_settings
-from app.services.crawl_job_service import CrawlJobService
+from app.services.crawl_worker import CrawlWorker
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -27,7 +27,7 @@ def main() -> int:
     args = build_parser().parse_args()
     settings = get_settings()
     worker_id = args.worker_id or f"{socket.gethostname()}:{os.getpid()}"
-    service = CrawlJobService(settings=settings)
+    service = CrawlWorker(settings=settings)
     while True:
         result = service.execute_next(worker_id=worker_id)
         if result is not None:

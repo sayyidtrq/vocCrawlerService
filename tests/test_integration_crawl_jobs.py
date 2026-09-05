@@ -11,7 +11,8 @@ from sqlalchemy.pool import StaticPool
 from app.config import get_settings
 from app.db.base import Base
 from app.db.models import ApiClient, Company, CrawlBatch, CrawlJob, Location
-from app.services.crawl_job_service import CrawlJobService
+from app.services.crawl_queue import CrawlQueue
+from app.services.crawl_worker import CrawlWorker
 from apps.api.app_api.routers.integration_crawl_jobs import (
     get_crawl_queue_session_factory,
 )
@@ -303,12 +304,13 @@ def test_worker_claims_and_completes_job(session_factory):
         crawl_worker_lease_seconds=300,
         crawl_worker_retry_base_seconds=1,
     )
-    service = CrawlJobService(
+    queue = CrawlQueue(session_factory=session_factory, settings=settings)
+    worker = CrawlWorker(
         session_factory=session_factory,
         settings=settings,
         fetch_service_factory=lambda _company_id: FakeFetchService(),
     )
-    queued, created = service.enqueue(
+    queued, created = queue.enqueue(
         company_id=1,
         client_id=1,
         idempotency_key="169:2026-07-29:worker",
@@ -317,7 +319,7 @@ def test_worker_claims_and_completes_job(session_factory):
     )
     assert created is True
 
-    completed = service.execute_next(worker_id="test-worker")
+    completed = worker.execute_next(worker_id="test-worker")
     assert completed["batch_id"] == queued["batch_id"]
     assert completed["status"] == "completed"
     assert completed["jobs"][0]["status"] == "succeeded"
@@ -372,11 +374,12 @@ def test_worker_marks_partial_success_without_failed_retry(session_factory):
                 "total_failed": 0,
             }
 
-    service = CrawlJobService(
+    queue = CrawlQueue(session_factory=session_factory)
+    worker = CrawlWorker(
         session_factory=session_factory,
         fetch_service_factory=lambda _company_id: FakeFetchService(),
     )
-    queued, _ = service.enqueue(
+    queued, _ = queue.enqueue(
         company_id=1,
         client_id=1,
         idempotency_key="169:2026-07-29:partial",
@@ -384,7 +387,7 @@ def test_worker_marks_partial_success_without_failed_retry(session_factory):
         slot="morning",
     )
 
-    completed = service.execute_next(worker_id="test-worker")
+    completed = worker.execute_next(worker_id="test-worker")
 
     assert completed["batch_id"] == queued["batch_id"]
     assert completed["status"] == "completed"
@@ -395,7 +398,7 @@ def test_worker_marks_partial_success_without_failed_retry(session_factory):
     assert completed["jobs"][0]["result"]["metadata"]["stopped_reason"] == (
         "sort_unavailable"
     )
-    latest = service.list_batches(company_id=1, limit=1)[0]
+    latest = queue.list_batches(company_id=1, limit=1)[0]
     assert "jobs" not in latest
     assert latest["stop_reason"] == "sort_unavailable"
     assert latest["stop_reasons"] == {"sort_unavailable": 1}

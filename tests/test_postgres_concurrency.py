@@ -19,7 +19,7 @@ from app.db.models import (
     ReviewAnalysis,
 )
 from app.services.analysis_service import AnalysisService
-from app.services.crawl_job_service import CrawlJobService
+from app.services.crawl_worker import CrawlWorker
 
 pytestmark = pytest.mark.skipif(
     not os.environ.get("TEST_DATABASE_URL"),
@@ -93,7 +93,7 @@ def test_claim_next_never_double_claims_under_concurrent_workers(
             )
         session.commit()
 
-    service = CrawlJobService(session_factory=pg_session_factory)
+    service = CrawlWorker(session_factory=pg_session_factory)
 
     def claim_until_empty(worker_number):
         claimed = []
