@@ -15,6 +15,13 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.config import Settings, get_settings
 from app.db.models import Competitor, CrawlBatch, CrawlJob, Location
 from app.db.session import get_session_factory
+from app.services.crawl_result import (
+    CrawlRequestSnapshot,
+    matched_count,
+    rating_snapshot,
+    scanned_count,
+    stop_reason,
+)
 from app.services.selenium_fetch_service import SeleniumFetchService
 
 logger = logging.getLogger(__name__)
@@ -467,17 +474,16 @@ class CrawlJobService:
         date_to: datetime | None,
         sort_by: str,
     ) -> dict:
-        return {
-            "request": {
-                "crawl_mode": crawl_mode,
-                "max_reviews_to_collect": max_reviews_to_collect,
-                "scan_limit": scan_limit,
-                "dry_run": dry_run,
-                "date_from": _iso(date_from),
-                "date_to": _iso(date_to),
-                "sort_by": sort_by or "newest",
-            }
+        request: CrawlRequestSnapshot = {
+            "crawl_mode": crawl_mode,
+            "max_reviews_to_collect": max_reviews_to_collect,
+            "scan_limit": scan_limit,
+            "dry_run": dry_run,
+            "date_from": _iso(date_from),
+            "date_to": _iso(date_to),
+            "sort_by": sort_by or "newest",
         }
+        return {"request": request}
 
     @staticmethod
     def _datetime_filter(column, value: datetime | None):
@@ -865,7 +871,7 @@ class CrawlJobService:
                 metadata.setdefault("scan_limit", previous_request.get("scan_limit"))
                 enriched_result["metadata"] = metadata
             metadata = dict(enriched_result.get("metadata") or {})
-            public_stop_reason = self._public_stop_reason(enriched_result)
+            public_stop_reason = stop_reason(enriched_result)
             if public_stop_reason:
                 metadata["stop_reason"] = public_stop_reason
                 enriched_result["metadata"] = metadata
@@ -955,24 +961,9 @@ class CrawlJobService:
                 result.get("total_fetched") or result.get("progress_fetched") or 0
             )
             metadata = result.get("metadata") or {}
-            fetched_count = int(result.get("total_fetched") or 0)
             out_of_range_count = int(result.get("total_skipped_out_of_range") or 0)
-            scanned_count = metadata.get("reviews_scanned")
-            if scanned_count is None:
-                scanned_count = (
-                    result.get("reviews_scanned")
-                    or result.get("progress_scanned")
-                    or metadata.get("loaded_review_cards")
-                    or fetched_count
-                    or result.get("progress_fetched")
-                    or 0
-                )
-            review_counts["scanned"] += int(scanned_count)
-            review_counts["matched"] += int(
-                metadata.get("matched_review_cards")
-                if metadata.get("matched_review_cards") is not None
-                else max(0, fetched_count - out_of_range_count)
-            )
+            review_counts["scanned"] += scanned_count(result)
+            review_counts["matched"] += matched_count(result)
             review_counts["out_of_range"] += out_of_range_count
             review_counts["out_of_range_newer"] += int(
                 metadata.get("out_of_range_newer") or 0
@@ -983,7 +974,7 @@ class CrawlJobService:
             review_counts["inserted"] += int(result.get("total_inserted") or 0)
             review_counts["duplicate"] += int(result.get("total_duplicate") or 0)
             review_counts["failed"] += int(result.get("total_failed") or 0)
-        stop_reason, stop_reasons = CrawlJobService._batch_stop_reasons(jobs)
+        batch_stop_reason, stop_reasons = CrawlJobService._batch_stop_reasons(jobs)
         limits = {
             "max_reviews_to_collect": review_counts["target"],
             "scan_limit": sum(
@@ -1001,7 +992,7 @@ class CrawlJobService:
             "created_at": batch.created_at,
             "started_at": batch.started_at,
             "finished_at": batch.finished_at,
-            "stop_reason": stop_reason,
+            "stop_reason": batch_stop_reason,
             "stop_reasons": stop_reasons,
             # Jobs sudah dimuat di atas, jadi ini tidak menambah query.
             # Disertakan juga saat include_jobs False: daftar batch tanpa
@@ -1046,12 +1037,8 @@ class CrawlJobService:
                     "crawl_mode": ((job.result_json or {}).get("request") or {}).get(
                         "crawl_mode"
                     ),
-                    "stop_reason": CrawlJobService._public_stop_reason(
-                        job.result_json or {}
-                    ),
-                    "rating_snapshot": CrawlJobService._rating_snapshot(
-                        job.result_json or {}
-                    ),
+                    "stop_reason": stop_reason(job.result_json or {}),
+                    "rating_snapshot": rating_snapshot(job.result_json or {}),
                     "status": job.status,
                     "attempts": job.attempts,
                     "max_attempts": job.max_attempts,
@@ -1072,7 +1059,7 @@ class CrawlJobService:
     def _batch_stop_reasons(jobs) -> tuple[str | None, dict[str, int]]:
         counts: dict[str, int] = {}
         for job in jobs:
-            reason = CrawlJobService._public_stop_reason(job.result_json or {})
+            reason = stop_reason(job.result_json or {})
             if not reason:
                 continue
             counts[reason] = counts.get(reason, 0) + 1
@@ -1081,36 +1068,3 @@ class CrawlJobService:
         if len(counts) == 1:
             return next(iter(counts)), counts
         return "mixed", counts
-
-    @staticmethod
-    def _rating_snapshot(result: dict) -> dict | None:
-        metadata = result.get("metadata") or {}
-        snapshot = metadata.get("rating_snapshot")
-        if isinstance(snapshot, dict):
-            return snapshot
-        rating = metadata.get("place_rating") or result.get("place_rating")
-        review_count = metadata.get("place_review_count") or result.get(
-            "place_review_count"
-        )
-        snapshot_at = metadata.get("rating_snapshot_at") or result.get(
-            "rating_snapshot_at"
-        )
-        if rating is None and review_count is None and snapshot_at is None:
-            return None
-        return {
-            "source": "google_maps",
-            "place_rating": rating,
-            "place_review_count": review_count,
-            "snapshot_at": snapshot_at,
-        }
-
-    @staticmethod
-    def _public_stop_reason(result: dict) -> str | None:
-        metadata = result.get("metadata") or {}
-        reason = metadata.get("stop_reason") or metadata.get("stopped_reason")
-        mapping = {
-            "out_of_range": "older_than_window",
-            "time_limit": "timeout",
-            "no_new_review_cards": "no_more_reviews",
-        }
-        return mapping.get(reason, reason)

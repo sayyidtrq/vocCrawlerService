@@ -13,6 +13,7 @@ from app.integrations.selenium_google_maps_client import (
     SeleniumGoogleMapsReviewClient,
 )
 from app.services.competitor_review_service import CompetitorReviewService
+from app.services.crawl_result import CrawlFetchResult
 from app.services.entitlement_service import EntitlementService
 from app.services.fetch_log_service import FetchLogService
 from app.services.fetch_service import FetchService
@@ -97,7 +98,7 @@ class SeleniumFetchService:
         sort_by: str = "newest",
         scan_limit: int | None = None,
         time_limit_seconds: int = 600,
-    ) -> dict:
+    ) -> CrawlFetchResult:
         location = self.location_service.get_location(location_id)
         if location is None:
             raise ValueError("Location not found.")
@@ -118,7 +119,7 @@ class SeleniumFetchService:
         requested_scan_limit = self.validate_scan_limit(
             scan_limit, requested_target
         )
-        result = {
+        result: CrawlFetchResult = {
             "location_id": location.id,
             "location_name": location.branch_name,
             "source": self.client.source_name,
@@ -271,7 +272,7 @@ class SeleniumFetchService:
         sort_by: str = "newest",
         scan_limit: int | None = None,
         time_limit_seconds: int = 600,
-    ) -> dict:
+    ) -> CrawlFetchResult:
         """Tarik ulasan satu kompetitor ke tabel competitor_reviews.
 
         Sengaja tidak menulis fetch_logs: kolom location_id di tabel itu
@@ -302,7 +303,7 @@ class SeleniumFetchService:
         requested_scan_limit = self.validate_scan_limit(
             scan_limit, requested_target
         )
-        result = {
+        result: CrawlFetchResult = {
             "competitor_id": sasaran.id,
             "competitor_name": sasaran.branch_name,
             "source": self.client.source_name,
