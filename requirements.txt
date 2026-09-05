@@ -6,9 +6,11 @@
 #
 # Direct dependencies (what the app actually imports):
 #   SQLAlchemy alembic psycopg2-binary python-dotenv email-validator requests
-#   rich tabulate google-genai pydantic pydantic-settings selenium
-#   beautifulsoup4 openai httpx pytest ruff
-#   (+ fastapi uvicorn[standard] from apps/api/requirements.txt)
+#   rich tabulate pydantic pydantic-settings selenium beautifulsoup4 openai
+#   httpx pytest ruff (+ fastapi uvicorn[standard] from apps/api/requirements.txt)
+#   google-genai/google-auth removed (R9): the only client analysis_service.py
+#   ever constructs is LocalLLMClient; the concrete GeminiClient class was
+#   never instantiated anywhere in application code.
 
 Mako==1.4.1
 MarkupSafe==3.0.3
@@ -31,8 +33,6 @@ distro==1.9.0
 dnspython==2.8.0
 email-validator==2.3.0
 fastapi==0.141.1
-google-auth==2.57.1
-google-genai==1.75.0
 h11==0.16.0
 httpcore==1.0.9
 httptools==0.8.0

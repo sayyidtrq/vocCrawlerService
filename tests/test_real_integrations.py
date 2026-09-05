@@ -3,7 +3,6 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from app.config import Settings
-from app.integrations.gemini_client import GeminiClient
 from app.integrations.google_places_client import GooglePlacesClient
 from app.integrations.review_source_client import ReviewSourceError
 
@@ -125,47 +124,3 @@ def test_google_places_marks_rate_limit_as_retriable(tmp_path):
         assert "Quota exceeded" in str(exc)
     else:
         raise AssertionError("Expected ReviewSourceError")
-
-
-class FakeGeminiModels:
-    def __init__(self):
-        self.last_call = None
-
-    def generate_content(self, **kwargs):
-        self.last_call = kwargs
-        return SimpleNamespace(
-            parsed={
-                "sentiment": "negative",
-                "sentiment_score": 0.91,
-                "issue_category": "waiting_time",
-                "urgency": "medium",
-                "summary": "Pasien mengeluhkan antrean yang lama.",
-                "recommended_action": "Evaluasi kapasitas layanan pada jam ramai.",
-                "keywords": ["antrean", "lama"],
-                "is_potential_viral": False,
-                "is_patient_safety_issue": False,
-            },
-            text=None,
-        )
-
-
-def test_gemini_uses_structured_output_schema(tmp_path):
-    models = FakeGeminiModels()
-    sdk = SimpleNamespace(models=models)
-    client = GeminiClient(make_settings(tmp_path), sdk_client=sdk)
-
-    result = client.analyze_review(
-        {
-            "rating": 2,
-            "reviewer_name": "Budi",
-            "review_time": "2026-06-19T09:00:00Z",
-            "review_text": "Antrean terlalu lama.",
-        }
-    )
-
-    assert result["sentiment"] == "negative"
-    assert result["issue_category"] == "waiting_time"
-    assert models.last_call["model"] == "gemini-2.5-flash"
-    config = models.last_call["config"]
-    assert config.response_mime_type == "application/json"
-    assert config.response_json_schema["type"] == "object"
