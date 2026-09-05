@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from app.db.session import get_session_factory
 from app.services.location_service import LocationService
 from app.services.summary_service import SummaryService
 from app.terminal.common import (
@@ -14,7 +15,7 @@ from app.utils.formatter import print_table, truncate
 
 
 def run_summary_menu() -> None:
-    service = SummaryService()
+    session_factory = get_session_factory()
     locations = LocationService()
     while True:
         print_heading("View Analysis Summary")
@@ -28,7 +29,8 @@ def run_summary_menu() -> None:
         choice = input("\nSelect menu: ").strip()
         try:
             if choice == "1":
-                _overall(service.overall_summary())
+                with session_factory() as session:
+                    _overall(SummaryService(session=session).overall_summary())
             elif choice == "2":
                 all_locations = locations.get_all_locations()
                 show_locations(all_locations)
@@ -38,15 +40,26 @@ def run_summary_menu() -> None:
                 location_id = parse_int(
                     input("\nLocation ID: ").strip(), "Location ID"
                 )
-                _location(service.location_summary(location_id))
+                with session_factory() as session:
+                    _location(
+                        SummaryService(session=session).location_summary(location_id)
+                    )
             elif choice == "3":
-                _negative(service.negative_reviews())
+                with session_factory() as session:
+                    _negative(SummaryService(session=session).negative_reviews())
             elif choice == "4":
-                _critical(service.critical_issues())
+                with session_factory() as session:
+                    _critical(SummaryService(session=session).critical_issues())
             elif choice == "5":
-                _top_issues(service.overall_summary()["top_issues"])
+                with session_factory() as session:
+                    _top_issues(
+                        SummaryService(session=session).overall_summary()["top_issues"]
+                    )
             elif choice == "6":
-                _sentiments(service.overall_summary()["sentiments"])
+                with session_factory() as session:
+                    _sentiments(
+                        SummaryService(session=session).overall_summary()["sentiments"]
+                    )
             elif choice == "0":
                 return
             else:
@@ -143,4 +156,3 @@ def _sentiments(sentiments: dict, heading: bool = True) -> None:
         print("\nSentiment:")
     for name in ["positive", "neutral", "negative", "mixed", "unknown"]:
         print(f"{name.title():<10}: {sentiments.get(name, 0)}")
-

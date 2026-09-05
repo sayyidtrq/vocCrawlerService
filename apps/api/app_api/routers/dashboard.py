@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends
+from sqlalchemy.orm import Session
 
 from app.services.summary_service import SummaryService
+from apps.api.app_api.dependencies import get_db_session
 from apps.api.app_api.schemas import (
     DashboardOverviewResponse,
     IssueListResponse,
@@ -21,8 +23,15 @@ router = APIRouter(prefix="/dashboard", tags=["dashboard"])
     summary="Ringkasan agregat seluruh company",
     description="Statistik gabungan: total lokasi & review, jumlah teranalisis/pending, distribusi sentiment, top issue, dan waktu fetch terakhir.",
 )
-def overview(principal: ServicePrincipal = Depends(require_service_principal)) -> dict:
-    return to_jsonable(SummaryService(company_id=principal.company_id).overall_summary())
+def overview(
+    principal: ServicePrincipal = Depends(require_service_principal),
+    session: Session = Depends(get_db_session),
+) -> dict:
+    return to_jsonable(
+        SummaryService(
+            company_id=principal.company_id, session=session
+        ).overall_summary()
+    )
 
 
 @router.get(
@@ -31,8 +40,16 @@ def overview(principal: ServicePrincipal = Depends(require_service_principal)) -
     summary="Ringkasan per lokasi",
     description="Statistik agregat untuk satu lokasi: rata-rata rating, sentiment, top issue, contoh review negatif, dan fokus manajemen.",
 )
-def location_summary(location_id: int, principal: ServicePrincipal = Depends(require_service_principal)) -> dict:
-    return to_jsonable(SummaryService(company_id=principal.company_id).location_summary(location_id))
+def location_summary(
+    location_id: int,
+    principal: ServicePrincipal = Depends(require_service_principal),
+    session: Session = Depends(get_db_session),
+) -> dict:
+    return to_jsonable(
+        SummaryService(
+            company_id=principal.company_id, session=session
+        ).location_summary(location_id)
+    )
 
 
 @router.get(
@@ -41,8 +58,13 @@ def location_summary(location_id: int, principal: ServicePrincipal = Depends(req
     summary="Daftar isu kritis",
     description="Daftar review yang teridentifikasi sebagai isu kritis (mis. patient safety / urgency tinggi) beserta rekomendasi aksi.",
 )
-def critical_issues(principal: ServicePrincipal = Depends(require_service_principal)) -> dict:
-    items = SummaryService(company_id=principal.company_id).critical_issues()
+def critical_issues(
+    principal: ServicePrincipal = Depends(require_service_principal),
+    session: Session = Depends(get_db_session),
+) -> dict:
+    items = SummaryService(
+        company_id=principal.company_id, session=session
+    ).critical_issues()
     return to_jsonable({"items": items, "total": len(items)})
 
 
@@ -52,6 +74,11 @@ def critical_issues(principal: ServicePrincipal = Depends(require_service_princi
     summary="Daftar review negatif",
     description="Daftar review dengan sentiment negatif beserta kategori isu dan urgency.",
 )
-def negative_reviews(principal: ServicePrincipal = Depends(require_service_principal)) -> dict:
-    items = SummaryService(company_id=principal.company_id).negative_reviews()
+def negative_reviews(
+    principal: ServicePrincipal = Depends(require_service_principal),
+    session: Session = Depends(get_db_session),
+) -> dict:
+    items = SummaryService(
+        company_id=principal.company_id, session=session
+    ).negative_reviews()
     return to_jsonable({"items": items, "total": len(items)})

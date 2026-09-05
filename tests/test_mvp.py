@@ -340,9 +340,10 @@ def test_summary_and_exports(session_factory, settings, company_id):
         client=MockGeminiClient(),
     ).analyze_pending()
 
-    summary = SummaryService(
-        company_id=company_id, session_factory=session_factory
-    ).overall_summary()
+    with session_factory() as session:
+        summary = SummaryService(
+            company_id=company_id, session=session
+        ).overall_summary()
     export = ExportService(
         company_id=company_id, session_factory=session_factory, settings=settings
     )

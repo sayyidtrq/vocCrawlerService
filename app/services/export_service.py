@@ -9,6 +9,7 @@ from pathlib import Path
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import Settings, get_settings
+from app.db.session import get_session_factory
 from app.services.location_service import LocationService
 from app.services.review_service import ReviewService
 from app.services.summary_service import SummaryService
@@ -26,9 +27,13 @@ class ExportService:
     ):
         self.company_id = company_id
         self.settings = settings or get_settings()
-        self.review_service = ReviewService(company_id=company_id, session_factory=session_factory)
-        self.location_service = LocationService(company_id=company_id, session_factory=session_factory)
-        self.summary_service = SummaryService(company_id=company_id, session_factory=session_factory)
+        self.session_factory = session_factory or get_session_factory()
+        self.review_service = ReviewService(
+            company_id=company_id, session_factory=self.session_factory
+        )
+        self.location_service = LocationService(
+            company_id=company_id, session_factory=self.session_factory
+        )
 
     def export_all_reviews_csv(self) -> Path:
         rows = self.review_service.get_all_export_rows()
@@ -60,31 +65,35 @@ class ExportService:
             "top_issue_categories",
             "management_focus",
         ]
-        with path.open("w", encoding="utf-8-sig", newline="") as file:
-            writer = csv.DictWriter(file, fieldnames=fields)
-            writer.writeheader()
-            for location in locations:
-                summary = self.summary_service.location_summary(location.id)
-                writer.writerow(
-                    {
-                        "location_id": location.id,
-                        "location_name": location.branch_name,
-                        "total_reviews": summary["total_reviews"],
-                        "average_rating": summary["average_rating"],
-                        "positive": summary["sentiments"]["positive"],
-                        "neutral": summary["sentiments"]["neutral"],
-                        "negative": summary["sentiments"]["negative"],
-                        "mixed": summary["sentiments"]["mixed"],
-                        "critical_issues": summary["critical_issues"],
-                        "top_issue_categories": "; ".join(
-                            f"{category}:{count}"
-                            for category, count in summary["top_issues"]
-                        ),
-                        "management_focus": "; ".join(
-                            summary["management_focus"]
-                        ),
-                    }
-                )
+        with self.session_factory() as session:
+            summary_service = SummaryService(
+                company_id=self.company_id, session=session
+            )
+            with path.open("w", encoding="utf-8-sig", newline="") as file:
+                writer = csv.DictWriter(file, fieldnames=fields)
+                writer.writeheader()
+                for location in locations:
+                    summary = summary_service.location_summary(location.id)
+                    writer.writerow(
+                        {
+                            "location_id": location.id,
+                            "location_name": location.branch_name,
+                            "total_reviews": summary["total_reviews"],
+                            "average_rating": summary["average_rating"],
+                            "positive": summary["sentiments"]["positive"],
+                            "neutral": summary["sentiments"]["neutral"],
+                            "negative": summary["sentiments"]["negative"],
+                            "mixed": summary["sentiments"]["mixed"],
+                            "critical_issues": summary["critical_issues"],
+                            "top_issue_categories": "; ".join(
+                                f"{category}:{count}"
+                                for category, count in summary["top_issues"]
+                            ),
+                            "management_focus": "; ".join(
+                                summary["management_focus"]
+                            ),
+                        }
+                    )
         logger.info("Analysis summary exported to %s", path)
         return path
 
