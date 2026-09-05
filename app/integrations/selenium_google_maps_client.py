@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import re
 import shutil
 import time
 from datetime import datetime
@@ -16,23 +15,22 @@ from selenium.common.exceptions import (
     TimeoutException,
     WebDriverException,
 )
-from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.service import Service as ChromeService
+from selenium.webdriver.common.by import By
 from selenium.webdriver.remote.webelement import WebElement
 from selenium.webdriver.support.ui import WebDriverWait
 
 from app.config import Settings
 from app.db.models import Location
 from app.integrations import google_maps_selectors as selectors
+from app.integrations.google_maps_review_parser import GoogleMapsReviewParser
 from app.integrations.review_source_client import ReviewSourceClient, ReviewSourceError
-from app.utils.rating_parser import parse_compact_count, parse_rating
-
 
 logger = logging.getLogger(__name__)
 
 
 class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
-    source_name = "selenium_google_maps"
+    source_name = GoogleMapsReviewParser.source_name
     max_no_new_scroll_attempts = 5
 
     def __init__(self, settings: Settings, driver_factory=None):
@@ -440,12 +438,13 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
                 seen_card_ids.add(card_id)
                 try:
                     self._expand_review(card, driver)
-                    review = self._extract_review(
-                        card=card,
+                    raw = self._scrape_review_card(card)
+                    review = GoogleMapsReviewParser.parse_review(
+                        raw,
                         source_url=driver.current_url or source_url,
                         scraped_at=scraped_at,
                     )
-                    review_key = self._review_identity(review)
+                    review_key = GoogleMapsReviewParser.review_identity(review)
                     if review_key not in review_keys:
                         review_keys.add(review_key)
                         reviews.append(review)
@@ -561,12 +560,10 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
             )
         return container
 
-    def _extract_review(
-        self, card: WebElement, source_url: str, scraped_at: datetime
-    ) -> dict:
+    def _scrape_review_card(self, card: WebElement) -> dict:
         reviewer_name = self._element_text(
             self._find_first(card, selectors.REVIEWER_NAME_SELECTORS)
-        ) or "Anonymous"
+        )
         rating_element = self._find_first(card, selectors.RATING_SELECTORS)
         rating_value = None
         if rating_element is not None:
@@ -594,13 +591,6 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
         reviewer_meta = self._element_text(
             self._find_first(card, selectors.REVIEWER_META_SELECTORS)
         )
-        local_guide = (
-            "Local Guide"
-            if "local guide" in reviewer_meta.lower()
-            or "pemandu lokal" in reviewer_meta.lower()
-            else None
-        )
-        total_reviews = self._parse_reviewer_total_reviews(reviewer_meta)
         like_element = self._find_first(card, selectors.LIKE_BUTTON_SELECTORS)
         like_value = ""
         if like_element is not None:
@@ -631,37 +621,18 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
             or card.get_attribute("data-reviewid")
             or None
         )
-        raw_payload = {
+        return {
             "review_id": review_id,
             "reviewer_name": reviewer_name,
             "reviewer_meta": reviewer_meta,
             "rating_label": rating_value,
             "review_text": review_text,
-            "review_relative_time": relative_time,
+            "relative_time": relative_time,
+            "profile_url": profile_url,
+            "photo_url": photo_url,
             "like_label": like_value,
-            "owner_response_text": owner_text,
-            "owner_response_relative_time": owner_time,
-            "source_url": source_url,
-        }
-        return {
-            "source": self.source_name,
-            "external_review_id": review_id,
-            "reviewer_name": reviewer_name,
-            "reviewer_profile_url": profile_url,
-            "reviewer_photo_url": photo_url,
-            "reviewer_local_guide_level": local_guide,
-            "reviewer_total_reviews": total_reviews,
-            "rating": parse_rating(rating_value),
-            "review_text": review_text,
-            "review_relative_time": relative_time or None,
-            "review_time": None,
-            "review_language": "unknown",
-            "language": "unknown",
-            "like_count": parse_compact_count(like_value),
-            "owner_response_text": owner_text or None,
-            "owner_response_time": None,
-            "scraped_at": scraped_at.isoformat(),
-            "raw_payload": raw_payload,
+            "owner_text": owner_text,
+            "owner_time": owner_time,
         }
 
     def _expand_review(self, card: WebElement, driver) -> None:
@@ -680,23 +651,6 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
             )
         except WebDriverException:
             return card.id
-
-    @staticmethod
-    def _review_identity(review: dict) -> str:
-        external_review_id = " ".join(
-            str(review.get("external_review_id") or "").split()
-        )
-        if external_review_id:
-            return f"external:{external_review_id}"
-        parts = [
-            review.get("reviewer_profile_url"),
-            review.get("reviewer_name"),
-            review.get("rating"),
-            review.get("review_text"),
-        ]
-        return "fallback:" + "|".join(
-            " ".join(str(part or "").split()) for part in parts
-        )
 
     # Kata kunci menu urutan Google Maps, Inggris dan Indonesia. Google tidak
     # menyediakan penyaring tanggal sama sekali — hanya empat urutan ini — jadi
@@ -880,60 +834,6 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
             pass
 
         source_text = " ".join(part for part in text_parts if part)
-        place_rating = self._parse_place_rating(source_text)
-        place_review_count = self._parse_place_review_count(source_text)
-        snapshot = {
-            "source": "google_maps",
-            "place_rating": place_rating,
-            "place_review_count": place_review_count,
-            "snapshot_at": snapshot_at.isoformat(),
-        }
-        return {
-            "place_rating": place_rating,
-            "place_review_count": place_review_count,
-            "rating_snapshot_at": snapshot["snapshot_at"],
-            "rating_snapshot": snapshot,
-        }
-
-    @staticmethod
-    def _parse_place_rating(value: str) -> float | None:
-        text = str(value or "").replace("\xa0", " ")
-        match = re.search(r"(?<!\d)([1-5][.,]\d)(?!\d)", text)
-        if not match:
-            return None
-        try:
-            rating = float(match.group(1).replace(",", "."))
-        except ValueError:
-            return None
-        return rating if 1 <= rating <= 5 else None
-
-    @staticmethod
-    def _parse_place_review_count(value: str) -> int | None:
-        text = str(value or "").lower().replace("\xa0", " ")
-        match = re.search(
-            r"(\d[\d.,]*)\s*(rb|ribu|k|m|jt|juta)?\s*(?:reviews?|ulasan)",
-            text,
-            flags=re.IGNORECASE,
+        return GoogleMapsReviewParser.parse_place_snapshot(
+            source_text, snapshot_at=snapshot_at
         )
-        if not match:
-            return None
-        number_text, suffix = match.groups()
-        suffix = suffix or ""
-        if suffix:
-            try:
-                number = float(number_text.replace(",", "."))
-            except ValueError:
-                return None
-            multiplier = 1_000 if suffix in {"rb", "ribu", "k"} else 1_000_000
-            return int(number * multiplier)
-        digits = re.sub(r"\D", "", number_text)
-        return int(digits) if digits else None
-
-    @staticmethod
-    def _parse_reviewer_total_reviews(value: str) -> int | None:
-        match = re.search(
-            r"(\d[\d.,]*)\s+(?:reviews?|ulasan)", value, flags=re.IGNORECASE
-        )
-        if not match:
-            return None
-        return parse_compact_count(match.group(1), default=0)
