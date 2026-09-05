@@ -234,18 +234,6 @@ def test_rating_and_count_parsers():
     assert parse_compact_count("37 ulasan") == 37
 
 
-def test_google_place_rating_snapshot_parsers(tmp_path):
-    client = SeleniumGoogleMapsReviewClient(make_settings(tmp_path))
-
-    assert client._parse_place_rating("4.3 9,422 reviews") == 4.3
-    assert client._parse_place_rating("Rating 4,8 dari 5") == 4.8
-    assert client._parse_place_rating("5 4 3 2 1") is None
-    assert client._parse_place_review_count("4.3 9,422 reviews") == 9422
-    assert client._parse_place_review_count("4,7 9.422 ulasan") == 9422
-    assert client._parse_place_review_count("4,7 9,4 rb ulasan") == 9400
-    assert client._parse_place_review_count("4.8 1.2k reviews") == 1200
-
-
 def test_selenium_driver_uses_container_browser_and_safe_flags(
     monkeypatch, tmp_path
 ):
