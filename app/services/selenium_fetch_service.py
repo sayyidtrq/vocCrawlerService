@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import functools
 import logging
 from datetime import datetime
 
@@ -14,6 +15,7 @@ from app.integrations.selenium_google_maps_client import (
 )
 from app.services.competitor_review_service import CompetitorReviewService
 from app.services.crawl_result import CrawlFetchResult
+from app.services.crawl_target import CrawlTarget
 from app.services.entitlement_service import EntitlementService
 from app.services.fetch_log_service import FetchLogService
 from app.services.fetch_service import FetchService
@@ -23,38 +25,6 @@ from app.utils.date_parser import is_within_date_range
 
 
 logger = logging.getLogger(__name__)
-
-
-class _CompetitorAsLocation:
-    """Bungkus kompetitor agar bisa melewati scraper dan normalizer yang sama
-    persis dengan cabang.
-
-    Scraper hanya membaca empat atribut — external_place_id, branch_name,
-    google_reviews_url, google_maps_url — dan normalizer hanya menambah `id`.
-    Dengan menyediakannya di sini, dukungan kompetitor tidak menuntut satu baris
-    pun perubahan di jalur cabang yang sudah berjalan.
-    """
-
-    __slots__ = (
-        "id",
-        "branch_name",
-        "hospital_name",
-        "external_place_id",
-        "google_maps_url",
-        "google_reviews_url",
-        "target_review_count",
-        "source",
-    )
-
-    def __init__(self, competitor):
-        self.id = competitor.id
-        self.branch_name = competitor.name
-        self.hospital_name = competitor.name
-        self.external_place_id = competitor.external_place_id
-        self.google_maps_url = competitor.google_maps_url
-        self.google_reviews_url = competitor.google_reviews_url
-        self.target_review_count = competitor.target_review_count
-        self.source = competitor.source
 
 
 class SeleniumFetchService:
@@ -102,165 +72,18 @@ class SeleniumFetchService:
         location = self.location_service.get_location(location_id)
         if location is None:
             raise ValueError("Location not found.")
-
-        # Google Maps TIDAK punya penyaring tanggal — hanya empat urutan.
-        # Rentang tanggal karena itu hanya bisa dicapai dengan mengurutkan dari
-        # yang terbaru lalu berhenti begitu melewati batas bawah. Urutan lain
-        # tidak kronologis, sehingga berhenti-awal di atasnya akan membuang
-        # ulasan yang cocok tanpa ada yang tahu. Maka rentang tanggal memaksa
-        # 'newest', dan alasannya dicatat supaya layar bisa menjelaskannya.
-        sort_dipaksa = False
-        if (date_from is not None or date_to is not None) and sort_by != "newest":
-            sort_dipaksa = True
-            sort_by = "newest"
-        requested_target = self.validate_target(
-            target or location.target_review_count
+        return self._run_fetch(
+            CrawlTarget.from_location(location),
+            target=target,
+            date_from=date_from,
+            date_to=date_to,
+            on_progress=on_progress,
+            sort_by=sort_by,
+            scan_limit=scan_limit,
+            time_limit_seconds=time_limit_seconds,
+            insert_review=self.review_service.insert_review,
+            enable_fetch_log=True,
         )
-        requested_scan_limit = self.validate_scan_limit(
-            scan_limit, requested_target
-        )
-        result: CrawlFetchResult = {
-            "location_id": location.id,
-            "location_name": location.branch_name,
-            "source": self.client.source_name,
-            "status": "failed",
-            "target_review_count": requested_target,
-            "total_fetched": 0,
-            "total_inserted": 0,
-            "total_duplicate": 0,
-            "total_failed": 0,
-            "total_skipped_out_of_range": 0,
-            "error_message": None,
-            "metadata": {
-                "target_review_count": requested_target,
-                "max_reviews_to_collect": requested_target,
-                "scan_limit": requested_scan_limit,
-                "headless": self.settings.selenium_headless,
-                "date_from": date_from.isoformat() if date_from else None,
-                "date_to": date_to.isoformat() if date_to else None,
-            },
-        }
-        log_id = self.fetch_log_service.start_log(
-            location.id, self.client.source_name, result["metadata"]
-        )
-        logger.info(
-            "Selenium fetch started for %s with target %s",
-            location.branch_name,
-            requested_target,
-        )
-        try:
-            # Penyaringan tanggal harus ikut menentukan KAPAN BERHENTI
-            # menggulir, bukan cuma membuang hasil di akhir. Google Maps
-            # mengurutkan ulasan terbaru lebih dulu, jadi permintaan rentang ke
-            # periode lampau akan menghabiskan seluruh jatah target pada ulasan
-            # terbaru dan menyisakan nol — berapa kali pun diulang.
-            def _nilai_rentang(raw_review):
-                if date_from is None and date_to is None:
-                    return "keep"
-                try:
-                    waktu = self.normalizer.normalize_review(
-                        location, raw_review
-                    ).get("review_time")
-                except Exception:
-                    # Kartu rusak diserahkan ke jalur normal di bawah, yang
-                    # sudah menghitungnya sebagai gagal.
-                    return "keep"
-                if is_within_date_range(waktu, date_from, date_to):
-                    return "keep"
-                # Sudah lebih tua dari batas bawah: karena urutannya
-                # terbaru-dulu, sisanya pasti lebih tua lagi.
-                try:
-                    if date_from is not None and waktu is not None and waktu < date_from:
-                        return "stop"
-                except TypeError:
-                    # Beda kesadaran zona waktu — jangan sampai menghentikan
-                    # crawl hanya karena perbandingan tidak bisa dilakukan.
-                    return "skip"
-                return "skip"
-
-            raw_reviews = self.client.fetch_reviews(
-                location,
-                limit=requested_target,
-                on_progress=on_progress,
-                keep_check=_nilai_rentang,
-                sort_by=sort_by,
-                scan_limit=requested_scan_limit,
-                time_limit_seconds=time_limit_seconds,
-            )
-            result["metadata"] = dict(self.client.last_metadata)
-            result["metadata"]["date_from"] = date_from.isoformat() if date_from else None
-            result["metadata"]["date_to"] = date_to.isoformat() if date_to else None
-            result["metadata"]["sort_forced_to_newest"] = sort_dipaksa
-            result["metadata"]["max_reviews_to_collect"] = requested_target
-            result["metadata"]["scan_limit"] = requested_scan_limit
-
-            # Peringatan yang HARUS sampai ke layar: kalau urutan gagal
-            # dipasang sementara rentang tanggal diminta, hasilnya tidak bisa
-            # dijamin lengkap — daftar Google mengikuti urutan 'paling relevan'
-            # yang tidak kronologis.
-            if (date_from is not None or date_to is not None) and not result[
-                "metadata"
-            ].get("sort_applied", False):
-                result["metadata"]["range_warning"] = (
-                    "Urutan terbaru gagal dipasang, sehingga hasil rentang "
-                    "tanggal tidak dijamin lengkap."
-                )
-                logger.warning(
-                    "Rentang tanggal diminta tetapi urutan newest gagal "
-                    "dipasang untuk %s",
-                    location.branch_name,
-                )
-            result["total_fetched"] = len(raw_reviews)
-            result["total_failed"] = int(
-                result["metadata"].get("failed_review_cards", 0)
-            )
-            for raw_review in raw_reviews:
-                try:
-                    normalized = self.normalizer.normalize_review(
-                        location, raw_review
-                    )
-                    if not is_within_date_range(normalized["review_time"], date_from, date_to):
-                        result["total_skipped_out_of_range"] += 1
-                        if self._is_older_than_range(
-                            normalized["review_time"], date_from
-                        ):
-                            result["metadata"]["out_of_range_older"] = (
-                                int(result["metadata"].get("out_of_range_older") or 0)
-                                + 1
-                            )
-                        else:
-                            result["metadata"]["out_of_range_newer"] = (
-                                int(result["metadata"].get("out_of_range_newer") or 0)
-                                + 1
-                            )
-                        continue
-                    _, duplicate = self.review_service.insert_review(normalized)
-                    if duplicate:
-                        result["total_duplicate"] += 1
-                    else:
-                        result["total_inserted"] += 1
-                except Exception as exc:
-                    result["total_failed"] += 1
-                    logger.exception(
-                        "Failed to store one Selenium review: %s", exc
-                    )
-            # Ulasan yang dibuang karena di luar rentang BUKAN kegagalan —
-            # itu justru penyaring bekerja. Menghitungnya sebagai partial
-            # membuat setiap penarikan berentang tanggal tampak setengah gagal.
-            tersimpan = result["total_inserted"] + result["total_duplicate"]
-            partial = (
-                (tersimpan < requested_target
-                 and result["total_skipped_out_of_range"] == 0)
-                or result["total_failed"] > 0
-            )
-            result["status"] = "partial_success" if partial else "success"
-        except Exception as exc:
-            result["status"] = "failed"
-            result["error_message"] = str(exc)
-            logger.exception("Selenium fetch failed for %s", location.branch_name)
-        finally:
-            self.fetch_log_service.finish_log(log_id, result)
-        return result
 
     def fetch_competitor(
         self,
@@ -288,24 +111,56 @@ class SeleniumFetchService:
             competitor = session.scalar(statement)
             if competitor is None:
                 raise ValueError("Competitor not found.")
-            sasaran = _CompetitorAsLocation(competitor)
+            competitor_id_value = competitor.id
+            crawl_target = CrawlTarget.from_competitor(competitor)
+        return self._run_fetch(
+            crawl_target,
+            target=target,
+            date_from=date_from,
+            date_to=date_to,
+            on_progress=on_progress,
+            sort_by=sort_by,
+            scan_limit=scan_limit,
+            time_limit_seconds=time_limit_seconds,
+            insert_review=functools.partial(
+                self.competitor_review_service.insert_review, competitor_id_value
+            ),
+            enable_fetch_log=False,
+        )
 
-        # Alasan pemaksaan urutan ini sama dengan jalur cabang: Google Maps
-        # tidak punya penyaring tanggal, jadi rentang hanya bisa dikerjakan
-        # dengan mengurutkan terbaru lalu berhenti di batas bawah.
+    def _run_fetch(
+        self,
+        crawl_target: CrawlTarget,
+        *,
+        target: int | None,
+        date_from: datetime | None,
+        date_to: datetime | None,
+        on_progress,
+        sort_by: str,
+        scan_limit: int | None,
+        time_limit_seconds: int,
+        insert_review,
+        enable_fetch_log: bool,
+    ) -> CrawlFetchResult:
+        # Google Maps TIDAK punya penyaring tanggal — hanya empat urutan.
+        # Rentang tanggal karena itu hanya bisa dicapai dengan mengurutkan dari
+        # yang terbaru lalu berhenti begitu melewati batas bawah. Urutan lain
+        # tidak kronologis, sehingga berhenti-awal di atasnya akan membuang
+        # ulasan yang cocok tanpa ada yang tahu. Maka rentang tanggal memaksa
+        # 'newest', dan alasannya dicatat supaya layar bisa menjelaskannya.
         sort_dipaksa = False
         if (date_from is not None or date_to is not None) and sort_by != "newest":
             sort_dipaksa = True
             sort_by = "newest"
         requested_target = self.validate_target(
-            target or sasaran.target_review_count
+            target or crawl_target.target_review_count
         )
         requested_scan_limit = self.validate_scan_limit(
             scan_limit, requested_target
         )
         result: CrawlFetchResult = {
-            "competitor_id": sasaran.id,
-            "competitor_name": sasaran.branch_name,
+            f"{crawl_target.kind}_id": crawl_target.id,
+            f"{crawl_target.kind}_name": crawl_target.branch_name,
             "source": self.client.source_name,
             "status": "failed",
             "target_review_count": requested_target,
@@ -324,37 +179,52 @@ class SeleniumFetchService:
                 "date_to": date_to.isoformat() if date_to else None,
             },
         }
+        log_id = None
+        if enable_fetch_log:
+            log_id = self.fetch_log_service.start_log(
+                crawl_target.id, self.client.source_name, result["metadata"]
+            )
         logger.info(
-            "Selenium competitor fetch started for %s with target %s",
-            sasaran.branch_name,
+            (
+                "Selenium fetch started for %s with target %s"
+                if crawl_target.kind == "location"
+                else "Selenium competitor fetch started for %s with target %s"
+            ),
+            crawl_target.branch_name,
             requested_target,
         )
         try:
-
+            # Penyaringan tanggal harus ikut menentukan KAPAN BERHENTI
+            # menggulir, bukan cuma membuang hasil di akhir. Google Maps
+            # mengurutkan ulasan terbaru lebih dulu, jadi permintaan rentang ke
+            # periode lampau akan menghabiskan seluruh jatah target pada ulasan
+            # terbaru dan menyisakan nol — berapa kali pun diulang.
             def _nilai_rentang(raw_review):
                 if date_from is None and date_to is None:
                     return "keep"
                 try:
                     waktu = self.normalizer.normalize_review(
-                        sasaran, raw_review
+                        crawl_target, raw_review
                     ).get("review_time")
                 except Exception:
+                    # Kartu rusak diserahkan ke jalur normal di bawah, yang
+                    # sudah menghitungnya sebagai gagal.
                     return "keep"
                 if is_within_date_range(waktu, date_from, date_to):
                     return "keep"
+                # Sudah lebih tua dari batas bawah: karena urutannya
+                # terbaru-dulu, sisanya pasti lebih tua lagi.
                 try:
-                    if (
-                        date_from is not None
-                        and waktu is not None
-                        and waktu < date_from
-                    ):
+                    if date_from is not None and waktu is not None and waktu < date_from:
                         return "stop"
                 except TypeError:
+                    # Beda kesadaran zona waktu — jangan sampai menghentikan
+                    # crawl hanya karena perbandingan tidak bisa dilakukan.
                     return "skip"
                 return "skip"
 
             raw_reviews = self.client.fetch_reviews(
-                sasaran,
+                crawl_target,
                 limit=requested_target,
                 on_progress=on_progress,
                 keep_check=_nilai_rentang,
@@ -363,13 +233,16 @@ class SeleniumFetchService:
                 time_limit_seconds=time_limit_seconds,
             )
             result["metadata"] = dict(self.client.last_metadata)
-            result["metadata"]["date_from"] = (
-                date_from.isoformat() if date_from else None
-            )
+            result["metadata"]["date_from"] = date_from.isoformat() if date_from else None
             result["metadata"]["date_to"] = date_to.isoformat() if date_to else None
             result["metadata"]["sort_forced_to_newest"] = sort_dipaksa
             result["metadata"]["max_reviews_to_collect"] = requested_target
             result["metadata"]["scan_limit"] = requested_scan_limit
+
+            # Peringatan yang HARUS sampai ke layar: kalau urutan gagal
+            # dipasang sementara rentang tanggal diminta, hasilnya tidak bisa
+            # dijamin lengkap — daftar Google mengikuti urutan 'paling relevan'
+            # yang tidak kronologis.
             if (date_from is not None or date_to is not None) and not result[
                 "metadata"
             ].get("sort_applied", False):
@@ -377,6 +250,12 @@ class SeleniumFetchService:
                     "Urutan terbaru gagal dipasang, sehingga hasil rentang "
                     "tanggal tidak dijamin lengkap."
                 )
+                if crawl_target.kind == "location":
+                    logger.warning(
+                        "Rentang tanggal diminta tetapi urutan newest gagal "
+                        "dipasang untuk %s",
+                        crawl_target.branch_name,
+                    )
             result["total_fetched"] = len(raw_reviews)
             result["total_failed"] = int(
                 result["metadata"].get("failed_review_cards", 0)
@@ -384,11 +263,9 @@ class SeleniumFetchService:
             for raw_review in raw_reviews:
                 try:
                     normalized = self.normalizer.normalize_review(
-                        sasaran, raw_review
+                        crawl_target, raw_review
                     )
-                    if not is_within_date_range(
-                        normalized["review_time"], date_from, date_to
-                    ):
+                    if not is_within_date_range(normalized["review_time"], date_from, date_to):
                         result["total_skipped_out_of_range"] += 1
                         if self._is_older_than_range(
                             normalized["review_time"], date_from
@@ -403,9 +280,7 @@ class SeleniumFetchService:
                                 + 1
                             )
                         continue
-                    _, duplicate = self.competitor_review_service.insert_review(
-                        sasaran.id, normalized
-                    )
+                    _, duplicate = insert_review(normalized)
                     if duplicate:
                         result["total_duplicate"] += 1
                     else:
@@ -413,14 +288,20 @@ class SeleniumFetchService:
                 except Exception as exc:
                     result["total_failed"] += 1
                     logger.exception(
-                        "Failed to store one competitor review: %s", exc
+                        (
+                            "Failed to store one Selenium review: %s"
+                            if crawl_target.kind == "location"
+                            else "Failed to store one competitor review: %s"
+                        ),
+                        exc,
                     )
+            # Ulasan yang dibuang karena di luar rentang BUKAN kegagalan —
+            # itu justru penyaring bekerja. Menghitungnya sebagai partial
+            # membuat setiap penarikan berentang tanggal tampak setengah gagal.
             tersimpan = result["total_inserted"] + result["total_duplicate"]
             partial = (
-                (
-                    tersimpan < requested_target
-                    and result["total_skipped_out_of_range"] == 0
-                )
+                (tersimpan < requested_target
+                 and result["total_skipped_out_of_range"] == 0)
                 or result["total_failed"] > 0
             )
             result["status"] = "partial_success" if partial else "success"
@@ -428,8 +309,16 @@ class SeleniumFetchService:
             result["status"] = "failed"
             result["error_message"] = str(exc)
             logger.exception(
-                "Selenium competitor fetch failed for %s", sasaran.branch_name
+                (
+                    "Selenium fetch failed for %s"
+                    if crawl_target.kind == "location"
+                    else "Selenium competitor fetch failed for %s"
+                ),
+                crawl_target.branch_name,
             )
+        finally:
+            if enable_fetch_log:
+                self.fetch_log_service.finish_log(log_id, result)
         return result
 
     def validate_target(self, target: object) -> int:

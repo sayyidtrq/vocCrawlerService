@@ -8,10 +8,11 @@ from sqlalchemy.pool import StaticPool
 
 from app.config import Settings
 from app.db.base import Base
-from app.db.models import Company, FetchLog, Review
+from app.db.models import Company, CompetitorReview, FetchLog, Review
 from app.integrations.selenium_google_maps_client import (
     SeleniumGoogleMapsReviewClient,
 )
+from app.services.competitor_service import CompetitorService
 from app.services.location_service import LocationService
 from app.services.review_service import ReviewService
 from app.services.selenium_fetch_service import SeleniumFetchService
@@ -199,6 +200,32 @@ def seed_location(session_factory, target_review_count=2):
     return company_id, location
 
 
+def seed_competitor(session_factory, target_review_count=2):
+    with session_factory() as session:
+        company = Company(
+            name="Test Company",
+            ai_enable_flag=True,
+            total_enable_review=100,
+            analyze_competitor_flag=False,
+        )
+        session.add(company)
+        session.commit()
+        session.refresh(company)
+        company_id = company.id
+    competitor = CompetitorService(
+        company_id=company_id, session_factory=session_factory
+    ).add_competitor(
+        name="RS Pesaing Bekasi",
+        city="Bekasi",
+        source="google_places",
+        external_place_id="place-pesaing-bekasi",
+        google_reviews_url="https://www.google.com/maps/place/competitor/reviews",
+        target_review_count=target_review_count,
+        is_active=True,
+    )
+    return company_id, competitor
+
+
 def test_rating_and_count_parsers():
     assert parse_rating("5 bintang") == 5
     assert parse_rating("Rating 4.0") == 4
@@ -378,6 +405,48 @@ def test_selenium_fetch_stores_metadata_and_deduplicates(tmp_path):
             "place_review_count": 9422,
             "snapshot_at": "2026-09-01T06:00:00+00:00",
         }
+
+
+def test_selenium_competitor_fetch_stores_reviews_without_fetch_log(tmp_path):
+    session_factory = make_session_factory()
+    settings = make_settings(tmp_path)
+    company_id, competitor = seed_competitor(session_factory)
+    service = SeleniumFetchService(
+        company_id=company_id,
+        session_factory=session_factory,
+        settings=settings,
+        client=FakeSeleniumClient(),
+    )
+
+    first = service.fetch_competitor(competitor.id, target=2)
+    second = service.fetch_competitor(competitor.id, target=2)
+
+    assert first["status"] == "success"
+    assert first["total_inserted"] == 2
+    assert second["status"] == "success"
+    assert second["total_duplicate"] == 2
+    with session_factory() as session:
+        assert session.scalar(select(func.count(CompetitorReview.id))) == 2
+        assert session.scalar(select(func.count(FetchLog.id))) == 0
+
+
+def test_selenium_competitor_fetch_result_uses_competitor_keys(tmp_path):
+    session_factory = make_session_factory()
+    settings = make_settings(tmp_path)
+    company_id, competitor = seed_competitor(session_factory)
+    service = SeleniumFetchService(
+        company_id=company_id,
+        session_factory=session_factory,
+        settings=settings,
+        client=FakeSeleniumClient(),
+    )
+
+    result = service.fetch_competitor(competitor.id, target=2)
+
+    assert result["competitor_id"] == competitor.id
+    assert result["competitor_name"] == competitor.name
+    assert "location_id" not in result
+    assert "location_name" not in result
 
 
 def test_date_range_stops_honestly_when_sort_is_unavailable(tmp_path):
