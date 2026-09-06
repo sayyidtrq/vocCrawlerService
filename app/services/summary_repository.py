@@ -4,7 +4,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.db.models import FetchLog, Location, Review, ReviewAnalysis
-from app.services.review_service import latest_analysis_subquery
+from app.services.review_repository import latest_analysis_subquery
 
 
 class SummaryRepository:
