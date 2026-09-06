@@ -18,14 +18,15 @@ Semua di branch `dev`, satu commit/merge per finding. Belum di-merge ke `main`.
 | R4 CrawlTarget | done | Service-layer only; penggabungan tabel review ditunda. |
 | R5 split Selenium client | done | `google_maps_review_parser.py` murni + fixture tests. |
 | R6 pydantic-settings | done | `Settings(BaseModel)` + `_EnvSettings(Settings, BaseSettings)`; port datar. |
-| R7 request-scoped session | done | Satu slice (`SummaryService` + `SummaryRepository`); sisa service menyusul per-round. |
+| R7 request-scoped session | done (core) | `SummaryService`, `ReviewService`, `LocationService`, `FetchLogService` + repository masing-masing, di `dev`. `AnalysisService` sengaja tidak diubah — method-nya menahan lock `FOR UPDATE` selama panggilan LLM, jadi transaksi ber-scope request akan menahan lock terlalu lama. `ExportService`/`EntitlementService` bernilai kecil, ditunda. |
 | R8 dependency hygiene | done | `firecrawl-py`/`pandas`/`webdriver-manager`/`google-genai`/`google-auth` dibuang; lock di-pin penuh. |
 | R9 one LLM stack | done | `LocalLLMClient` + `MockGeminiClient` di balik `GeminiClientBase`; `OpenRouterClient` + `GeminiClient` dihapus. |
 | R10 Postgres queue tests | done | `test_postgres_concurrency.py`; CI dapat service `postgres:16`. |
 | R11 smaller cleanups | done | `datetime.utcnow()` sudah nihil; konvensi bahasa + layout `app/`/`apps/` di `CLAUDE.md`; `PROJECT_STATUS.md` ditandai basi. |
 
-Sisa (di luar scope plan ini): perluas request-scoped session R7 ke ~9 service lain;
-evaluasi penggabungan tabel `Review`/`CompetitorReview` (R4 tahap 2).
+Sisa (di luar scope plan ini): R4 tahap 2 — penggabungan / mixin bersama tabel
+`Review`/`CompetitorReview`. Brief lengkap untuk agent berikutnya:
+`markdowns/08-agent-prompts-and-handoffs/R4_PHASE2_REVIEW_MODEL_UNIFICATION.md`.
 
 ## Goal
 
