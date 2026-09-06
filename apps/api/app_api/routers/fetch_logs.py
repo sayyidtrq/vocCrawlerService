@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query
+from sqlalchemy.orm import Session
 
 from app.services.fetch_log_service import FetchLogService
+from apps.api.app_api.dependencies import get_db_session
 from apps.api.app_api.schemas import FetchLogLatestResponse, FetchLogListResponse
 from apps.api.app_api.serializers import to_jsonable
 from apps.api.app_api.service_auth import ServicePrincipal, require_service_principal
-
 
 router = APIRouter(prefix="/fetch-logs", tags=["fetch logs"])
 
@@ -25,8 +26,9 @@ def list_fetch_logs(
     failed_only: bool = Query(default=False),
     limit: int = Query(default=20, ge=1, le=200),
     principal: ServicePrincipal = Depends(require_service_principal),
+    session: Session = Depends(get_db_session),
 ) -> dict:
-    logs = FetchLogService(company_id=principal.company_id).get_logs(
+    logs = FetchLogService(company_id=principal.company_id, session=session).get_logs(
         location_id=location_id,
         failed_only=failed_only,
         limit=limit,
@@ -38,8 +40,16 @@ def list_fetch_logs(
     "/latest",
     response_model=FetchLogLatestResponse,
     summary="Log crawling terakhir",
-    description="Ambil satu log crawling paling baru untuk company. `item` bernilai null jika belum ada log.",
+    description=(
+        "Ambil satu log crawling paling baru untuk company. `item` bernilai null "
+        "jika belum ada log."
+    ),
 )
-def latest_fetch_log(principal: ServicePrincipal = Depends(require_service_principal)) -> dict:
-    log = FetchLogService(company_id=principal.company_id).get_last_log()
+def latest_fetch_log(
+    principal: ServicePrincipal = Depends(require_service_principal),
+    session: Session = Depends(get_db_session),
+) -> dict:
+    log = FetchLogService(
+        company_id=principal.company_id, session=session
+    ).get_last_log()
     return to_jsonable({"item": log})

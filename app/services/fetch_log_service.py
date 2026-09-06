@@ -1,18 +1,34 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import datetime
 
-from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.db.models import FetchLog, Location
+from app.db.models import FetchLog
 from app.db.session import get_session_factory
+from app.services.fetch_log_repository import FetchLogRepository
 
 
 class FetchLogService:
-    def __init__(self, company_id: int | None = None, session_factory: sessionmaker[Session] | None = None):
+    def __init__(
+        self,
+        company_id: int | None = None,
+        session_factory: sessionmaker[Session] | None = None,
+        *,
+        session: Session | None = None,
+    ):
         self.company_id = company_id
         self.session_factory = session_factory or get_session_factory()
+        self._session = session
+
+    @contextmanager
+    def _read_session(self):
+        if self._session is not None:
+            yield self._session
+        else:
+            with self.session_factory() as session:
+                yield session
 
     def start_log(
         self, location_id: int, source: str, metadata: dict | None = None
@@ -72,20 +88,12 @@ class FetchLogService:
         failed_only: bool = False,
         limit: int = 20,
     ) -> list[dict]:
-        statement = (
-            select(FetchLog, Location.branch_name)
-            .join(Location, Location.id == FetchLog.location_id)
-            .order_by(FetchLog.started_at.desc(), FetchLog.id.desc())
-            .limit(limit)
-        )
-        if self.company_id is not None:
-            statement = statement.where(FetchLog.company_id == self.company_id)
-        if location_id is not None:
-            statement = statement.where(FetchLog.location_id == location_id)
-        if failed_only:
-            statement = statement.where(FetchLog.status == "failed")
-        with self.session_factory() as session:
-            rows = session.execute(statement).all()
+        with self._read_session() as session:
+            rows = FetchLogRepository(session, self.company_id).recent(
+                location_id=location_id,
+                failed_only=failed_only,
+                limit=limit,
+            )
             return [
                 {
                     "id": log.id,
