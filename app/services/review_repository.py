@@ -1,12 +1,36 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime
+from typing import TypeVar
 
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.engine import Row
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db.models import Location, Review, ReviewAnalysis
+
+ReviewT = TypeVar("ReviewT")
+
+
+def insert_review_optimistically(
+    session: Session,
+    review: ReviewT,
+    find_existing: Callable[[], int | None],
+) -> tuple[ReviewT | None, bool]:
+    if find_existing() is not None:
+        return None, True
+    try:
+        session.add(review)
+        session.commit()
+        session.refresh(review)
+        return review, False
+    except IntegrityError:
+        session.rollback()
+        if find_existing() is not None:
+            return None, True
+        raise
 
 
 def latest_analysis_subquery():
@@ -128,6 +152,3 @@ class ReviewRepository:
         total = int(self.session.scalar(count_statement) or 0)
         rows = self.session.execute(statement).all()
         return rows, total
-
-    def add(self, review: Review) -> None:
-        self.session.add(review)

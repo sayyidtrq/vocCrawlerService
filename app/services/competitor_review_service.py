@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from sqlalchemy import and_, inspect as sa_inspect, or_, select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import and_, or_, select
+from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.models import CompetitorReview
 from app.db.session import get_session_factory
+from app.services.review_repository import insert_review_optimistically
 
 
 class CompetitorReviewService:
@@ -49,22 +50,9 @@ class CompetitorReviewService:
         review = CompetitorReview(**payload)
         with self.session_factory() as session:
             statement = self._dedupe_statement(review)
-            existing = session.scalar(statement)
-            if existing is not None:
-                return None, True
-            try:
-                session.add(review)
-                session.commit()
-                session.refresh(review)
-                return review, False
-            except IntegrityError:
-                # review_hash unik secara global: balapan antar worker mendarat
-                # di sini, dan itu duplikat, bukan kegagalan.
-                session.rollback()
-                existing = session.scalar(statement)
-                if existing is not None:
-                    return None, True
-                raise
+            return insert_review_optimistically(
+                session, review, lambda: session.scalar(statement)
+            )
 
     @staticmethod
     def _dedupe_statement(review: CompetitorReview):

@@ -3,12 +3,14 @@ from __future__ import annotations
 from contextlib import contextmanager
 from datetime import datetime
 
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.models import Review, ReviewAnalysis
 from app.db.session import get_session_factory
-from app.services.review_repository import ReviewRepository
+from app.services.review_repository import (
+    ReviewRepository,
+    insert_review_optimistically,
+)
 
 
 class ReviewService:
@@ -44,20 +46,9 @@ class ReviewService:
         review = Review(**data)
         with self.session_factory() as session:
             repo = ReviewRepository(session, self.company_id)
-            existing = repo.find_existing_dedupe_id(review)
-            if existing is not None:
-                return None, True
-            try:
-                repo.add(review)
-                session.commit()
-                session.refresh(review)
-                return review, False
-            except IntegrityError:
-                session.rollback()
-                existing = repo.find_existing_dedupe_id(review)
-                if existing is not None:
-                    return None, True
-                raise
+            return insert_review_optimistically(
+                session, review, lambda: repo.find_existing_dedupe_id(review)
+            )
 
     def get_review(self, review_id: int) -> dict | None:
         with self._read_session() as session:
