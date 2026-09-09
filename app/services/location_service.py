@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from decimal import Decimal, InvalidOperation
 
 from sqlalchemy import select
@@ -8,6 +9,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.models import Location
 from app.db.session import get_session_factory
+from app.services.location_repository import LocationRepository
 
 
 def _optional_decimal(value: object, field_name: str) -> Decimal | None:
@@ -35,9 +37,24 @@ class LocationService:
         "is_active",
     }
 
-    def __init__(self, company_id: int | None = None, session_factory: sessionmaker[Session] | None = None):
+    def __init__(
+        self,
+        company_id: int | None = None,
+        session_factory: sessionmaker[Session] | None = None,
+        *,
+        session: Session | None = None,
+    ):
         self.company_id = company_id
         self.session_factory = session_factory or get_session_factory()
+        self._session = session
+
+    @contextmanager
+    def _read_session(self):
+        if self._session is not None:
+            yield self._session
+        else:
+            with self.session_factory() as session:
+                yield session
 
     def add_location(self, **data: object) -> Location:
         branch_name = str(data.get("branch_name") or "").strip()
@@ -81,23 +98,18 @@ class LocationService:
                     "A location with this source and external place ID already exists."
                 ) from exc
 
-    def get_all_locations(self, active_only: bool = False, crawl_enabled_only: bool = False) -> list[Location]:
-        with self.session_factory() as session:
-            statement = select(Location).order_by(Location.id)
-            if self.company_id is not None:
-                statement = statement.where(Location.company_id == self.company_id)
-            if active_only:
-                statement = statement.where(Location.is_active.is_(True))
-            if crawl_enabled_only:
-                statement = statement.where(Location.crawl_enabled.is_(True))
-            return list(session.scalars(statement))
+    def get_all_locations(
+        self, active_only: bool = False, crawl_enabled_only: bool = False
+    ) -> list[Location]:
+        with self._read_session() as session:
+            return LocationRepository(session, self.company_id).list(
+                active_only=active_only,
+                crawl_enabled_only=crawl_enabled_only,
+            )
 
     def get_location(self, location_id: int) -> Location | None:
-        with self.session_factory() as session:
-            statement = select(Location).where(Location.id == location_id)
-            if self.company_id is not None:
-                statement = statement.where(Location.company_id == self.company_id)
-            return session.scalar(statement)
+        with self._read_session() as session:
+            return LocationRepository(session, self.company_id).get(location_id)
 
     def update_location(self, location_id: int, field: str, value: object) -> Location:
         if field not in self.editable_fields:

@@ -321,33 +321,13 @@ class Location(Base):
     company: Mapped[Company] = relationship(back_populates="locations")
 
 
-class Review(Base):
-    __tablename__ = "reviews"
-    __table_args__ = (
-        CheckConstraint(
-            "rating IS NULL OR (rating >= 1 AND rating <= 5)",
-            name="ck_reviews_rating",
-        ),
-        CheckConstraint(
-            "analysis_status IN ('pending', 'completed', 'failed', 'incomplete')",
-            name="ck_reviews_analysis_status",
-        ),
-        Index("idx_reviews_location_id", "location_id"),
-        Index("idx_reviews_review_time", "review_time"),
-        Index("idx_reviews_rating", "rating"),
-        Index("idx_reviews_review_hash", "review_hash"),
-        Index("idx_reviews_source_place", "source", "external_place_id"),
-        # Serves the integration keyset scan: tenant, then the exact ORDER BY.
-        Index("idx_reviews_company_sync_id", "company_id", "sync_updated_at", "id"),
-    )
+class _GoogleReviewColumns:
+    """Kolom ulasan Google Maps yang identik antara `reviews` dan
+    `competitor_reviews`. Satu definisi supaya daftar kolom kedua tabel tidak
+    bisa menyimpang diam-diam (R4 tahap 2). Tiap model tetap memegang FK,
+    index, constraint, dan relationship-nya sendiri."""
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    company_id: Mapped[int] = mapped_column(
-        ForeignKey("companies.id", ondelete="CASCADE"), nullable=False
-    )
-    location_id: Mapped[int] = mapped_column(
-        ForeignKey("locations.id", ondelete="CASCADE"), nullable=False
-    )
     source: Mapped[str] = mapped_column(String(50), nullable=False)
     external_place_id: Mapped[str | None] = mapped_column(String(255))
     external_review_id: Mapped[str | None] = mapped_column(String(255))
@@ -378,6 +358,34 @@ class Review(Base):
         server_default=func.now(),
         onupdate=func.now(),
         nullable=False,
+    )
+
+
+class Review(_GoogleReviewColumns, Base):
+    __tablename__ = "reviews"
+    __table_args__ = (
+        CheckConstraint(
+            "rating IS NULL OR (rating >= 1 AND rating <= 5)",
+            name="ck_reviews_rating",
+        ),
+        CheckConstraint(
+            "analysis_status IN ('pending', 'completed', 'failed', 'incomplete')",
+            name="ck_reviews_analysis_status",
+        ),
+        Index("idx_reviews_location_id", "location_id"),
+        Index("idx_reviews_review_time", "review_time"),
+        Index("idx_reviews_rating", "rating"),
+        Index("idx_reviews_review_hash", "review_hash"),
+        Index("idx_reviews_source_place", "source", "external_place_id"),
+        # Serves the integration keyset scan: tenant, then the exact ORDER BY.
+        Index("idx_reviews_company_sync_id", "company_id", "sync_updated_at", "id"),
+    )
+
+    company_id: Mapped[int] = mapped_column(
+        ForeignKey("companies.id", ondelete="CASCADE"), nullable=False
+    )
+    location_id: Mapped[int] = mapped_column(
+        ForeignKey("locations.id", ondelete="CASCADE"), nullable=False
     )
     # Watermark OneBox pages on. Distinct from updated_at because analysis is
     # append-only: a review analysed weeks after it was scraped never touches
@@ -520,7 +528,7 @@ class Competitor(Base):
     )
 
 
-class CompetitorReview(Base):
+class CompetitorReview(_GoogleReviewColumns, Base):
     __tablename__ = "competitor_reviews"
     __table_args__ = (
         CheckConstraint(
@@ -532,40 +540,8 @@ class CompetitorReview(Base):
         Index("idx_comp_reviews_review_hash", "review_hash"),
     )
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
     competitor_id: Mapped[int] = mapped_column(
         ForeignKey("competitors.id", ondelete="CASCADE"), nullable=False
-    )
-    source: Mapped[str] = mapped_column(String(50), nullable=False)
-    external_place_id: Mapped[str | None] = mapped_column(String(255))
-    external_review_id: Mapped[str | None] = mapped_column(String(255))
-    reviewer_name: Mapped[str | None] = mapped_column(String(255))
-    reviewer_profile_url: Mapped[str | None] = mapped_column(Text)
-    reviewer_photo_url: Mapped[str | None] = mapped_column(Text)
-    reviewer_local_guide_level: Mapped[str | None] = mapped_column(String(100))
-    reviewer_total_reviews: Mapped[int | None] = mapped_column(Integer)
-    rating: Mapped[int | None] = mapped_column(Integer)
-    review_text: Mapped[str] = mapped_column(Text, default="", nullable=False)
-    review_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    review_relative_time: Mapped[str | None] = mapped_column(String(100))
-    review_language: Mapped[str | None] = mapped_column(String(20))
-    language: Mapped[str | None] = mapped_column(String(20))
-    like_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    owner_response_text: Mapped[str | None] = mapped_column(Text)
-    owner_response_time: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True)
-    )
-    scraped_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    raw_payload: Mapped[dict] = mapped_column(JsonType, default=dict, nullable=False)
-    review_hash: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        server_default=func.now(),
-        onupdate=func.now(),
-        nullable=False,
     )
 
     competitor: Mapped[Competitor] = relationship(back_populates="reviews")
