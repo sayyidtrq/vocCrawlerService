@@ -195,3 +195,161 @@ Gunakan pesan yang actionable:
 - Job progress bisa dipantau.
 - Rating trend memakai snapshot.
 - Fetch Review tetap mengarah ke flow final: Crawler raw DB -> OneBox pull -> Kelola Review -> AI async.
+
+---
+
+# SPESIFIK: FIELD, AUTOFILL, VALIDASI, DoD
+
+> Menjawab catatan: *"definition of done ini masih terlalu general, make it
+> specific — validasi detailnya berupa apa, autofill saat apa, field form
+> berubah jadi apa saja."*
+>
+> Semua `id` di bawah adalah **field yang benar-benar ada hari ini** di
+> `app/views/Voc/fetchjobs.volt`, bukan nama karangan. Yang belum ada ditandai
+> **BARU**.
+
+## F.1 Inventaris field hari ini
+
+| id | Label sekarang | Tipe | Nilai awal |
+| --- | --- | --- | --- |
+| `fj-loc-sel` | Cabang | select | kosong |
+| `fj-single-target` | **Jumlah review** | number 1–300 | 50 |
+| `fj-date-preset` | Rentang tanggal | select | Semua tanggal / 7 / 14 / 21 / 30 / Rentang sendiri |
+| `fj-date-from`, `fj-date-to` | (tanpa label, aria saja) | date | kosong |
+| `fj-sort` | Urutan pengambilan | select | Terbaru |
+| `fj-single-status` | panel status lokasi | teks | "Belum ada cabang dipilih" |
+| `fj-run` / `fj-queue-add` | Mulai / Tambah ke antrean | button | aktif |
+| **`fj-mode`** | **Mode fetch** | **select** | **BARU** — Update Terbaru / Backfill Awal / Rentang Khusus |
+
+**Keputusan istilah.** `fj-single-target` berganti label menjadi
+**"Batas pengambilan"** dengan keterangan *"Batas biaya penyisiran, bukan
+jumlah ulasan baru yang dijanjikan."* Alasannya: nilainya memang diteruskan
+sebagai `max_reviews_to_collect`, dan kata "Jumlah review" membuat orang
+membaca hasil "10/50" sebagai kegagalan padahal justru penyaringnya bekerja.
+Field-nya **tidak dihapus** — menghapusnya menghilangkan satu-satunya rem biaya
+yang dipegang operator.
+
+## F.2 Field berubah jadi apa, per mode
+
+`—` = tidak ditampilkan. **kunci** = terlihat tapi tidak bisa diubah, dengan
+alasan tertulis di bawah field.
+
+| Field | Update Terbaru (default) | Backfill Awal | Rentang Khusus |
+| --- | --- | --- | --- |
+| `fj-loc-sel` | wajib | wajib | wajib |
+| `fj-date-preset` | **kunci** ke "Sejak penarikan terakhir" | **kunci** ke "Semua tanggal" | bebas, default "Rentang sendiri" |
+| `fj-date-from` | terisi otomatis dari watermark, **kunci** | — | wajib diisi |
+| `fj-date-to` | — (selalu "sampai sekarang") | — | opsional |
+| `fj-single-target` | autofill **50**, bisa diubah | autofill **300**, bisa diubah | autofill **50**, bisa diubah |
+| `fj-sort` | **kunci** ke "Terbaru" | **kunci** ke "Terbaru" | **kunci** ke "Terbaru" bila ada rentang; bebas bila "Semua tanggal" |
+| `fj-run` | aktif bila lolos V1–V7 | aktif bila lolos V1–V7 | aktif bila lolos V1–V7 |
+
+Alasan yang WAJIB tampil di bawah field terkunci — dikunci diam-diam adalah
+cacat, bukan kerapian:
+
+- `fj-sort` → *"Google Maps tidak punya penyaring tanggal. Rentang hanya bisa dikerjakan lewat urutan Terbaru."* (**sudah berlaku hari ini** lewat `fj-sort-hint`)
+- `fj-date-from` pada Update Terbaru → *"Dimulai dari ulasan terbaru yang sudah masuk, dikurangi 1 hari sebagai jaga-jaga."*
+
+## F.3 Autofill: kapan tepatnya, dari mana
+
+Tiga pemicu, tidak lebih. Autofill yang berjalan di waktu lain akan menimpa
+ketikan orang.
+
+**A1 — saat `fj-loc-sel` berubah** (satu panggilan ke endpoint status lokasi):
+
+| Yang diisi | Sumbernya | Kalau sumbernya kosong |
+| --- | --- | --- |
+| `fj-date-from` | watermark OneBox: ulasan terbaru cabang itu − 1 hari | mode dipaksa **Backfill Awal** (A2) |
+| `fj-single-target` | 50 (Update Terbaru) / 300 (Backfill Awal) | — |
+| `fj-single-status` | Place ID, tanggal ulasan terbaru, status jadwal | "Belum pernah ditarik" |
+
+**A2 — saat cabang ternyata belum punya ulasan sama sekali:** mode otomatis
+pindah ke **Backfill Awal** disertai pemberitahuan:
+*"Cabang ini belum punya ulasan di OneBox. Mulai dengan Backfill Awal supaya penarikan berikutnya bisa lanjut dari titik yang jelas."*
+Mode tetap boleh diubah manual — ini pemberitahuan, bukan larangan.
+
+**A3 — saat `fj-mode` diubah:** field disusun ulang mengikuti F.2. Nilai yang
+**pernah diketik sendiri** pada `fj-single-target` tidak ditimpa; yang ditimpa
+hanya nilai yang masih berupa hasil autofill.
+
+> **Yang belum bisa di-autofill hari ini.** `place_review_count` baru tersedia
+> SESUDAH satu crawl berhasil, dan cursor durable di Crawler (P2) belum dibuat.
+> Jadi jumlah batch backfill belum bisa dihitung di muka — lihat F.6.
+
+## F.4 Validasi: kondisi, kapan diperiksa, pesan persis
+
+Pesan tampil **di bawah field terkait**, bukan alert global. Alert global hanya
+untuk V5 dan V6 karena penyebabnya di luar form.
+
+| # | Kondisi | Diperiksa saat | Pesan | Efek |
+| --- | --- | --- | --- | --- |
+| V1 | `fj-loc-sel` kosong | submit | "Pilih cabang dulu." | `fj-run` disabled |
+| V2 | Cabang tanpa Place ID | saat cabang dipilih | "Cabang ini belum punya Google Place ID. Lengkapi di layar Lokasi sebelum menarik ulasan." | `fj-run` disabled |
+| V3 | `fj-date-from` > `fj-date-to` | saat salah satu berubah | "Tanggal awal melewati tanggal akhir." | `fj-run` disabled |
+| V4 | Rentang Khusus, `fj-date-from` kosong | submit | "Rentang Khusus butuh tanggal awal. Kalau ingin semua tanggal, pakai mode Backfill Awal." | `fj-run` disabled |
+| V5 | Ada jadwal berjalan untuk cabang sama | saat cabang dipilih **dan** submit | "Jadwal *nama* sedang menarik ulasan untuk cabang ini sejak *jam*. Menariknya bersamaan akan menyisir ulasan yang sama dua kali." | `fj-run` disabled + tautan ke Riwayat Fetch |
+| V6 | Kuota harian `VOC_SCRAPE` habis | submit | "Kuota crawl harian sudah habis. Coba lagi besok atau tambah kuota di Pengaturan > Setup Parameter." | `fj-run` disabled |
+| V7 | `fj-single-target` di luar 1–300 | saat diubah | "Batas pengambilan antara 1 dan 300." | `fj-run` disabled |
+| V8 | Rentang > 365 hari (Rentang Khusus) | saat diubah | "Rentang lebih dari setahun akan menyisir sangat lama. Pertimbangkan Backfill Awal." | **peringatan saja**, `fj-run` tetap aktif |
+
+V5 dan V6 **sudah berlaku di backend** (`jadwalSedangBerjalan()` dan penjaga
+benefit). Yang belum ada: pemeriksaannya **sebelum** submit — hari ini orang
+baru tahu setelah menekan tombol.
+
+## F.5 Definition of Done — dapat diuji satu per satu
+
+Tiap baris harus bisa dijawab ya/tidak oleh orang yang membuka layar, bukan
+oleh yang membaca kodenya.
+
+**Form**
+
+1. Mode fetch jadi field pertama, default **Update Terbaru**.
+2. Pilih cabang yang pernah ditarik → `fj-date-from` terisi sendiri dan terkunci, alasannya tertulis di bawahnya.
+3. Pilih cabang tanpa ulasan → mode pindah sendiri ke Backfill Awal disertai pemberitahuan.
+4. Ganti mode → susunan field berubah sesuai F.2 tanpa reload.
+5. Label `fj-single-target` berbunyi "Batas pengambilan", bukan "Jumlah review".
+6. Tidak ada field terkunci tanpa kalimat alasan di bawahnya.
+
+**Validasi**
+
+7. V1–V8 berperilaku persis seperti F.4.
+8. V5 muncul **saat cabang dipilih**, bukan sesudah menekan Mulai.
+9. Pesan muncul di bawah field terkait; hanya V5/V6 yang jadi alert.
+
+**Hasil & keterbacaan**
+
+10. Sesudah job selesai, layar menyebut angka: disisir, cocok, baru, sudah ada, di luar rentang.
+11. Hasil "0 baru" dengan duplikat tinggi **tidak** memakai warna/kata kegagalan.
+12. Alasan berhenti tampil sebagai kalimat, warnanya beda antara "sudah selesai" dan "masih ada sisanya". ✅ **sudah jalan di dev**
+13. Batch banyak cabang dengan alasan berbeda menyebut jumlahnya ("1 dari 5 cabang …"). ✅ **kode siap, belum ada kasusnya di dev**
+
+**Rating trend**
+
+14. Snapshot tercatat dari penarikan **terjadwal**, bukan hanya manual.
+15. Grafik tren menampilkan rating sendiri dan rating Google berdampingan. ✅ **kode siap**
+16. Tooltip menyebut selisih cakupan dalam angka ("Belum tertarik: N ulasan"). ✅ **kode siap**
+17. Cabang tanpa data Google tidak menampilkan legenda kosong. ✅ **kode siap**
+
+## F.6 Yang sengaja ditunda, dan alasannya
+
+| Item | Kenapa ditunda |
+| --- | --- |
+| Rencana batch backfill otomatis | Butuh `place_review_count` per cabang, baru ada sesudah satu crawl berhasil. Sebelum itu angkanya tebakan. |
+| "Last seen review date" dari Crawler | P2 (cursor durable) belum dibuat. OneBox sementara memakai watermark dari datanya sendiri. |
+| Tab Kuartalan & Tahunan pada tren | Perlu bucket per periode, dan titik snapshot harus rapat dulu. Tidak ada gunanya tab kuartal saat titiknya baru dua. |
+
+## F.7 Findings UI yang digabung ke sini
+
+Dipindahkan dari `crawler-system/PLAN_REVIEW_FETCH_LOGIC_REFACTOR.md` karena
+lingkupnya UI/UX:
+
+| Finding asli | Dijawab di |
+| --- | --- |
+| DoD UI/UX belum ada | F.5 |
+| "ulasan sepertinya dihilangkan aja" | F.1 — label diganti, field dipertahankan sebagai rem biaya |
+| Pemberitahuan first run & scheduler | A2 dan V5 |
+| Autofill form berdasarkan aturan | F.3 |
+| Validasi form saat kurang | F.4 |
+
+Aturan tambahan : 
+- No ai slop , jangan gunakan 
