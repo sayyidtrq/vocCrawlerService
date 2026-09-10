@@ -1,9 +1,45 @@
 # Plan - Review Fetch Logic Refactor
 
-Status: Draft implementation plan
+Status: In progress - sebagian besar perbaikan kontrak, stop reason, dedupe, dan rating snapshot sudah merged ke `main`
 Owner utama: Crawler System
 Pairing: OneBox team untuk contract dan UI
+Last update: 2026-09-01
 
+## Progress Update - 2026-09-01
+
+Branch Crawler yang sudah masuk `main`:
+
+| PR | Commit | Isi utama | Status |
+| --- | --- | --- | --- |
+| #9 | `81b1e0e` | Window-aware crawl job: `crawl_mode`, `max_reviews_to_collect`, `scan_limit`, date range, counters dasar, active job reuse | Merged + deployed |
+| #10 | `79e2a8a` / `ebf3543` | Google rating snapshot dari Selenium dan expose ke detail batch | Merged + deployed |
+| #11 | `0c3c1b3` / `0ce172e` | Stable Selenium review identity, legacy external-id dedupe, batch-level `stop_reason` dan `stop_reasons` | Merged + deployed |
+
+Verifikasi server pada 2026-09-01:
+
+- Server `ciptadra-svr` sudah di `main` commit `0c3c1b3`.
+- `hermina-review-api` healthy.
+- `hermina-crawl-worker` running dengan headed Chromium di virtual display.
+- `http://127.0.0.1:8000/api/health` dan `http://10.13.13.90:8000/api/health` mengembalikan `200 OK`.
+- Smoke endpoint `/api/integration/v1/crawl-jobs?limit=3` berhasil dan response list sudah memuat `stop_reason` + `stop_reasons`.
+- Automated tests Crawler: `115 passed`.
+
+Ringkasan status:
+
+| Area                   | Status                    | Catatan                                                                                                                                                                                     |
+| ---------------------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| P0 audit existing      | Done                      | Endpoint, worker, model, worklist, dan gap contract sudah diaudit selama debugging fetch jobs.                                                                                              |
+| P1 contract/payload    | Done untuk kebutuhan demo | Payload lama `target_review_count` tetap kompatibel; payload baru mendukung `max_reviews_to_collect`, `scan_limit`, `crawl_mode`, dan date range.                                           |
+| P3 crawl algorithm     | Partial done              | Stop by target, scan limit, date window, timeout/no more review, sort warning, counters dasar sudah ada. Duplicate streak eksplisit belum dibuat.                                           |
+| P4 lock/idempotency    | Partial done              | `Idempotency-Key` dan active batch reuse untuk target/window tunggal sudah ada. Lock granular manual-vs-scheduler lintas seluruh mode masih perlu hardening.                                |
+| P5 rating snapshot     | Done                      | Snapshot Google diambil dari header Maps, tidak menggagalkan crawl, tersimpan di metadata, dan expose ke detail batch. OneBox sudah consume.                                                |
+| P6 counters/status     | Partial done              | Job detail dan batch list sudah punya counters + `stop_reason`; histogram `stop_reasons` tersedia untuk batch campuran. Standard status final belum sepenuhnya selaras dengan istilah plan. |
+| P2 cursor/target state | Not started               | Watermark durable di Crawler (`last_seen_review_id`, `first_run_completed_at`, dll.) belum dibuat. OneBox sementara memakai watermark dari data sendiri.                                    |
+| P7 E2E proof           | Partial                   | Smoke API dan real historical batch terbaca. Proof penuh OneBox import -> Kelola Review -> rating trend masih perlu dijalankan setelah sisi OneBox selesai deploy/migrasi.                  |
+
+**Findings** 
+- Schedule jalan namun ulasan yang masuk lewat scheduler kenapa tidak terekam di rating snapshot ? contoh 1 september scheduler eka hospital margonda nyala namun tidak saat di lihat visualisaisnya di chart bagian tren , belum ada snapshot yang amsuk sama sekali saat memilih eka hospital margonda. sebenernya ini tidak tahu ya masalah UI , menempatan dataa ke UI, atau BE (cek lebih lanjut lagi)
+- Kerjakan yang lainnya secara bertahap
 ## Goal
 
 Membuat crawler lebih reliable untuk Fetch Review, Scheduler, dan demo key process VoC dengan mengubah logika dari count-first menjadi window-first, cursor-aware, dan overlap-safe.
@@ -224,3 +260,7 @@ Minimal automated tests:
 - History menjelaskan kenapa hasil baru bisa kurang dari target.
 - Rating snapshot tersedia untuk target yang dicrawl.
 - OneBox tetap bisa pull raw review dan Kelola Review langsung usable.
+
+**Findings** :
+
+- U forgot the most important thing. Definition of done dalam segi User Interface dan user experience. Reflecting basaed on my story perlu ada DoD yang memang khusus untuk ui/ux apakah sudah mengarahkan user untuk melakukan fetch review yang benar dan layout serta komponen - komponen yang intuitif. sebenernya ini salah satu alesan gua bilang ulasan sepertinya dihilangkan aja ya. Lalu pemberitahuan seperti first run dan scheduler, autofill form based on the rules, and form validation jika kurang

@@ -1,8 +1,29 @@
 # Codex Todo Scope - Review Fetch Logic Refactor
 
-Status: Draft kerja Codex
+Status: In progress - P1/P3/P4 partial, P5 done, P0.5/T1 done
 Tanggal: 2026-09-01
 Modul besar: VoC Fetch Review / Fetch Jobs Crawl
+
+## Status Implementasi Terakhir - 2026-09-01
+
+Sudah merged ke `main` dan sudah smoke di server `ciptadra-svr`:
+
+| Scope | Status | Commit/PR | Catatan |
+| --- | --- | --- | --- |
+| P1 - Contract dan payload normalization | Done untuk demo | PR #9 `81b1e0e` | `target_review_count` tetap kompatibel; `max_reviews_to_collect`, `scan_limit`, `crawl_mode`, dan date range sudah diterima. |
+| P3 - Crawl algorithm/counters dasar | Partial | PR #9 `81b1e0e` | Scan limit, date window stop, out-of-range counters, dan partial/success logic sudah membaik. Duplicate streak eksplisit belum ada. |
+| P4 - Lock/idempotency | Partial | PR #9 `81b1e0e` | Idempotency dan active batch reuse target/window sudah ada; hardening manual-vs-scheduler penuh masih tersisa. |
+| P5 - Rating snapshot | Done | PR #10 `79e2a8a`, commit `ebf3543` | Snapshot Google Maps diambil dan expose pada detail batch. OneBox sudah consume. |
+| P6 - Status/observability | Partial | PR #11 `0c3c1b3`, commit `0ce172e` | Batch list expose `stop_reason` dan `stop_reasons`; job detail tetap granular. |
+| P0.5/T1 - Stable review identity | Done | PR #11 `0c3c1b3`, commit `0ce172e` | Selenium hash tidak memakai `review_relative_time`; insert review dan competitor review dedupe via `external_review_id`. |
+| P2 - Cursor dan target state | Not started | - | Belum ada durable watermark di tabel `locations` Crawler. |
+| P7 - E2E proof | Partial | - | Smoke API berhasil; E2E penuh dengan OneBox import/Kelola Review masih perlu evidence. |
+
+Bukti test:
+
+- Local Crawler: `python -m pytest tests -q` -> `115 passed`.
+- Server health: `127.0.0.1:8000/api/health` dan `10.13.13.90:8000/api/health` -> `200 OK`.
+- Integration smoke: `/api/integration/v1/crawl-jobs?limit=3` mengembalikan `stop_reason` dan `stop_reasons`.
 
 ## Tujuan Codex
 
@@ -19,17 +40,17 @@ Target akhir:
 
 ## Scope P0 - Validasi Existing System
 
-- [ ] Baca ulang current implementation endpoint `POST /api/integration/v1/crawl-jobs`.
-- [ ] Baca service worker/antrian crawl.
-- [ ] Baca model/tabel untuk location, worklist, crawl job, dan reviews.
-- [ ] Identifikasi field existing yang bisa dipakai untuk cursor:
+- [x] Baca ulang current implementation endpoint `POST /api/integration/v1/crawl-jobs`.
+- [x] Baca service worker/antrian crawl.
+- [x] Baca model/tabel untuk location, worklist, crawl job, dan reviews.
+- [x] Identifikasi field existing yang bisa dipakai untuk cursor:
   - `last_fetched_at`
   - `last_success_at`
   - `last_review_date`
   - `metadata`
   - `batch_id`
-- [ ] Catat gap field yang belum tersedia.
-- [ ] Pastikan backward compatibility dengan payload OneBox saat ini.
+- [x] Catat gap field yang belum tersedia.
+- [x] Pastikan backward compatibility dengan payload OneBox saat ini.
 
 Deliverable:
 
@@ -38,18 +59,18 @@ Deliverable:
 
 ## Scope P1 - Contract dan Payload Normalization
 
-- [ ] Tambahkan normalisasi payload agar `target_review_count` tetap diterima.
-- [ ] Tambahkan internal field baru:
+- [x] Tambahkan normalisasi payload agar `target_review_count` tetap diterima.
+- [x] Tambahkan internal field baru:
   - `crawl_mode`
   - `max_reviews_to_collect`
   - `scan_limit`
   - `date_range.from`
   - `date_range.to`
-- [ ] Default `crawl_mode`:
-  - `initial_backfill` jika target belum pernah baseline.
-  - `regular_delta` jika target sudah punya cursor.
+- [x] Default `crawl_mode`:
+  - `regular_delta` jika tidak ada date range.
   - `custom_range` jika user mengirim date range eksplisit.
-- [ ] Response create job wajib berisi:
+  - `initial_backfill` belum aktif karena baseline target state belum tersedia.
+- [x] Response create job wajib berisi:
   - `batch_id`
   - `status`
   - `accepted_targets`
@@ -82,13 +103,13 @@ Deliverable:
 
 ## Scope P3 - Crawl Algorithm
 
-- [ ] Ubah logika stop condition crawler:
+- [x] Ubah logika stop condition crawler:
   - stop saat matched mencapai `max_reviews_to_collect`
   - stop saat scan mencapai `scan_limit`
   - stop saat review lebih tua dari date range
-  - stop saat duplicate streak melewati threshold
+  - stop saat duplicate streak melewati threshold (**belum eksplisit**)
   - stop saat timeout/no more review
-- [ ] Pisahkan counter:
+- [x] Pisahkan counter:
   - `scanned`
   - `matched`
   - `inserted`
@@ -96,8 +117,8 @@ Deliverable:
   - `out_of_range_newer`
   - `out_of_range_older`
   - `failed_items`
-- [ ] Pastikan duplicate tinggi tidak otomatis `failed`.
-- [ ] Pastikan date range dengan hasil kurang dari target tetap bisa `succeeded`.
+- [x] Pastikan duplicate tinggi tidak otomatis `failed`.
+- [x] Pastikan date range dengan hasil kurang dari target tetap bisa `succeeded`.
 
 Deliverable:
 
@@ -113,10 +134,10 @@ Deliverable:
 tenant_id + source + target_id + crawl_mode + normalized_date_window
 ```
 
-- [ ] Jika job dengan key sama masih `queued/running`, return existing job.
+- [x] Jika job dengan key sama masih `queued/running`, return existing job.
 - [ ] Manual fetch tidak membuat job duplikat saat scheduler sedang berjalan untuk target/window sama.
-- [ ] Simpan dan hormati `Idempotency-Key` dari OneBox.
-- [ ] Tambahkan response `reused_existing_job=true` saat job lama dipakai ulang.
+- [x] Simpan dan hormati `Idempotency-Key` dari OneBox.
+- [x] Tambahkan response `reused_existing_job=true` saat job lama dipakai ulang.
 
 Deliverable:
 
@@ -125,13 +146,13 @@ Deliverable:
 
 ## Scope P5 - Rating Snapshot
 
-- [ ] Saat crawler membuka Google Maps target, ambil:
+- [x] Saat crawler membuka Google Maps target, ambil:
   - rating Google saat ini
   - total review Google saat ini
   - waktu snapshot
-- [ ] Simpan snapshot terhubung ke target dan crawl job.
-- [ ] Expose snapshot dalam API yang bisa ditarik OneBox.
-- [ ] Jangan hitung rating trend dari review yang berhasil masuk saja.
+- [x] Simpan snapshot terhubung ke target dan crawl job.
+- [x] Expose snapshot dalam API yang bisa ditarik OneBox.
+- [x] Jangan hitung rating trend dari review yang berhasil masuk saja.
 
 Deliverable:
 
@@ -149,7 +170,7 @@ Deliverable:
   - `failed`
   - `cancelled`
   - `expired`
-- [ ] Standardisasi stop reason:
+- [x] Standardisasi stop reason:
   - `target_reached`
   - `older_than_window`
   - `scan_limit_reached`
@@ -158,8 +179,8 @@ Deliverable:
   - `no_more_reviews`
   - `blocked_by_google_login`
   - `target_not_found`
-- [ ] Tambahkan logging batch/job yang cukup untuk debug UI OneBox.
-- [ ] Pastikan error asli tidak hilang di generic message.
+- [x] Tambahkan logging batch/job yang cukup untuk debug UI OneBox.
+- [x] Pastikan error asli tidak hilang di generic message.
 
 Deliverable:
 
@@ -168,9 +189,9 @@ Deliverable:
 
 ## Scope P7 - E2E Proof
 
-- [ ] Jalankan test dengan satu lokasi kecil.
-- [ ] Jalankan test duplicate-heavy.
-- [ ] Jalankan test custom date range.
+- [x] Jalankan test dengan satu lokasi kecil.
+- [x] Jalankan test duplicate-heavy.
+- [x] Jalankan test custom date range.
 - [ ] Jalankan test backfill dengan scan limit kecil.
 - [ ] Pastikan OneBox bisa pull review setelah Crawler selesai.
 - [ ] Simpan evidence:
