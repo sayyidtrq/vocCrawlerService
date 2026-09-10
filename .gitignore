@@ -1,5 +1,7 @@
 .env*
 !.env.staging-1123.example
+.onebox-staging-*.token
+.token-issue-output.tmp
 venv/
 .venv/
 __pycache__/
