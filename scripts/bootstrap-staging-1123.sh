@@ -56,7 +56,7 @@ printf '%s\n' \
   'APP_ENV=staging' \
   'APP_NAME=VoC Crawler Staging 1.123' \
   'LOG_LEVEL=INFO' \
-  "DATABASE_URL=postgresql+psycopg://$DB_USER:$DB_PASSWORD@postgresql:5432/$DB_NAME" \
+  "DATABASE_URL=postgresql+psycopg2://$DB_USER:$DB_PASSWORD@postgresql:5432/$DB_NAME" \
   "INTEGRATION_CURSOR_SECRET=$CURSOR_SECRET" \
   "JWT_SECRET_KEY=$JWT_SECRET" \
   "SERVICE_TOKEN_PEPPER=$TOKEN_PEPPER" \
