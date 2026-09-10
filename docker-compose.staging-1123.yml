@@ -1,0 +1,48 @@
+services:
+  api:
+    image: voc-crawler:staging-1123
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: voc-staging-1123-api
+    restart: unless-stopped
+    env_file:
+      - .env.staging-1123
+    ports:
+      - "${STAGING_API_PORT:-8001}:8000"
+    volumes:
+      - ./exports/staging-1123:/app/exports
+    networks:
+      - postgres-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  crawl-worker:
+    image: voc-crawler:staging-1123
+    container_name: voc-staging-1123-worker
+    restart: unless-stopped
+    env_file:
+      - .env.staging-1123
+    environment:
+      SKIP_MIGRATIONS: "true"
+      SELENIUM_HEADLESS: "${SELENIUM_HEADLESS:-false}"
+      SELENIUM_USER_DATA_DIR: /app/.selenium-profile
+    command: ["/app/scripts/run_crawl_worker.sh"]
+    volumes:
+      - staging-1123-selenium-profile:/app/.selenium-profile
+    networks:
+      - postgres-network
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  staging-1123-selenium-profile:
+
+networks:
+  postgres-network:
+    external: true

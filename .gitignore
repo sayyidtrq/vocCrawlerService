@@ -1,4 +1,5 @@
 .env*
+!.env.staging-1123.example
 venv/
 .venv/
 __pycache__/
