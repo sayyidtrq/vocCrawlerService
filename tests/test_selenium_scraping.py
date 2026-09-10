@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
+import pytest
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -9,6 +10,7 @@ from sqlalchemy.pool import StaticPool
 from app.config import Settings
 from app.db.base import Base
 from app.db.models import Company, CompetitorReview, FetchLog, Review
+from app.integrations.review_source_client import ReviewSourceError
 from app.integrations.selenium_google_maps_client import (
     SeleniumGoogleMapsReviewClient,
 )
@@ -488,3 +490,155 @@ def test_date_range_with_only_out_of_range_reviews_is_partial(tmp_path):
     assert result["total_inserted"] == 0
     assert result["total_skipped_out_of_range"] == 2
     assert result["metadata"]["matched_review_cards"] == 0
+
+
+class _FakeEl:
+    def __init__(self, attrs=None, text=""):
+        self._attrs = attrs or {}
+        self.text = text
+        self.id = f"el-{id(self)}"
+        self.clicks = 0
+
+    def get_attribute(self, name):
+        return self._attrs.get(name)
+
+    def is_displayed(self):
+        return True
+
+    def click(self):
+        self.clicks += 1
+        callback = getattr(self, "on_click", None)
+        if callback is not None:
+            callback()
+
+    def find_elements(self, _by, _selector):
+        return []
+
+
+class _FakeDriver:
+    """Minimal DOM: find_elements answers from a {selector: [elements]} map."""
+
+    def __init__(self, registry, body_text=""):
+        self._registry = registry
+        self._body = _FakeEl(text=body_text)
+        self.current_url = "https://www.google.com/maps/place/x/reviews"
+
+    def find_elements(self, _by, selector):
+        return list(self._registry.get(selector, []))
+
+    def find_element(self, _by, _selector):
+        return self._body
+
+    def execute_script(self, *_a, **_k):
+        return None
+
+
+def _client_with_short_wait(tmp_path):
+    settings = make_settings(tmp_path).model_copy(
+        update={
+            "selenium_wait_timeout_seconds": 0,
+            "selenium_scroll_delay_seconds": 0,
+        }
+    )
+    return SeleniumGoogleMapsReviewClient(settings)
+
+
+def test_overview_only_panel_raises_instead_of_returning_preview_cards(tmp_path):
+    # Panel Ringkasan: tab "Ulasan" ADA tapi tidak aktif, hanya 3 kartu
+    # pratinjau, tidak ada div[role='feed']. Meng-klik tab tidak mengubah
+    # apa pun (DOM statis). Scraper harus gagal keras, bukan mengembalikan 3.
+    overview_tab = _FakeEl({"role": "tab", "aria-selected": "true",
+                            "aria-label": "Ringkasan RS Contoh"})
+    reviews_tab = _FakeEl({"role": "tab", "aria-selected": "false",
+                           "aria-label": "Ulasan untuk RS Contoh"})
+    registry = {
+        "[role='tab']": [overview_tab, reviews_tab],
+        "button[role='tab'][aria-label^='Ulasan' i]": [reviews_tab],
+        "div[data-review-id]": [_FakeEl({"data-review-id": f"r{i}"})
+                                for i in range(3)],
+    }
+    client = _client_with_short_wait(tmp_path)
+
+    with pytest.raises(ReviewSourceError, match="Review container was not found"):
+        client._wait_for_review_cards_or_open_panel(_FakeDriver(registry))
+    assert reviews_tab.clicks == 1  # it did try to open the list
+
+
+def test_click_opens_reviews_list(tmp_path):
+    # Dari panel Ringkasan, klik tab "Ulasan": tab jadi aktif dan panel
+    # menampilkan daftar ulasan penuh. Kartu itulah yang dikembalikan.
+    overview_tab = _FakeEl({"role": "tab", "aria-selected": "true",
+                            "aria-label": "Ringkasan RS Contoh"})
+    reviews_tab = _FakeEl({"role": "tab", "aria-selected": "false",
+                           "aria-label": "Ulasan untuk RS Contoh"})
+    preview = [_FakeEl({"data-review-id": f"p{i}"}) for i in range(3)]
+    full = [_FakeEl({"data-review-id": f"r{i}"}) for i in range(12)]
+    registry = {
+        "[role='tab']": [overview_tab, reviews_tab],
+        "button[role='tab'][aria-label^='Ulasan' i]": [reviews_tab],
+        "div[data-review-id]": preview,
+    }
+
+    def _open_reviews_list():
+        overview_tab._attrs["aria-selected"] = "false"
+        reviews_tab._attrs["aria-selected"] = "true"
+        registry["div[data-review-id]"] = full
+
+    reviews_tab.on_click = _open_reviews_list
+    client = _client_with_short_wait(tmp_path)
+
+    result = client._wait_for_review_cards_or_open_panel(_FakeDriver(registry))
+
+    assert result == full
+
+
+def test_click_then_only_preview_count_cards_raises(tmp_path):
+    # Setelah klik, tab "Ulasan" aktif tapi yang terbaca cuma 3 kartu — tak
+    # bisa dibedakan dari pratinjau Ringkasan (`_find_review_cards` tidak
+    # terlingkup ke daftar). Gagal keras, bukan mengembalikannya sebagai 3.
+    overview_tab = _FakeEl({"role": "tab", "aria-selected": "true",
+                            "aria-label": "Ringkasan RS Contoh"})
+    reviews_tab = _FakeEl({"role": "tab", "aria-selected": "false",
+                           "aria-label": "Ulasan untuk RS Contoh"})
+    preview = [_FakeEl({"data-review-id": f"p{i}"}) for i in range(3)]
+    registry = {
+        "[role='tab']": [overview_tab, reviews_tab],
+        "button[role='tab'][aria-label^='Ulasan' i]": [reviews_tab],
+        "div[data-review-id]": preview,
+    }
+
+    def _flip_selected_only():
+        overview_tab._attrs["aria-selected"] = "false"
+        reviews_tab._attrs["aria-selected"] = "true"
+        # daftar ulasan tak kunjung render — tetap 3 kartu pratinjau
+
+    reviews_tab.on_click = _flip_selected_only
+    client = _client_with_short_wait(tmp_path)
+
+    with pytest.raises(ReviewSourceError, match="Review container was not found"):
+        client._wait_for_review_cards_or_open_panel(_FakeDriver(registry))
+
+
+def test_reviews_tab_active_returns_cards(tmp_path):
+    reviews_tab = _FakeEl({"role": "tab", "aria-selected": "true",
+                           "aria-label": "Ulasan untuk RS Contoh"})
+    cards = [_FakeEl({"data-review-id": f"r{i}"}) for i in range(3)]
+    registry = {"[role='tab']": [reviews_tab], "div[data-review-id]": cards}
+    client = _client_with_short_wait(tmp_path)
+
+    result = client._wait_for_review_cards_or_open_panel(_FakeDriver(registry))
+
+    assert result == cards
+
+
+def test_unconfirmed_reviews_surface_raises_even_with_visible_cards(tmp_path):
+    # Tidak ada tab, tidak ada kontrol pembuka daftar — kartu yang terlihat
+    # tidak bisa dibuktikan sebagai daftar ulasan lengkap (bisa jadi pratinjau
+    # Ringkasan, atau kontrolnya lambat render). Harus gagal keras, bukan
+    # mengembalikan kartu yang belum terkonfirmasi.
+    cards = [_FakeEl({"data-review-id": f"r{i}"}) for i in range(2)]
+    registry = {"[role='tab']": [], "div[data-review-id]": cards}
+    client = _client_with_short_wait(tmp_path)
+
+    with pytest.raises(ReviewSourceError, match="Review container was not found"):
+        client._wait_for_review_cards_or_open_panel(_FakeDriver(registry))

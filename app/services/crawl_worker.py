@@ -202,6 +202,21 @@ class CrawlWorker:
                 ),
                 result=result,
             )
+        except ValueError as exc:
+            # Target di luar rentang, scan_limit tak masuk akal, target hilang:
+            # itu galat permintaan/konfigurasi yang permanen. Meretry-nya 3x
+            # sebagai WORKER_EXCEPTION hanya membuang ~6 menit per batch.
+            logger.warning(
+                "crawl_worker.invalid_request",
+                extra={"job_id": claimed.id, "error": str(exc)},
+            )
+            return self._finish(
+                claimed,
+                status="failed",
+                result={},
+                error_code="INVALID_REQUEST",
+                error_message=str(exc),
+            )
         except Exception:
             logger.exception(
                 "crawl_worker.execution_failed", extra={"job_id": claimed.id}

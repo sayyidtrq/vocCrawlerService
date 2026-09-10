@@ -6,8 +6,20 @@ REVIEW_CARD_SELECTORS = [
     "div[data-reviewid]",
 ]
 
+# Kontrol yang membuka daftar ulasan penuh dari panel tempat. Google Maps
+# menghapus div[role='feed']; panel Ringkasan dan daftar ulasan kini berbagi
+# kelas kontainer gulir yang sama, jadi 3-6 kartu pratinjau di Ringkasan BUKAN
+# daftar ulasan. Satu-satunya pembeda yang bisa dipercaya adalah tab yang aktif,
+# maka tab "Ulasan" didahulukan di sini. jsaction tombol kini berprefiks dinamis
+# (pane.wfvdleNN...) sehingga hanya bentuk *= yang bertahan.
 REVIEW_BUTTON_SELECTORS = [
-    "button[jsaction='pane.reviewChart.moreReviews']",
+    "button[role='tab'][aria-label^='Ulasan' i]",
+    "button[role='tab'][aria-label^='Reviews' i]",
+    "button[aria-label^='Ulasan lainnya' i]",
+    "button[aria-label^='More reviews' i]",
+    "button.uj73Ce",
+    "button[role='tab'][aria-label*='ulasan' i]",
+    "button[role='tab'][aria-label*='review' i]",
     "button[jsaction*='moreReviews']",
     "[role='button'][jsaction*='moreReviews']",
     "button[aria-label*='reviews' i]",
@@ -87,9 +99,10 @@ OWNER_RESPONSE_TIME_SELECTORS = [
 ]
 
 SORT_BUTTON_SELECTORS = [
-    "button[data-value='Sort']",
-    "button[aria-label*='Sort reviews' i]",
     "button[aria-label*='Urutkan ulasan' i]",
+    "button[aria-label*='Sort reviews' i]",
+    "button[data-value='Urutkan']",
+    "button[data-value='Sort']",
 ]
 
 PLACE_RATING_SNAPSHOT_SELECTORS = [

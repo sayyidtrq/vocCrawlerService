@@ -32,6 +32,10 @@ logger = logging.getLogger(__name__)
 class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
     source_name = GoogleMapsReviewParser.source_name
     max_no_new_scroll_attempts = 5
+    # Panel Ringkasan Google Maps menampilkan paling banyak 3 kartu ulasan
+    # penuh; daftar ulasan penuh mulai dari ~10. Dipakai untuk membedakan
+    # keduanya saat kita baru saja mengklik tab "Ulasan".
+    _OVERVIEW_PREVIEW_CARD_CAP = 3
 
     def __init__(self, settings: Settings, driver_factory=None):
         self.settings = settings
@@ -306,44 +310,76 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
             )
 
     def _wait_for_review_cards_or_open_panel(self, driver) -> list[WebElement]:
-        wait = WebDriverWait(
-            driver, self.settings.selenium_wait_timeout_seconds
+        # Satu tenggat untuk seluruh proses, dibagi antar fase. Tanpa ini tiap
+        # WebDriverWait dapat jatah 20 dtk penuh sendiri-sendiri: render
+        # bertahap yang gagal bisa menghabiskan 60 dtk, dan fallback pencarian
+        # nama menggandakannya jadi ~120 dtk per percobaan.
+        deadline = (
+            time.monotonic() + self.settings.selenium_wait_timeout_seconds
         )
-        try:
-            cards = wait.until(
-                lambda current: (
-                    self._find_review_cards(current)
-                    or (
-                        [self._find_review_open_button(current)]
-                        if self._find_review_open_button(current)
-                        else []
+
+        def _wait(condition):
+            budget = max(0.0, deadline - time.monotonic())
+            try:
+                return WebDriverWait(driver, budget).until(condition)
+            except TimeoutException:
+                return None
+
+        # 1. Tunggu panel tempat cukup terrender untuk dinilai: tab "Ulasan"
+        #    sudah aktif, atau kontrol pembukanya muncul. JANGAN berhenti hanya
+        #    karena ada kartu — panel Ringkasan selalu punya 3-6 kartu
+        #    pratinjau, dan itulah sumber bug lama.
+        _wait(
+            lambda d: self._reviews_surface_ready(d)
+            or self._find_review_open_button(d) is not None
+        )
+
+        # 2. Kalau belum di daftar ulasan, buka. Google Maps tidak lagi
+        #    mengekspos div[role='feed']; panel Ringkasan dan daftar ulasan
+        #    berbagi kontainer gulir yang sama, jadi kartu pratinjau di
+        #    Ringkasan BUKAN daftar ulasan. Membukanya wajib selama kontrolnya
+        #    ada — kalau gagal, kita gagal keras, bukan mengembalikan 3 ulasan.
+        opened_via_click = False
+        if not self._reviews_surface_ready(driver):
+            button = self._find_review_open_button(driver)
+            if button is not None:
+                opened_via_click = True
+                self._safe_click(driver, button)
+                _wait(lambda d: self._reviews_surface_ready(d))
+                # aria-selected berkedip lebih dulu; beri panel waktu mengganti
+                # isi Ringkasan dengan daftar ulasan sebelum kartunya dibaca —
+                # jeda yang sama seperti setelah _apply_sort.
+                time.sleep(min(1.0, self.settings.selenium_scroll_delay_seconds))
+
+        # 3. Hanya percaya kartu kalau tab "Ulasan" yang sedang aktif. Kalau
+        #    kita yang mengklik untuk membukanya, tuntut juga jumlah kartu di
+        #    atas batas pratinjau Ringkasan (3 kartu penuh): `_find_review_cards`
+        #    tidak terlingkup ke daftar ulasan, jadi selama pratinjau lama masih
+        #    menempel sesaat setelah tab beralih, ambang ini yang mencegah kita
+        #    mengembalikannya sebagai "sukses" untuk target kecil. Tempat dengan
+        #    <= 3 ulasan Google memang jarang; kegagalan yang terlihat di situ
+        #    lebih baik daripada under-fetch diam-diam.
+        if self._reviews_surface_ready(driver):
+            cards = _wait(
+                lambda d: (
+                    found
+                    if (found := self._find_review_cards(d))
+                    and (
+                        not opened_via_click
+                        or len(found) > self._OVERVIEW_PREVIEW_CARD_CAP
                     )
+                    else None
                 )
             )
-        except TimeoutException:
-            cards = []
+            if cards:
+                return cards
 
-        button = self._find_review_open_button(driver)
-        if button is not None:
-            self._safe_click(driver, button)
-            try:
-                return wait.until(
-                    lambda current: (
-                        self._find_review_cards(current)
-                        if self._find_first(
-                            current, selectors.SCROLL_CONTAINER_SELECTORS
-                        )
-                        else []
-                    )
-                )
-            except TimeoutException as exc:
-                raise ReviewSourceError(
-                    "No reviews were loaded. Please check the review URL "
-                    "or try non-headless mode."
-                ) from exc
-        if cards and isinstance(cards[0], WebElement):
-            return cards
-
+        # Sampai di sini daftar ulasan tidak pernah terkonfirmasi. Kartu apa pun
+        # yang mungkin terlihat sekarang adalah pratinjau panel Ringkasan (atau
+        # kontrol pembukanya gagal render dalam tenggat) — mengembalikannya
+        # sebagai "sukses" justru bug yang sedang diperbaiki. Kita gagal keras:
+        # pesan di bawah memicu fallback pencarian nama, lalu kegagalan job yang
+        # jujur, alih-alih diam-diam mencatat 3 ulasan.
         try:
             body_text = driver.find_element(By.TAG_NAME, "body").text.lower()
         except WebDriverException:
@@ -745,7 +781,45 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
         return None
 
     @staticmethod
-    def _find_review_open_button(root) -> WebElement | None:
+    def _reviews_surface_ready(driver) -> bool:
+        """True hanya bila tab "Ulasan" yang sedang aktif.
+
+        Google Maps menghapus div[role='feed']; daftar ulasan dan panel
+        Ringkasan kini berbagi kelas kontainer gulir, jadi kehadiran kartu
+        saja tidak membuktikan apa-apa. Pembeda satu-satunya yang bisa
+        dipercaya adalah label tab yang terpilih — dicocokkan sebagai prefiks
+        ("Ulasan untuk...", "Reviews for...") supaya nama tempat yang
+        kebetulan memuat kata "ulasan"/"review" tidak ikut lolos.
+        """
+        try:
+            tabs = driver.find_elements(By.CSS_SELECTOR, "[role='tab']")
+        except WebDriverException:
+            return False
+        for tab in tabs:
+            try:
+                if (tab.get_attribute("aria-selected") or "").lower() != "true":
+                    continue
+                label = (
+                    tab.get_attribute("aria-label") or tab.text or ""
+                ).strip().lower()
+            except WebDriverException:
+                continue
+            if label.startswith(("ulasan", "review")):
+                return True
+        return False
+
+    # Tombol yang label-nya cocok dengan selektor tetapi BUKAN pembuka daftar
+    # ulasan: kotak tulis ulasan dan kotak telusur ulasan di dalam panel.
+    _REVIEW_OPEN_BUTTON_SKIP = (
+        "tulis ulasan",
+        "write a review",
+        "telusuri ulasan",
+        "search reviews",
+        "cari ulasan",
+    )
+
+    @classmethod
+    def _find_review_open_button(cls, root) -> WebElement | None:
         for selector in selectors.REVIEW_BUTTON_SELECTORS:
             try:
                 elements = root.find_elements(By.CSS_SELECTOR, selector)
@@ -759,7 +833,7 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
                             element.get_attribute("aria-label") or "",
                         ]
                     ).lower()
-                    if "tulis ulasan" in label or "write a review" in label:
+                    if any(s in label for s in cls._REVIEW_OPEN_BUTTON_SKIP):
                         continue
                     if element.is_displayed():
                         return element
