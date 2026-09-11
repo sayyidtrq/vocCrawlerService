@@ -125,9 +125,12 @@ class Settings(BaseModel):
     selenium_max_scroll_attempts: int = 400
     selenium_wait_timeout_seconds: int = 20
     selenium_user_data_dir: Path | None = Path(".selenium-profile")
-    # "http://host:port" - no inline user:pass. Chrome's --proxy-server flag
-    # has no credential field; use an IP-whitelisted proxy so the provider
-    # authorizes this server's outbound IP instead.
+    # "http(s)://[user:pass@]host:port". Chrome's --proxy-server flag has no
+    # credential field, so inline user:pass is answered via a generated
+    # Chrome extension (selenium_authenticated_proxy) instead. Must be
+    # http/https - selenium_authenticated_proxy strips the URL scheme when
+    # building --proxy-server, so a "socks5://" prefix here would silently
+    # be lost.
     selenium_proxy_url: str | None = None
     analysis_batch_size: int = 20
     prompt_version: str = "v1"

@@ -339,7 +339,49 @@ def test_selenium_driver_applies_proxy_when_configured(monkeypatch, tmp_path):
 
     SeleniumGoogleMapsReviewClient(settings)._create_driver()
 
-    assert "--proxy-server=http://203.0.113.10:8080" in captured["options"].arguments
+    # selenium_authenticated_proxy strips the scheme when building
+    # --proxy-server (Chrome accepts a bare host:port).
+    assert "--proxy-server=203.0.113.10:8080" in captured["options"].arguments
+
+
+def test_selenium_driver_proxy_with_credentials_loads_auth_extension(
+    monkeypatch, tmp_path
+):
+    # Webshare's free tier (and most proxy providers) authenticate by
+    # username/password, not IP whitelist. Chrome's --proxy-server flag has
+    # no credential field, so selenium_authenticated_proxy answers the proxy
+    # auth challenge via a generated Chrome extension instead.
+    settings = make_settings(tmp_path).model_copy(
+        update={"selenium_proxy_url": "http://demo_user:demo_pass@203.0.113.10:8080"}
+    )
+    captured = {}
+
+    class _FakeChromeDriver:
+        def execute_cdp_cmd(self, cmd, params):
+            pass
+
+    def fake_chrome(*, service, options):
+        captured["options"] = options
+        return _FakeChromeDriver()
+
+    monkeypatch.setattr(
+        "app.integrations.selenium_google_maps_client.shutil.which",
+        lambda _binary: None,
+    )
+    monkeypatch.setattr(
+        "app.integrations.selenium_google_maps_client.webdriver.Chrome",
+        fake_chrome,
+    )
+
+    SeleniumGoogleMapsReviewClient(settings)._create_driver()
+
+    options = captured["options"]
+    assert "--proxy-server=203.0.113.10:8080" in options.arguments
+    # Credentials never leak into a bare Chrome flag; they're baked into the
+    # generated extension instead (asserted by presence of either path).
+    assert options.extensions or any(
+        a.startswith("--load-extension=") for a in options.arguments
+    )
 
 
 def test_selenium_driver_skips_proxy_flag_when_unset(monkeypatch, tmp_path):
