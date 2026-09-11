@@ -28,6 +28,16 @@ REVIEW_BUTTON_SELECTORS = [
     "[role='button'][aria-label*='ulasan' i]",
 ]
 
+# Tombol "Lihat ulasan lainnya (N)" di dalam daftar ulasan yang sudah
+# terbuka. Berbeda dari REVIEW_BUTTON_SELECTORS yang membuka tab Ulasan dari
+# panel Ringkasan: batch berikutnya hanya dimuat lewat klik eksplisit ini.
+LOAD_MORE_REVIEWS_SELECTORS = [
+    "button[aria-label^='Lihat ulasan lainnya' i]",
+    "button[aria-label^='See more reviews' i]",
+    "button[aria-label*='ulasan lainnya' i]",
+    "button[aria-label*='more reviews' i]",
+]
+
 SCROLL_CONTAINER_SELECTORS = [
     "div[role='feed']",
     "div.m6QErb.DxyBCb.kA9KIf.dS8AEf",

@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 import pytest
+from selenium.common.exceptions import StaleElementReferenceException
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -541,6 +542,87 @@ def _client_with_short_wait(tmp_path):
         }
     )
     return SeleniumGoogleMapsReviewClient(settings)
+
+
+def test_advance_review_list_clicks_load_more_and_adds_cards(tmp_path):
+    initial_cards = [_FakeEl({"data-review-id": f"r{i}"}) for i in range(5)]
+    more_cards = [_FakeEl({"data-review-id": f"r{i}"}) for i in range(5, 10)]
+    button = _FakeEl()
+    registry = {
+        "div[data-review-id]": initial_cards,
+        "button[aria-label^='Lihat ulasan lainnya' i]": [button],
+    }
+    button.on_click = lambda: registry["div[data-review-id]"].extend(more_cards)
+    client = _client_with_short_wait(tmp_path)
+    driver = _FakeDriver(registry)
+
+    client._advance_review_list(driver, _FakeEl())
+
+    assert button.clicks == 1
+    assert len(client._find_review_cards(driver)) == 10
+
+
+def test_advance_review_list_without_load_more_is_safe(tmp_path):
+    # Tanpa tombol "load more", fungsi tetap harus melakukan scroll biasa -
+    # bukan diam saja - supaya daftar yang benar-benar infinite-scroll masih
+    # maju.
+    client = _client_with_short_wait(tmp_path)
+    scroll_calls = []
+
+    class _RecordingDriver(_FakeDriver):
+        def execute_script(self, _script, *args, **_kwargs):
+            scroll_calls.append(args)
+
+    container = _FakeEl()
+    result = client._advance_review_list(_RecordingDriver({}), container)
+
+    assert scroll_calls == [(container,)]
+    assert result is container
+
+
+def test_advance_review_list_swallows_stale_button_click(tmp_path):
+    # Tombol "load more" bisa hilang/berganti tepat saat diklik (AJAX
+    # menukar markup-nya). Itu bukan kegagalan crawl - harus tetap lanjut ke
+    # scroll, bukan meledak sampai ke fetch_reviews dan membuang ulasan yang
+    # sudah terkumpul.
+    class _StaleButton(_FakeEl):
+        def click(self):
+            raise StaleElementReferenceException("gone")
+
+    button = _StaleButton()
+    registry = {"button[aria-label^='Lihat ulasan lainnya' i]": [button]}
+    client = _client_with_short_wait(tmp_path)
+
+    result = client._advance_review_list(_FakeDriver(registry), _FakeEl())
+
+    assert result is not None  # did not raise
+
+
+def test_apply_sort_waits_for_option_after_click(tmp_path, monkeypatch):
+    # Opsi menu muncul setelah beberapa kali polling, bukan seketika saat
+    # diklik - kalau _apply_sort membaca sekali saja (perilaku lama), ini
+    # akan gagal.
+    sort_button = _FakeEl()
+    option = _FakeEl()
+    client = _client_with_short_wait(tmp_path)
+    option_xpath = client._sort_menu_option_xpath(client.SORT_KEYWORDS["newest"])
+    registry = {"button[aria-label*='Urutkan ulasan' i]": [sort_button]}
+    polls = {"count": 0}
+
+    class _DelayedMenuDriver(_FakeDriver):
+        def find_elements(self, by, selector):
+            if selector == option_xpath:
+                polls["count"] += 1
+                return [option] if polls["count"] >= 3 else []
+            return super().find_elements(by, selector)
+
+    monkeypatch.setattr(
+        "app.integrations.selenium_google_maps_client.time.sleep", lambda _seconds: None
+    )
+
+    assert client._apply_sort(_DelayedMenuDriver(registry), "newest") is True
+    assert option.clicks == 1
+    assert polls["count"] >= 3
 
 
 def test_overview_only_panel_raises_instead_of_returning_preview_cards(tmp_path):

@@ -524,21 +524,7 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
             else:
                 no_new_attempts = 0
 
-            try:
-                driver.execute_script(
-                    "arguments[0].scrollTop += "
-                    "Math.max(400, arguments[0].clientHeight * 0.85);",
-                    container,
-                )
-            except (JavascriptException, StaleElementReferenceException):
-                current_cards = self._find_review_cards(driver)
-                if not current_cards:
-                    raise ReviewSourceError(
-                        "Review container could not be scrolled."
-                    )
-                container = self._find_scroll_container(
-                    driver, current_cards[0]
-                )
+            container = self._advance_review_list(driver, container)
             scroll_attempts += 1
             time.sleep(self.settings.selenium_scroll_delay_seconds)
 
@@ -562,6 +548,32 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
             stopped_reason,
             len(reviews),
         )
+
+    def _advance_review_list(self, driver, container) -> WebElement:
+        """Load the next review batch, then advance the scroll container."""
+        button = self._find_first(driver, selectors.LOAD_MORE_REVIEWS_SELECTORS)
+        if button is not None:
+            try:
+                self._safe_click(driver, button)
+            except StaleElementReferenceException:
+                # Tombol bisa hilang/berganti tepat saat diklik (AJAX
+                # menukar markup-nya). Bukan kegagalan - lanjut scroll saja,
+                # iterasi berikutnya akan mencari tombolnya lagi dari awal.
+                pass
+        try:
+            driver.execute_script(
+                "arguments[0].scrollTop += "
+                "Math.max(400, arguments[0].clientHeight * 0.85);",
+                container,
+            )
+        except (JavascriptException, StaleElementReferenceException):
+            current_cards = self._find_review_cards(driver)
+            if not current_cards:
+                raise ReviewSourceError(
+                    "Review container could not be scrolled."
+                )
+            container = self._find_scroll_container(driver, current_cards[0])
+        return container
 
     def _find_scroll_container(self, driver, first_card: WebElement):
         container = self._find_first(driver, selectors.SCROLL_CONTAINER_SELECTORS)
@@ -698,6 +710,19 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
         "lowest_rating": ("lowest rating", "peringkat terendah", "rating terendah"),
     }
 
+    @staticmethod
+    def _sort_menu_option_xpath(keywords: tuple[str, ...]) -> str:
+        conditions = " or ".join(
+            "contains(translate(normalize-space(.), "
+            "'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), "
+            f"'{keyword}')"
+            for keyword in keywords
+        )
+        return (
+            "//*[self::div or self::li][@role='menuitemradio' or "
+            f"@role='menuitem'][{conditions}]"
+        )
+
     def _apply_sort(self, driver, sort_by: str = "newest") -> bool:
         """Terapkan urutan pada panel ulasan.
 
@@ -716,26 +741,21 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
 
         try:
             self._safe_click(driver, sort_button)
-
-            syarat = " or ".join(
-                "contains(translate(normalize-space(.), "
-                "'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), "
-                f"'{k}')"
-                for k in kata
-            )
-            options = driver.find_elements(
-                By.XPATH,
-                "//*[self::div or self::li][@role='menuitemradio' or "
-                f"@role='menuitem'][{syarat}]",
-            )
-            for option in options:
-                if option.is_displayed():
-                    self._safe_click(driver, option)
-                    time.sleep(1)
-                    return True
-
-            logger.info("Pilihan urutan '%s' tidak ada di menu.", sort_by)
-            return False
+            option_xpath = self._sort_menu_option_xpath(kata)
+            try:
+                options = WebDriverWait(driver, 2).until(
+                    lambda d: [
+                        option
+                        for option in d.find_elements(By.XPATH, option_xpath)
+                        if option.is_displayed()
+                    ]
+                )
+            except TimeoutException:
+                logger.info("Pilihan urutan '%s' tidak ada di menu.", sort_by)
+                return False
+            self._safe_click(driver, options[0])
+            time.sleep(1)
+            return True
         except WebDriverException:
             logger.info("Review sorting was unavailable; using current order.")
             return False
