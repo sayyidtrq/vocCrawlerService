@@ -249,10 +249,15 @@ def test_selenium_driver_uses_container_browser_and_safe_flags(
             "chromedriver": "/usr/bin/chromedriver",
         }.get(binary)
 
+    class _FakeChromeDriver:
+        def execute_cdp_cmd(self, cmd, params):
+            captured["cdp_cmd"] = cmd
+            captured["cdp_params"] = params
+
     def fake_chrome(*, service, options):
         captured["service"] = service
         captured["options"] = options
-        return object()
+        return _FakeChromeDriver()
 
     monkeypatch.setattr(
         "app.integrations.selenium_google_maps_client.shutil.which",
@@ -271,6 +276,42 @@ def test_selenium_driver_uses_container_browser_and_safe_flags(
     assert "--no-sandbox" in captured["options"].arguments
     assert "--disable-dev-shm-usage" in captured["options"].arguments
     assert captured["service"].path == "/usr/bin/chromedriver"
+
+
+def test_selenium_driver_hides_automation_fingerprint(monkeypatch, tmp_path):
+    # Google Maps membatasi pagination ulasan untuk browser yang terdeteksi
+    # otomasi (navigator.webdriver bawaan Selenium). Pastikan flag penyamar
+    # dan patch CDP-nya benar-benar terpasang, bukan cuma niat di komentar.
+    settings = make_settings(tmp_path)
+    captured = {}
+
+    class _FakeChromeDriver:
+        def execute_cdp_cmd(self, cmd, params):
+            captured["cdp_cmd"] = cmd
+            captured["cdp_params"] = params
+
+    def fake_chrome(*, service, options):
+        captured["options"] = options
+        return _FakeChromeDriver()
+
+    monkeypatch.setattr(
+        "app.integrations.selenium_google_maps_client.shutil.which",
+        lambda _binary: None,
+    )
+    monkeypatch.setattr(
+        "app.integrations.selenium_google_maps_client.webdriver.Chrome",
+        fake_chrome,
+    )
+
+    SeleniumGoogleMapsReviewClient(settings)._create_driver()
+
+    options = captured["options"]
+    assert "--disable-blink-features=AutomationControlled" in options.arguments
+    assert options.experimental_options["excludeSwitches"] == ["enable-automation"]
+    assert options.experimental_options["useAutomationExtension"] is False
+    assert captured["cdp_cmd"] == "Page.addScriptToEvaluateOnNewDocument"
+    assert "navigator" in captured["cdp_params"]["source"]
+    assert "webdriver" in captured["cdp_params"]["source"]
 
 
 def test_place_id_resolution_keeps_source_and_has_name_search_fallback(tmp_path):

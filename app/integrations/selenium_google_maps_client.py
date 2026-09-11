@@ -176,6 +176,15 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
         options.add_argument("--disable-popup-blocking")
         options.add_argument("--no-sandbox")
         options.add_argument("--disable-dev-shm-usage")
+        # Google Maps diam-diam membatasi pagination ulasan untuk browser yang
+        # terdeteksi otomasi: tombol "load more" tetap terklik (telemetry-nya
+        # tercatat) tapi datanya tidak pernah dimuat - tanpa CAPTCHA yang
+        # kelihatan. navigator.webdriver bawaan Selenium adalah sinyal
+        # deteksi paling umum. Ini untuk crawler ulasan bisnis milik sendiri,
+        # bukan untuk melewati proteksi keamanan/pembayaran.
+        options.add_argument("--disable-blink-features=AutomationControlled")
+        options.add_experimental_option("excludeSwitches", ["enable-automation"])
+        options.add_experimental_option("useAutomationExtension", False)
         browser_path = (
             shutil.which("google-chrome")
             or shutil.which("chromium")
@@ -199,12 +208,27 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
             else ChromeService()
         )
         try:
-            return webdriver.Chrome(service=service, options=options)
+            driver = webdriver.Chrome(service=service, options=options)
         except WebDriverException as exc:
             raise ReviewSourceError(
                 "Selenium browser failed to start. Please check Chrome and "
                 "ChromeDriver installation."
             ) from exc
+        try:
+            driver.execute_cdp_cmd(
+                "Page.addScriptToEvaluateOnNewDocument",
+                {
+                    "source": (
+                        "Object.defineProperty(navigator, 'webdriver', "
+                        "{get: () => undefined});"
+                    )
+                },
+            )
+        except WebDriverException:
+            logger.warning(
+                "Could not patch navigator.webdriver; continuing anyway."
+            )
+        return driver
 
     @staticmethod
     def _place_id_url(location: Location) -> str | None:
