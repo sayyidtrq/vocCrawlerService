@@ -314,6 +314,62 @@ def test_selenium_driver_hides_automation_fingerprint(monkeypatch, tmp_path):
     assert "webdriver" in captured["cdp_params"]["source"]
 
 
+def test_selenium_driver_applies_proxy_when_configured(monkeypatch, tmp_path):
+    settings = make_settings(tmp_path).model_copy(
+        update={"selenium_proxy_url": "http://203.0.113.10:8080"}
+    )
+    captured = {}
+
+    class _FakeChromeDriver:
+        def execute_cdp_cmd(self, cmd, params):
+            pass
+
+    def fake_chrome(*, service, options):
+        captured["options"] = options
+        return _FakeChromeDriver()
+
+    monkeypatch.setattr(
+        "app.integrations.selenium_google_maps_client.shutil.which",
+        lambda _binary: None,
+    )
+    monkeypatch.setattr(
+        "app.integrations.selenium_google_maps_client.webdriver.Chrome",
+        fake_chrome,
+    )
+
+    SeleniumGoogleMapsReviewClient(settings)._create_driver()
+
+    assert "--proxy-server=http://203.0.113.10:8080" in captured["options"].arguments
+
+
+def test_selenium_driver_skips_proxy_flag_when_unset(monkeypatch, tmp_path):
+    settings = make_settings(tmp_path)
+    captured = {}
+
+    class _FakeChromeDriver:
+        def execute_cdp_cmd(self, cmd, params):
+            pass
+
+    def fake_chrome(*, service, options):
+        captured["options"] = options
+        return _FakeChromeDriver()
+
+    monkeypatch.setattr(
+        "app.integrations.selenium_google_maps_client.shutil.which",
+        lambda _binary: None,
+    )
+    monkeypatch.setattr(
+        "app.integrations.selenium_google_maps_client.webdriver.Chrome",
+        fake_chrome,
+    )
+
+    SeleniumGoogleMapsReviewClient(settings)._create_driver()
+
+    assert not any(
+        a.startswith("--proxy-server=") for a in captured["options"].arguments
+    )
+
+
 def test_place_id_resolution_keeps_source_and_has_name_search_fallback(tmp_path):
     session_factory = make_session_factory()
     _, location = seed_location(session_factory)

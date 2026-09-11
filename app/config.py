@@ -52,6 +52,7 @@ _BLANK_USES_DEFAULT_FIELDS = (
     "selenium_scroll_delay_seconds",
     "selenium_max_scroll_attempts",
     "selenium_wait_timeout_seconds",
+    "selenium_proxy_url",
     "analysis_batch_size",
     "page_size",
     "show_raw_payload",
@@ -124,6 +125,10 @@ class Settings(BaseModel):
     selenium_max_scroll_attempts: int = 400
     selenium_wait_timeout_seconds: int = 20
     selenium_user_data_dir: Path | None = Path(".selenium-profile")
+    # "http://host:port" - no inline user:pass. Chrome's --proxy-server flag
+    # has no credential field; use an IP-whitelisted proxy so the provider
+    # authorizes this server's outbound IP instead.
+    selenium_proxy_url: str | None = None
     analysis_batch_size: int = 20
     prompt_version: str = "v1"
     page_size: int = 20

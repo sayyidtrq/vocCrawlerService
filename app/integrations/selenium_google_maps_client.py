@@ -185,6 +185,8 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
         options.add_argument("--disable-blink-features=AutomationControlled")
         options.add_experimental_option("excludeSwitches", ["enable-automation"])
         options.add_experimental_option("useAutomationExtension", False)
+        if self.settings.selenium_proxy_url:
+            options.add_argument(f"--proxy-server={self.settings.selenium_proxy_url}")
         browser_path = (
             shutil.which("google-chrome")
             or shutil.which("chromium")
