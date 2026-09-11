@@ -19,7 +19,6 @@ from selenium.webdriver.chrome.service import Service as ChromeService
 from selenium.webdriver.common.by import By
 from selenium.webdriver.remote.webelement import WebElement
 from selenium.webdriver.support.ui import WebDriverWait
-from selenium_authenticated_proxy import SeleniumAuthenticatedProxy
 
 from app.config import Settings
 from app.db.models import Location
@@ -187,9 +186,7 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
         options.add_experimental_option("excludeSwitches", ["enable-automation"])
         options.add_experimental_option("useAutomationExtension", False)
         if self.settings.selenium_proxy_url:
-            SeleniumAuthenticatedProxy(
-                proxy_url=self.settings.selenium_proxy_url
-            ).enrich_chrome_options(options)
+            options.add_argument(f"--proxy-server={self.settings.selenium_proxy_url}")
         browser_path = (
             shutil.which("google-chrome")
             or shutil.which("chromium")

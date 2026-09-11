@@ -6,8 +6,7 @@
 #
 # Direct dependencies (what the app actually imports):
 #   SQLAlchemy alembic psycopg2-binary python-dotenv email-validator requests
-#   rich tabulate pydantic pydantic-settings selenium selenium-authenticated-proxy
-#   beautifulsoup4 openai
+#   rich tabulate pydantic pydantic-settings selenium beautifulsoup4 openai
 #   httpx pytest ruff (+ fastapi uvicorn[standard] from apps/api/requirements.txt)
 #   google-genai/google-auth removed (R9): the only client analysis_service.py
 #   ever constructs is LocalLLMClient; the concrete GeminiClient class was
@@ -60,7 +59,6 @@ requests==2.34.2
 rich==14.3.4
 ruff==0.16.6
 selenium==4.48.0
-selenium-authenticated-proxy==1.1.3
 sniffio==1.3.1
 sortedcontainers==2.4.0
 soupsieve==2.9.2
