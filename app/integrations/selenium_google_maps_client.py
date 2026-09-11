@@ -312,9 +312,32 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
         return cls._resolve_url_with_source(location)[0]
 
     def _open_review_panel(self, driver, url: str) -> list[WebElement]:
-        driver.get(url)
+        self._get_with_proxy_retry(driver, url)
         self._accept_consent_if_present(driver)
         return self._wait_for_review_cards_or_open_panel(driver)
+
+    @staticmethod
+    def _get_with_proxy_retry(driver, url: str, attempts: int = 3) -> None:
+        """Navigate, retrying past a transient proxy 407.
+
+        selenium_authenticated_proxy answers the upstream proxy's auth
+        challenge via a Manifest V3 extension whose service worker doesn't
+        always finish registering its listener before the very first
+        navigation - that one request goes out unauthenticated and Chrome
+        renders its own "HTTP ERROR 407" page. By the next attempt the
+        listener is live. A no-op when no proxy is configured (no proxy
+        means no 407 is possible).
+        """
+        for attempt in range(attempts):
+            driver.get(url)
+            try:
+                body_text = driver.find_element(By.TAG_NAME, "body").text
+            except WebDriverException:
+                body_text = ""
+            if "HTTP ERROR 407" not in body_text:
+                return
+            if attempt < attempts - 1:
+                time.sleep(1)
 
     @staticmethod
     def _can_try_name_search_fallback(error: ReviewSourceError) -> bool:

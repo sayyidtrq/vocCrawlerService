@@ -785,6 +785,44 @@ def test_overview_only_panel_raises_instead_of_returning_preview_cards(tmp_path)
     assert reviews_tab.clicks == 1  # it did try to open the list
 
 
+def test_get_with_proxy_retry_survives_transient_407(tmp_path):
+    # selenium_authenticated_proxy's extension listener can lose the race
+    # against the very first navigation. That request comes back as Chrome's
+    # own "HTTP ERROR 407" page - retrying (not failing outright) is the fix.
+    client = _client_with_short_wait(tmp_path)
+    get_calls = []
+
+    class _FlakyProxyDriver(_FakeDriver):
+        def get(self, url):
+            get_calls.append(url)
+            self._body.text = (
+                "This page isn't working\nHTTP ERROR 407"
+                if len(get_calls) == 1
+                else "Graha Asuransi Astra"
+            )
+
+    driver = _FlakyProxyDriver({})
+    client._get_with_proxy_retry(driver, "https://example.com/maps")
+
+    assert get_calls == ["https://example.com/maps"] * 2
+    assert "407" not in driver.find_element(None, None).text
+
+
+def test_get_with_proxy_retry_gives_up_after_max_attempts(tmp_path):
+    client = _client_with_short_wait(tmp_path)
+    get_calls = []
+
+    class _AlwaysFlakyDriver(_FakeDriver):
+        def get(self, url):
+            get_calls.append(url)
+            self._body.text = "This page isn't working\nHTTP ERROR 407"
+
+    driver = _AlwaysFlakyDriver({})
+    client._get_with_proxy_retry(driver, "https://example.com/maps", attempts=3)
+
+    assert len(get_calls) == 3  # stops retrying, doesn't hang forever
+
+
 def test_click_opens_reviews_list(tmp_path):
     # Dari panel Ringkasan, klik tab "Ulasan": tab jadi aktif dan panel
     # menampilkan daftar ulasan penuh. Kartu itulah yang dikembalikan.
