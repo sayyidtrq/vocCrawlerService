@@ -6,7 +6,7 @@ import time
 from datetime import datetime
 from urllib.parse import quote_plus, urlparse
 
-from selenium import webdriver
+import undetected_chromedriver as uc
 from selenium.common.exceptions import (
     ElementClickInterceptedException,
     JavascriptException,
@@ -15,7 +15,6 @@ from selenium.common.exceptions import (
     TimeoutException,
     WebDriverException,
 )
-from selenium.webdriver.chrome.service import Service as ChromeService
 from selenium.webdriver.common.by import By
 from selenium.webdriver.remote.webelement import WebElement
 from selenium.webdriver.support.ui import WebDriverWait
@@ -173,7 +172,7 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
                     logger.warning("Selenium browser could not close cleanly.")
 
     def _create_driver(self):
-        options = webdriver.ChromeOptions()
+        options = uc.ChromeOptions()
         options.add_argument("--lang=id-ID")
         options.add_argument("--window-size=1440,1000")
         options.add_argument("--disable-notifications")
@@ -184,8 +183,13 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
         # terdeteksi otomasi: tombol "load more" tetap terklik (telemetry-nya
         # tercatat) tapi datanya tidak pernah dimuat - tanpa CAPTCHA yang
         # kelihatan. navigator.webdriver bawaan Selenium adalah sinyal
-        # deteksi paling umum. Ini untuk crawler ulasan bisnis milik sendiri,
-        # bukan untuk melewati proteksi keamanan/pembayaran.
+        # deteksi paling umum, tetapi bukan satu-satunya - plain chromedriver
+        # juga menyuntik variabel `cdc_*` yang mudah dideteksi (lihat
+        # markdowns/integrations/INCIDENT_P0_GOOGLE_MAPS_ONLY_5_REVIEWS.md
+        # §12-13). undetected-chromedriver menambal binary chromedriver-nya
+        # sendiri untuk itu; flag di bawah menambal sinyal level-browser yang
+        # tersisa. Ini untuk crawler ulasan bisnis milik sendiri, bukan untuk
+        # melewati proteksi keamanan/pembayaran.
         options.add_argument("--disable-blink-features=AutomationControlled")
         options.add_experimental_option("excludeSwitches", ["enable-automation"])
         options.add_experimental_option("useAutomationExtension", False)
@@ -196,25 +200,28 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
             or shutil.which("chromium")
             or shutil.which("chromium-browser")
         )
-        if browser_path:
-            options.binary_location = browser_path
+        user_data_dir = None
         if self.settings.selenium_user_data_dir:
             self.settings.selenium_user_data_dir.mkdir(
                 parents=True, exist_ok=True
             )
-            options.add_argument(
-                f"--user-data-dir={self.settings.selenium_user_data_dir}"
-            )
-        if self.settings.selenium_headless:
-            options.add_argument("--headless=new")
+            user_data_dir = str(self.settings.selenium_user_data_dir)
         driver_path = shutil.which("chromedriver")
-        service = (
-            ChromeService(executable_path=driver_path)
-            if driver_path
-            else ChromeService()
-        )
         try:
-            driver = webdriver.Chrome(service=service, options=options)
+            # user_data_dir/headless/browser_executable_path/driver_executable_path
+            # go through uc.Chrome's own kwargs rather than options.add_argument:
+            # UC manages its own profile/headless flag handling (headless=True
+            # also injects extra anti-detection JS on every page load) and
+            # patches whichever chromedriver binary driver_executable_path
+            # points at, so passing an explicit path here keeps the pinned
+            # container binary instead of UC downloading a new one.
+            driver = uc.Chrome(
+                options=options,
+                browser_executable_path=browser_path,
+                driver_executable_path=driver_path,
+                user_data_dir=user_data_dir,
+                headless=self.settings.selenium_headless,
+            )
         except WebDriverException as exc:
             raise ReviewSourceError(
                 "Selenium browser failed to start. Please check Chrome and "
