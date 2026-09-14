@@ -36,6 +36,10 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
     # penuh; daftar ulasan penuh mulai dari ~10. Dipakai untuk membedakan
     # keduanya saat kita baru saja mengklik tab "Ulasan".
     _OVERVIEW_PREVIEW_CARD_CAP = 3
+    _GOOGLE_AUTH_WALL_MARKERS = (
+        "login untuk menikmati fitur terbaik dari google maps",
+        "sign in to enjoy the best of google maps",
+    )
 
     def __init__(self, settings: Settings, driver_factory=None):
         self.settings = settings
@@ -406,6 +410,11 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
         # sebagai "sukses" justru bug yang sedang diperbaiki. Kita gagal keras:
         # pesan di bawah memicu fallback pencarian nama, lalu kegagalan job yang
         # jujur, alih-alih diam-diam mencatat 3 ulasan.
+        # Login wall juga dapat muncul sebelum daftar ulasan pernah terbuka.
+        # Tanpa pemeriksaan di sini, kondisi permanen itu tersamar sebagai
+        # perubahan selector dan worker menghabiskan seluruh retry budget.
+        self._raise_if_google_auth_wall(driver)
+
         try:
             body_text = driver.find_element(By.TAG_NAME, "body").text.lower()
         except WebDriverException:
@@ -414,7 +423,9 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
             raise ReviewSourceError(
                 "Google Maps is showing a limited view. Open the dedicated "
                 "Selenium browser profile and sign in manually once, then "
-                "retry. Login automation is intentionally not supported."
+                "retry. Login automation is intentionally not supported.",
+                retriable=False,
+                code="GOOGLE_AUTH_REQUIRED",
             )
         raise ReviewSourceError(
             "Review container was not found. Google Maps layout may have "
@@ -468,6 +479,7 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
             and scroll_attempts < self.settings.selenium_max_scroll_attempts
             and no_new_attempts < self.max_no_new_scroll_attempts
         ):
+            self._raise_if_google_auth_wall(driver)
             if batas_waktu is not None and time.monotonic() >= batas_waktu:
                 kehabisan_waktu = True
                 break
@@ -586,6 +598,7 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
                 # menukar markup-nya). Bukan kegagalan - lanjut scroll saja,
                 # iterasi berikutnya akan mencari tombolnya lagi dari awal.
                 pass
+            self._raise_if_google_auth_wall(driver)
         try:
             driver.execute_script(
                 "arguments[0].scrollTop += "
@@ -600,6 +613,43 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
                 )
             container = self._find_scroll_container(driver, current_cards[0])
         return container
+
+    @classmethod
+    def _raise_if_google_auth_wall(cls, driver) -> None:
+        """Fail explicitly when Google replaces pagination with a login wall."""
+        try:
+            dialogs = driver.find_elements(By.CSS_SELECTOR, "[role='dialog']")
+        except WebDriverException:
+            dialogs = []
+        for dialog in dialogs:
+            try:
+                if not dialog.is_displayed():
+                    continue
+                text = (dialog.text or "").strip().lower()
+            except WebDriverException:
+                continue
+            if any(marker in text for marker in cls._GOOGLE_AUTH_WALL_MARKERS):
+                cls._raise_google_auth_required()
+        # Google has changed this overlay between role=dialog and an unlabelled
+        # fixed div. The sentence itself is specific enough to use as the
+        # fallback while avoiding a false positive from the ordinary Login
+        # button in the top navigation.
+        try:
+            body_text = (driver.find_element(By.TAG_NAME, "body").text or "").lower()
+        except WebDriverException:
+            body_text = ""
+        if any(marker in body_text for marker in cls._GOOGLE_AUTH_WALL_MARKERS):
+            cls._raise_google_auth_required()
+
+    @staticmethod
+    def _raise_google_auth_required() -> None:
+        raise ReviewSourceError(
+            "Google Maps requires a manual sign-in before more reviews can "
+            "be loaded. Refresh the dedicated Selenium profile, close the "
+            "setup browser, and retry the crawl.",
+            retriable=False,
+            code="GOOGLE_AUTH_REQUIRED",
+        )
 
     def _find_scroll_container(self, driver, first_card: WebElement):
         container = self._find_first(driver, selectors.SCROLL_CONTAINER_SELECTORS)
