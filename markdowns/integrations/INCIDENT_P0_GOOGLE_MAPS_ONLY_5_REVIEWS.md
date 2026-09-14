@@ -1,6 +1,6 @@
 # P0 - Google Maps Crawler Berhenti pada 5 Review
 
-**Status:** akar masalah terbukti; hardening lokal selesai dan recovery profil menunggu login manual serta real-crawl verification
+**Status:** resolved/historical — Selenium was replaced by Apify; see `MIGRATION_APIFY_REVIEW_SOURCE.md`.
 **Tanggal investigasi:** 11-14 September 2026
 **Environment:** OneBox dev dan Crawler dev
 **Severity:** P0 karena seluruh fetch manual dan terjadwal dapat menghasilkan sukses palsu

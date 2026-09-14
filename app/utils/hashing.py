@@ -23,26 +23,3 @@ def generate_review_hash(review: dict) -> str:
             review.get("review_time"),
         ]
     )
-
-
-def generate_selenium_review_hash(review: dict) -> str:
-    external_review_id = _hash_value(review.get("external_review_id"))
-    if external_review_id:
-        return _sha256_parts(
-            [
-                review.get("source"),
-                review.get("location_id"),
-                external_review_id,
-            ]
-        )
-    return _sha256_parts(
-        [
-            review.get("source"),
-            review.get("location_id"),
-            review.get("reviewer_profile_url"),
-            review.get("reviewer_name"),
-            review.get("rating"),
-            review.get("review_text"),
-            review.get("review_time"),
-        ]
-    )

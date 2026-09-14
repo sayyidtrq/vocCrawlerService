@@ -32,18 +32,7 @@ services:
       - .env
     environment:
       SKIP_MIGRATIONS: "true"
-      SELENIUM_HEADLESS: "${SELENIUM_HEADLESS:-true}"
-      SELENIUM_USER_DATA_DIR: /app/.selenium-profile
     command: ["/app/scripts/run_crawl_worker.sh"]
-    volumes:
-      - selenium-profile:/app/.selenium-profile
     depends_on:
       api:
         condition: service_healthy
-
-volumes:
-  selenium-profile:
-    # Keep the browser session attached even when the checkout directory or
-    # Compose project name changes. Override per environment; never share one
-    # profile between concurrently running workers.
-    name: ${SELENIUM_PROFILE_VOLUME:-crawlerservice_selenium-profile}
