@@ -352,3 +352,121 @@ perlu dipulihkan karena investigasi dan probe tidak menulis review baru.
   sebagai bagian dari perbaikan profil.
 - Endpoint `/api/health` hanya membuktikan API dan database. Ia tidak
   membuktikan login Google, selector, pagination, atau kemampuan crawl.
+
+## 12. Addendum 14 September (sore) - login manual selesai, wall tetap muncul
+
+**Status:** akar masalah §4.2 terbukti salah sebagian; `GOOGLE_AUTH_REQUIRED`
+mendeteksi gejala yang benar tetapi menyimpulkan sebab yang keliru.
+
+### 12.1 Konteks
+
+Setelah §7 (recovery profil) dijalankan oleh anggota tim lain - login manual
+Google selesai dilakukan melalui browser setup pada volume
+`crawlerservice_selenium-profile` sesuai runbook - crawl percobaan ulang pada
+`hermina-crawl-worker` (branch `dev` canonical, bukan `dev-testing-proxy`)
+tetap gagal dengan kode yang sama:
+
+```text
+GOOGLE_AUTH_REQUIRED - "Google Maps requires a manual sign-in before more
+reviews can be loaded."
+```
+
+Ini mematahkan asumsi §4.2 dan §5.1 poin 3 bahwa login ulang akan memulihkan
+akses. Audit berikut membuktikan sesi sebenarnya sudah terautentikasi.
+
+### 12.2 Bukti sesi benar-benar login
+
+Diperiksa langsung pada volume `crawlerservice_selenium-profile` yang dipakai
+`hermina-crawl-worker` (nama cookie saja, tanpa membaca nilai terenkripsi):
+
+```text
+.google.co.id | SID, HSID, SSID, SAPISID,
+                __Secure-1PSID, __Secure-3PSID,
+                __Secure-1PAPISID, __Secure-3PAPISID
+```
+
+Set cookie ini adalah penanda standar akun Google yang sudah login penuh,
+bukan sekadar cookie consent/personalisasi. Login manual §7 terbukti berhasil
+dan tersimpan pada volume yang benar.
+
+### 12.3 Reproduksi langsung terhadap `hermina-crawl-worker` yang sedang berjalan
+
+Probe read-mostly dijalankan di dalam container yang sama (driver factory asli
+`SeleniumGoogleMapsReviewClient._create_driver`, profil asli, tanpa proxy),
+mengulang persis alur `fetch_reviews` untuk lokasi Hermina Bogor:
+
+1. `_open_review_panel` -> 5 kartu awal terbuka, `navigator.webdriver` = `None`.
+2. `_apply_sort("newest")` -> `sort_applied = False` (regresi kedua yang belum
+   ditelusuri, di luar cakupan addendum ini).
+3. Klik pertama pada kontrol "Lihat ulasan lainnya" (`_advance_review_list`)
+   -> `_raise_if_google_auth_wall` langsung menyala, `navigator.webdriver`
+   tetap `None` tepat pada momen wall muncul.
+
+Screenshot pada momen wall menunjukkan modal "Login untuk menikmati fitur
+terbaik dari Google Maps" - dan pojok kanan atas Google Maps menampilkan
+tombol **"Login"**, bukan avatar akun. Artinya Google merender halaman ini
+sebagai sesi anonim sepenuhnya, walaupun cookie akun valid ada di profil yang
+sama persis.
+
+### 12.4 Kesimpulan
+
+`navigator.webdriver` yang disembunyikan (patch CDP yang sudah ada di
+`_create_driver`) tidak cukup. Selenium/chromedriver punya penanda otomasi
+lain yang lebih dalam dan tidak disentuh oleh patch itu - antara lain variabel
+`cdc_*` yang disuntik chromedriver ke setiap halaman, dan efek samping
+perintah CDP `Runtime.enable` yang dipakai Selenium secara rutin untuk
+`execute_script`/`find_element`. Ini adalah sinyal deteksi otomasi yang sudah
+terdokumentasi luas (lihat §12.5), independen dari status login akun.
+
+Google kemungkinan menilai sesi ini berisiko tinggi berdasarkan sinyal
+transport otomasi tersebut, dan menurunkan tampilan ke mode anonim
+(soft-wall) alih-alih memblokir langsung dengan captcha. Login ulang tidak
+akan pernah memperbaiki ini karena akun bukan sebabnya.
+
+**Dampak pada §5.1 dan to-do:** poin "Pulihkan profil browser yang benar"
+(§5.1.3) dan item to-do "Deploy branch P0 ... Jalankan probe dan real crawl
+setelah login manual" perlu direvisi. Login manual adalah prasyarat yang
+valid tetapi tidak cukup; tanpa mengatasi fingerprint CDP, setiap siklus
+re-login akan berakhir dengan `GOOGLE_AUTH_REQUIRED` yang sama.
+
+### 12.5 Rujukan eksternal
+
+- [How New Headless Chrome & the CDP Signal Are Impacting Bot Detection](https://datadome.co/threat-research/how-new-headless-chrome-the-cdp-signal-are-impacting-bot-detection/)
+- [Is Chrome CDP Stealth? Browser Automation Detection Explained](https://scrapfly.io/blog/posts/chrome-cdp-stealth-browser-automation-detection-explained)
+- [CDP Detection: How Anti-Bots Catch Runtime.enable](https://scrappey.com/qa/anti-bot/what-is-cdp-detection)
+- [Detecting CDP in the wild: the Runtime.enable leak and the V8 patch war](https://blog.crawlex.net/blog/detecting-cdp-runtime-enable/)
+- [nodriver and undetected-chromedriver: what they patch and why it eventually breaks](https://blog.crawlex.net/blog/nodriver-undetected-chromedriver/)
+
+## 13. Rekomendasi mitigasi: fingerprint CDP
+
+Konteks: ini crawler ulasan bisnis milik sendiri (cabang rumah sakit/mitra),
+bukan usaha melewati proteksi pembayaran atau keamanan pihak ketiga - sejalan
+dengan catatan yang sudah ada di `_create_driver`.
+
+Tiga opsi, dari yang paling murah ke paling mahal:
+
+1. **`undetected-chromedriver`** (rekomendasi langkah pertama). Drop-in
+   subclass dari `selenium.webdriver.Chrome`; API `find_element`,
+   `WebDriverWait`, `execute_script`, dll. tetap sama, sehingga hampir seluruh
+   `selenium_google_maps_client.py` dan test yang ada tidak perlu berubah.
+   Menambal variabel `cdc_*` dan beberapa penanda otomasi klasik lain secara
+   otomatis. Risiko: proyek ini sudah dilaporkan makin sulit diandalkan untuk
+   target anti-bot kelas berat (mis. Cloudflare tingkat lanjut) - tetapi wall
+   Google Maps yang dihadapi di sini adalah soft-wall login, bukan captcha
+   penuh, jadi kemungkinan besar cukup.
+2. **Patch manual ala Patchright/rebrowser-patches** (opsi menengah bila (1)
+   terbukti tidak cukup). Menghindari `Runtime.enable` sama sekali di level
+   sumber, bukan sekadar menambal gejalanya. Perlu lebih banyak kerja
+   integrasi karena bukan drop-in replacement penuh untuk Selenium.
+3. **`nodriver`** (opsi paling tahan lama, paling mahal). Penerus
+   undetected-chromedriver oleh pengembang yang sama; membuang chromedriver
+   binary dan lapisan protokol WebDriver sepenuhnya, terbukti nol blokir pada
+   benchmark anti-deteksi 2026. Tetapi API-nya async dan tidak kompatibel
+   dengan Selenium - migrasi berarti menulis ulang seluruh
+   `selenium_google_maps_client.py`, bukan swap satu fungsi. Simpan sebagai
+   opsi eskalasi bila (1) gagal, bukan langkah pertama.
+
+**Langkah berikutnya yang diusulkan:** implementasi opsi 1 di `_create_driver`
+sebagai perubahan kecil dan reversibel, lalu ulangi reproduksi §12.3 pada
+lokasi yang sama untuk membuktikan wall tidak lagi muncul sebelum menutup P0
+ini sebagai selesai.
