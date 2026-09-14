@@ -277,6 +277,7 @@ class Location(Base):
     target_review_count: Mapped[int] = mapped_column(
         Integer, default=100, nullable=False
     )
+    apify_resume_checkpoint: Mapped[dict | None] = mapped_column(JsonType)
     onebox_connection_id: Mapped[int | None] = mapped_column(Integer)
     onebox_location_id: Mapped[int | None] = mapped_column(Integer)
     crawl_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
@@ -505,6 +506,7 @@ class Competitor(Base):
     target_review_count: Mapped[int] = mapped_column(
         Integer, default=100, nullable=False
     )
+    apify_resume_checkpoint: Mapped[dict | None] = mapped_column(JsonType)
     onebox_connection_id: Mapped[int | None] = mapped_column(Integer)
     onebox_location_id: Mapped[int | None] = mapped_column(Integer)
     crawl_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

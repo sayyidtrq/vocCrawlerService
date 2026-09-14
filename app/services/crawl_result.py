@@ -12,6 +12,9 @@ class RatingSnapshot(TypedDict):
 
 class CrawlRequestSnapshot(TypedDict):
     crawl_mode: str
+    apify_run_id: str
+    apify_dataset_id: str
+    apify_account_index_used: int
     max_reviews_to_collect: int
     scan_limit: int
     dry_run: bool
