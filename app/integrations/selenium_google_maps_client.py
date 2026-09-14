@@ -32,6 +32,14 @@ logger = logging.getLogger(__name__)
 class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
     source_name = GoogleMapsReviewParser.source_name
     max_no_new_scroll_attempts = 5
+    # Panel Ringkasan Google Maps menampilkan paling banyak 3 kartu ulasan
+    # penuh; daftar ulasan penuh mulai dari ~10. Dipakai untuk membedakan
+    # keduanya saat kita baru saja mengklik tab "Ulasan".
+    _OVERVIEW_PREVIEW_CARD_CAP = 3
+    _GOOGLE_AUTH_WALL_MARKERS = (
+        "login untuk menikmati fitur terbaik dari google maps",
+        "sign in to enjoy the best of google maps",
+    )
 
     def __init__(self, settings: Settings, driver_factory=None):
         self.settings = settings
@@ -172,6 +180,17 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
         options.add_argument("--disable-popup-blocking")
         options.add_argument("--no-sandbox")
         options.add_argument("--disable-dev-shm-usage")
+        # Google Maps diam-diam membatasi pagination ulasan untuk browser yang
+        # terdeteksi otomasi: tombol "load more" tetap terklik (telemetry-nya
+        # tercatat) tapi datanya tidak pernah dimuat - tanpa CAPTCHA yang
+        # kelihatan. navigator.webdriver bawaan Selenium adalah sinyal
+        # deteksi paling umum. Ini untuk crawler ulasan bisnis milik sendiri,
+        # bukan untuk melewati proteksi keamanan/pembayaran.
+        options.add_argument("--disable-blink-features=AutomationControlled")
+        options.add_experimental_option("excludeSwitches", ["enable-automation"])
+        options.add_experimental_option("useAutomationExtension", False)
+        if self.settings.selenium_proxy_url:
+            options.add_argument(f"--proxy-server={self.settings.selenium_proxy_url}")
         browser_path = (
             shutil.which("google-chrome")
             or shutil.which("chromium")
@@ -195,12 +214,27 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
             else ChromeService()
         )
         try:
-            return webdriver.Chrome(service=service, options=options)
+            driver = webdriver.Chrome(service=service, options=options)
         except WebDriverException as exc:
             raise ReviewSourceError(
                 "Selenium browser failed to start. Please check Chrome and "
                 "ChromeDriver installation."
             ) from exc
+        try:
+            driver.execute_cdp_cmd(
+                "Page.addScriptToEvaluateOnNewDocument",
+                {
+                    "source": (
+                        "Object.defineProperty(navigator, 'webdriver', "
+                        "{get: () => undefined});"
+                    )
+                },
+            )
+        except WebDriverException:
+            logger.warning(
+                "Could not patch navigator.webdriver; continuing anyway."
+            )
+        return driver
 
     @staticmethod
     def _place_id_url(location: Location) -> str | None:
@@ -306,43 +340,80 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
             )
 
     def _wait_for_review_cards_or_open_panel(self, driver) -> list[WebElement]:
-        wait = WebDriverWait(
-            driver, self.settings.selenium_wait_timeout_seconds
+        # Satu tenggat untuk seluruh proses, dibagi antar fase. Tanpa ini tiap
+        # WebDriverWait dapat jatah 20 dtk penuh sendiri-sendiri: render
+        # bertahap yang gagal bisa menghabiskan 60 dtk, dan fallback pencarian
+        # nama menggandakannya jadi ~120 dtk per percobaan.
+        deadline = (
+            time.monotonic() + self.settings.selenium_wait_timeout_seconds
         )
-        try:
-            cards = wait.until(
-                lambda current: (
-                    self._find_review_cards(current)
-                    or (
-                        [self._find_review_open_button(current)]
-                        if self._find_review_open_button(current)
-                        else []
+
+        def _wait(condition):
+            budget = max(0.0, deadline - time.monotonic())
+            try:
+                return WebDriverWait(driver, budget).until(condition)
+            except TimeoutException:
+                return None
+
+        # 1. Tunggu panel tempat cukup terrender untuk dinilai: tab "Ulasan"
+        #    sudah aktif, atau kontrol pembukanya muncul. JANGAN berhenti hanya
+        #    karena ada kartu — panel Ringkasan selalu punya 3-6 kartu
+        #    pratinjau, dan itulah sumber bug lama.
+        _wait(
+            lambda d: self._reviews_surface_ready(d)
+            or self._find_review_open_button(d) is not None
+        )
+
+        # 2. Kalau belum di daftar ulasan, buka. Google Maps tidak lagi
+        #    mengekspos div[role='feed']; panel Ringkasan dan daftar ulasan
+        #    berbagi kontainer gulir yang sama, jadi kartu pratinjau di
+        #    Ringkasan BUKAN daftar ulasan. Membukanya wajib selama kontrolnya
+        #    ada — kalau gagal, kita gagal keras, bukan mengembalikan 3 ulasan.
+        opened_via_click = False
+        if not self._reviews_surface_ready(driver):
+            button = self._find_review_open_button(driver)
+            if button is not None:
+                opened_via_click = True
+                self._safe_click(driver, button)
+                _wait(lambda d: self._reviews_surface_ready(d))
+                # aria-selected berkedip lebih dulu; beri panel waktu mengganti
+                # isi Ringkasan dengan daftar ulasan sebelum kartunya dibaca —
+                # jeda yang sama seperti setelah _apply_sort.
+                time.sleep(min(1.0, self.settings.selenium_scroll_delay_seconds))
+
+        # 3. Hanya percaya kartu kalau tab "Ulasan" yang sedang aktif. Kalau
+        #    kita yang mengklik untuk membukanya, tuntut juga jumlah kartu di
+        #    atas batas pratinjau Ringkasan (3 kartu penuh): `_find_review_cards`
+        #    tidak terlingkup ke daftar ulasan, jadi selama pratinjau lama masih
+        #    menempel sesaat setelah tab beralih, ambang ini yang mencegah kita
+        #    mengembalikannya sebagai "sukses" untuk target kecil. Tempat dengan
+        #    <= 3 ulasan Google memang jarang; kegagalan yang terlihat di situ
+        #    lebih baik daripada under-fetch diam-diam.
+        if self._reviews_surface_ready(driver):
+            cards = _wait(
+                lambda d: (
+                    found
+                    if (found := self._find_review_cards(d))
+                    and (
+                        not opened_via_click
+                        or len(found) > self._OVERVIEW_PREVIEW_CARD_CAP
                     )
+                    else None
                 )
             )
-        except TimeoutException:
-            cards = []
+            if cards:
+                return cards
 
-        button = self._find_review_open_button(driver)
-        if button is not None:
-            self._safe_click(driver, button)
-            try:
-                return wait.until(
-                    lambda current: (
-                        self._find_review_cards(current)
-                        if self._find_first(
-                            current, selectors.SCROLL_CONTAINER_SELECTORS
-                        )
-                        else []
-                    )
-                )
-            except TimeoutException as exc:
-                raise ReviewSourceError(
-                    "No reviews were loaded. Please check the review URL "
-                    "or try non-headless mode."
-                ) from exc
-        if cards and isinstance(cards[0], WebElement):
-            return cards
+        # Sampai di sini daftar ulasan tidak pernah terkonfirmasi. Kartu apa pun
+        # yang mungkin terlihat sekarang adalah pratinjau panel Ringkasan (atau
+        # kontrol pembukanya gagal render dalam tenggat) — mengembalikannya
+        # sebagai "sukses" justru bug yang sedang diperbaiki. Kita gagal keras:
+        # pesan di bawah memicu fallback pencarian nama, lalu kegagalan job yang
+        # jujur, alih-alih diam-diam mencatat 3 ulasan.
+        # Login wall juga dapat muncul sebelum daftar ulasan pernah terbuka.
+        # Tanpa pemeriksaan di sini, kondisi permanen itu tersamar sebagai
+        # perubahan selector dan worker menghabiskan seluruh retry budget.
+        self._raise_if_google_auth_wall(driver)
 
         try:
             body_text = driver.find_element(By.TAG_NAME, "body").text.lower()
@@ -352,7 +423,9 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
             raise ReviewSourceError(
                 "Google Maps is showing a limited view. Open the dedicated "
                 "Selenium browser profile and sign in manually once, then "
-                "retry. Login automation is intentionally not supported."
+                "retry. Login automation is intentionally not supported.",
+                retriable=False,
+                code="GOOGLE_AUTH_REQUIRED",
             )
         raise ReviewSourceError(
             "Review container was not found. Google Maps layout may have "
@@ -406,6 +479,7 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
             and scroll_attempts < self.settings.selenium_max_scroll_attempts
             and no_new_attempts < self.max_no_new_scroll_attempts
         ):
+            self._raise_if_google_auth_wall(driver)
             if batas_waktu is not None and time.monotonic() >= batas_waktu:
                 kehabisan_waktu = True
                 break
@@ -488,21 +562,7 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
             else:
                 no_new_attempts = 0
 
-            try:
-                driver.execute_script(
-                    "arguments[0].scrollTop += "
-                    "Math.max(400, arguments[0].clientHeight * 0.85);",
-                    container,
-                )
-            except (JavascriptException, StaleElementReferenceException):
-                current_cards = self._find_review_cards(driver)
-                if not current_cards:
-                    raise ReviewSourceError(
-                        "Review container could not be scrolled."
-                    )
-                container = self._find_scroll_container(
-                    driver, current_cards[0]
-                )
+            container = self._advance_review_list(driver, container)
             scroll_attempts += 1
             time.sleep(self.settings.selenium_scroll_delay_seconds)
 
@@ -525,6 +585,70 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
             scroll_attempts,
             stopped_reason,
             len(reviews),
+        )
+
+    def _advance_review_list(self, driver, container) -> WebElement:
+        """Load the next review batch, then advance the scroll container."""
+        button = self._find_first(driver, selectors.LOAD_MORE_REVIEWS_SELECTORS)
+        if button is not None:
+            try:
+                self._safe_click(driver, button)
+            except StaleElementReferenceException:
+                # Tombol bisa hilang/berganti tepat saat diklik (AJAX
+                # menukar markup-nya). Bukan kegagalan - lanjut scroll saja,
+                # iterasi berikutnya akan mencari tombolnya lagi dari awal.
+                pass
+            self._raise_if_google_auth_wall(driver)
+        try:
+            driver.execute_script(
+                "arguments[0].scrollTop += "
+                "Math.max(400, arguments[0].clientHeight * 0.85);",
+                container,
+            )
+        except (JavascriptException, StaleElementReferenceException):
+            current_cards = self._find_review_cards(driver)
+            if not current_cards:
+                raise ReviewSourceError(
+                    "Review container could not be scrolled."
+                )
+            container = self._find_scroll_container(driver, current_cards[0])
+        return container
+
+    @classmethod
+    def _raise_if_google_auth_wall(cls, driver) -> None:
+        """Fail explicitly when Google replaces pagination with a login wall."""
+        try:
+            dialogs = driver.find_elements(By.CSS_SELECTOR, "[role='dialog']")
+        except WebDriverException:
+            dialogs = []
+        for dialog in dialogs:
+            try:
+                if not dialog.is_displayed():
+                    continue
+                text = (dialog.text or "").strip().lower()
+            except WebDriverException:
+                continue
+            if any(marker in text for marker in cls._GOOGLE_AUTH_WALL_MARKERS):
+                cls._raise_google_auth_required()
+        # Google has changed this overlay between role=dialog and an unlabelled
+        # fixed div. The sentence itself is specific enough to use as the
+        # fallback while avoiding a false positive from the ordinary Login
+        # button in the top navigation.
+        try:
+            body_text = (driver.find_element(By.TAG_NAME, "body").text or "").lower()
+        except WebDriverException:
+            body_text = ""
+        if any(marker in body_text for marker in cls._GOOGLE_AUTH_WALL_MARKERS):
+            cls._raise_google_auth_required()
+
+    @staticmethod
+    def _raise_google_auth_required() -> None:
+        raise ReviewSourceError(
+            "Google Maps requires a manual sign-in before more reviews can "
+            "be loaded. Refresh the dedicated Selenium profile, close the "
+            "setup browser, and retry the crawl.",
+            retriable=False,
+            code="GOOGLE_AUTH_REQUIRED",
         )
 
     def _find_scroll_container(self, driver, first_card: WebElement):
@@ -662,6 +786,19 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
         "lowest_rating": ("lowest rating", "peringkat terendah", "rating terendah"),
     }
 
+    @staticmethod
+    def _sort_menu_option_xpath(keywords: tuple[str, ...]) -> str:
+        conditions = " or ".join(
+            "contains(translate(normalize-space(.), "
+            "'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), "
+            f"'{keyword}')"
+            for keyword in keywords
+        )
+        return (
+            "//*[self::div or self::li][@role='menuitemradio' or "
+            f"@role='menuitem'][{conditions}]"
+        )
+
     def _apply_sort(self, driver, sort_by: str = "newest") -> bool:
         """Terapkan urutan pada panel ulasan.
 
@@ -680,26 +817,21 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
 
         try:
             self._safe_click(driver, sort_button)
-
-            syarat = " or ".join(
-                "contains(translate(normalize-space(.), "
-                "'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), "
-                f"'{k}')"
-                for k in kata
-            )
-            options = driver.find_elements(
-                By.XPATH,
-                "//*[self::div or self::li][@role='menuitemradio' or "
-                f"@role='menuitem'][{syarat}]",
-            )
-            for option in options:
-                if option.is_displayed():
-                    self._safe_click(driver, option)
-                    time.sleep(1)
-                    return True
-
-            logger.info("Pilihan urutan '%s' tidak ada di menu.", sort_by)
-            return False
+            option_xpath = self._sort_menu_option_xpath(kata)
+            try:
+                options = WebDriverWait(driver, 2).until(
+                    lambda d: [
+                        option
+                        for option in d.find_elements(By.XPATH, option_xpath)
+                        if option.is_displayed()
+                    ]
+                )
+            except TimeoutException:
+                logger.info("Pilihan urutan '%s' tidak ada di menu.", sort_by)
+                return False
+            self._safe_click(driver, options[0])
+            time.sleep(1)
+            return True
         except WebDriverException:
             logger.info("Review sorting was unavailable; using current order.")
             return False
@@ -745,7 +877,45 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
         return None
 
     @staticmethod
-    def _find_review_open_button(root) -> WebElement | None:
+    def _reviews_surface_ready(driver) -> bool:
+        """True hanya bila tab "Ulasan" yang sedang aktif.
+
+        Google Maps menghapus div[role='feed']; daftar ulasan dan panel
+        Ringkasan kini berbagi kelas kontainer gulir, jadi kehadiran kartu
+        saja tidak membuktikan apa-apa. Pembeda satu-satunya yang bisa
+        dipercaya adalah label tab yang terpilih — dicocokkan sebagai prefiks
+        ("Ulasan untuk...", "Reviews for...") supaya nama tempat yang
+        kebetulan memuat kata "ulasan"/"review" tidak ikut lolos.
+        """
+        try:
+            tabs = driver.find_elements(By.CSS_SELECTOR, "[role='tab']")
+        except WebDriverException:
+            return False
+        for tab in tabs:
+            try:
+                if (tab.get_attribute("aria-selected") or "").lower() != "true":
+                    continue
+                label = (
+                    tab.get_attribute("aria-label") or tab.text or ""
+                ).strip().lower()
+            except WebDriverException:
+                continue
+            if label.startswith(("ulasan", "review")):
+                return True
+        return False
+
+    # Tombol yang label-nya cocok dengan selektor tetapi BUKAN pembuka daftar
+    # ulasan: kotak tulis ulasan dan kotak telusur ulasan di dalam panel.
+    _REVIEW_OPEN_BUTTON_SKIP = (
+        "tulis ulasan",
+        "write a review",
+        "telusuri ulasan",
+        "search reviews",
+        "cari ulasan",
+    )
+
+    @classmethod
+    def _find_review_open_button(cls, root) -> WebElement | None:
         for selector in selectors.REVIEW_BUTTON_SELECTORS:
             try:
                 elements = root.find_elements(By.CSS_SELECTOR, selector)
@@ -759,7 +929,7 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
                             element.get_attribute("aria-label") or "",
                         ]
                     ).lower()
-                    if "tulis ulasan" in label or "write a review" in label:
+                    if any(s in label for s in cls._REVIEW_OPEN_BUTTON_SKIP):
                         continue
                     if element.is_displayed():
                         return element

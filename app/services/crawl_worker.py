@@ -194,6 +194,9 @@ class CrawlWorker:
                 return self._finish(claimed, status="succeeded", result=result)
             if result.get("status") == "partial_success":
                 return self._finish(claimed, status="partial_success", result=result)
+            failure_metadata = result.get("metadata") or {}
+            if self._is_permanent_source_failure(failure_metadata):
+                return self._finish_permanent_source_failure(claimed, result)
             return self._retry_or_fail(
                 claimed,
                 error_code="CRAWL_FAILED",
@@ -201,6 +204,21 @@ class CrawlWorker:
                     result.get("error_message") or "Crawler returned a failed result."
                 ),
                 result=result,
+            )
+        except ValueError as exc:
+            # Target di luar rentang, scan_limit tak masuk akal, target hilang:
+            # itu galat permintaan/konfigurasi yang permanen. Meretry-nya 3x
+            # sebagai WORKER_EXCEPTION hanya membuang ~6 menit per batch.
+            logger.warning(
+                "crawl_worker.invalid_request",
+                extra={"job_id": claimed.id, "error": str(exc)},
+            )
+            return self._finish(
+                claimed,
+                status="failed",
+                result={},
+                error_code="INVALID_REQUEST",
+                error_message=str(exc),
             )
         except Exception:
             logger.exception(
@@ -253,6 +271,9 @@ class CrawlWorker:
         )
         if result.get("status") in {"success", "partial_success"}:
             return self._finish(claimed, status="succeeded", result=result)
+        failure_metadata = result.get("metadata") or {}
+        if self._is_permanent_source_failure(failure_metadata):
+            return self._finish_permanent_source_failure(claimed, result)
         return self._retry_or_fail(
             claimed,
             error_code="CRAWL_FAILED",
@@ -288,6 +309,31 @@ class CrawlWorker:
             result=result,
             error_code=error_code,
             error_message=error_message,
+        )
+
+    @staticmethod
+    def _is_permanent_source_failure(metadata: dict) -> bool:
+        # Existing ReviewSourceError instances did not carry a code and were
+        # historically retried. Requiring an explicit code preserves that
+        # behavior while allowing known operator-action failures to fail fast.
+        return bool(
+            metadata.get("failure_code")
+            and metadata.get("retriable") is False
+        )
+
+    def _finish_permanent_source_failure(
+        self, claimed: ClaimedCrawlJob, result: dict
+    ) -> dict:
+        metadata = result.get("metadata") or {}
+        return self._finish(
+            claimed,
+            status="failed",
+            result=result,
+            error_code=str(metadata["failure_code"]),
+            error_message=str(
+                result.get("error_message")
+                or "Crawler returned a permanent failure."
+            ),
         )
 
     def _finish(

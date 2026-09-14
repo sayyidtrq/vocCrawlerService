@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
+import pytest
+from selenium.common.exceptions import StaleElementReferenceException
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -9,6 +11,7 @@ from sqlalchemy.pool import StaticPool
 from app.config import Settings
 from app.db.base import Base
 from app.db.models import Company, CompetitorReview, FetchLog, Review
+from app.integrations.review_source_client import ReviewSourceError
 from app.integrations.selenium_google_maps_client import (
     SeleniumGoogleMapsReviewClient,
 )
@@ -246,10 +249,15 @@ def test_selenium_driver_uses_container_browser_and_safe_flags(
             "chromedriver": "/usr/bin/chromedriver",
         }.get(binary)
 
+    class _FakeChromeDriver:
+        def execute_cdp_cmd(self, cmd, params):
+            captured["cdp_cmd"] = cmd
+            captured["cdp_params"] = params
+
     def fake_chrome(*, service, options):
         captured["service"] = service
         captured["options"] = options
-        return object()
+        return _FakeChromeDriver()
 
     monkeypatch.setattr(
         "app.integrations.selenium_google_maps_client.shutil.which",
@@ -268,6 +276,98 @@ def test_selenium_driver_uses_container_browser_and_safe_flags(
     assert "--no-sandbox" in captured["options"].arguments
     assert "--disable-dev-shm-usage" in captured["options"].arguments
     assert captured["service"].path == "/usr/bin/chromedriver"
+
+
+def test_selenium_driver_hides_automation_fingerprint(monkeypatch, tmp_path):
+    # Google Maps membatasi pagination ulasan untuk browser yang terdeteksi
+    # otomasi (navigator.webdriver bawaan Selenium). Pastikan flag penyamar
+    # dan patch CDP-nya benar-benar terpasang, bukan cuma niat di komentar.
+    settings = make_settings(tmp_path)
+    captured = {}
+
+    class _FakeChromeDriver:
+        def execute_cdp_cmd(self, cmd, params):
+            captured["cdp_cmd"] = cmd
+            captured["cdp_params"] = params
+
+    def fake_chrome(*, service, options):
+        captured["options"] = options
+        return _FakeChromeDriver()
+
+    monkeypatch.setattr(
+        "app.integrations.selenium_google_maps_client.shutil.which",
+        lambda _binary: None,
+    )
+    monkeypatch.setattr(
+        "app.integrations.selenium_google_maps_client.webdriver.Chrome",
+        fake_chrome,
+    )
+
+    SeleniumGoogleMapsReviewClient(settings)._create_driver()
+
+    options = captured["options"]
+    assert "--disable-blink-features=AutomationControlled" in options.arguments
+    assert options.experimental_options["excludeSwitches"] == ["enable-automation"]
+    assert options.experimental_options["useAutomationExtension"] is False
+    assert captured["cdp_cmd"] == "Page.addScriptToEvaluateOnNewDocument"
+    assert "navigator" in captured["cdp_params"]["source"]
+    assert "webdriver" in captured["cdp_params"]["source"]
+
+
+def test_selenium_driver_applies_proxy_when_configured(monkeypatch, tmp_path):
+    settings = make_settings(tmp_path).model_copy(
+        update={"selenium_proxy_url": "http://203.0.113.10:8080"}
+    )
+    captured = {}
+
+    class _FakeChromeDriver:
+        def execute_cdp_cmd(self, cmd, params):
+            pass
+
+    def fake_chrome(*, service, options):
+        captured["options"] = options
+        return _FakeChromeDriver()
+
+    monkeypatch.setattr(
+        "app.integrations.selenium_google_maps_client.shutil.which",
+        lambda _binary: None,
+    )
+    monkeypatch.setattr(
+        "app.integrations.selenium_google_maps_client.webdriver.Chrome",
+        fake_chrome,
+    )
+
+    SeleniumGoogleMapsReviewClient(settings)._create_driver()
+
+    assert "--proxy-server=http://203.0.113.10:8080" in captured["options"].arguments
+
+
+def test_selenium_driver_skips_proxy_flag_when_unset(monkeypatch, tmp_path):
+    settings = make_settings(tmp_path)
+    captured = {}
+
+    class _FakeChromeDriver:
+        def execute_cdp_cmd(self, cmd, params):
+            pass
+
+    def fake_chrome(*, service, options):
+        captured["options"] = options
+        return _FakeChromeDriver()
+
+    monkeypatch.setattr(
+        "app.integrations.selenium_google_maps_client.shutil.which",
+        lambda _binary: None,
+    )
+    monkeypatch.setattr(
+        "app.integrations.selenium_google_maps_client.webdriver.Chrome",
+        fake_chrome,
+    )
+
+    SeleniumGoogleMapsReviewClient(settings)._create_driver()
+
+    assert not any(
+        a.startswith("--proxy-server=") for a in captured["options"].arguments
+    )
 
 
 def test_place_id_resolution_keeps_source_and_has_name_search_fallback(tmp_path):
@@ -488,3 +588,289 @@ def test_date_range_with_only_out_of_range_reviews_is_partial(tmp_path):
     assert result["total_inserted"] == 0
     assert result["total_skipped_out_of_range"] == 2
     assert result["metadata"]["matched_review_cards"] == 0
+
+
+class _FakeEl:
+    def __init__(self, attrs=None, text=""):
+        self._attrs = attrs or {}
+        self.text = text
+        self.id = f"el-{id(self)}"
+        self.clicks = 0
+
+    def get_attribute(self, name):
+        return self._attrs.get(name)
+
+    def is_displayed(self):
+        return True
+
+    def click(self):
+        self.clicks += 1
+        callback = getattr(self, "on_click", None)
+        if callback is not None:
+            callback()
+
+    def find_elements(self, _by, _selector):
+        return []
+
+
+class _FakeDriver:
+    """Minimal DOM: find_elements answers from a {selector: [elements]} map."""
+
+    def __init__(self, registry, body_text=""):
+        self._registry = registry
+        self._body = _FakeEl(text=body_text)
+        self.current_url = "https://www.google.com/maps/place/x/reviews"
+
+    def find_elements(self, _by, selector):
+        return list(self._registry.get(selector, []))
+
+    def find_element(self, _by, _selector):
+        return self._body
+
+    def execute_script(self, *_a, **_k):
+        return None
+
+
+def _client_with_short_wait(tmp_path):
+    settings = make_settings(tmp_path).model_copy(
+        update={
+            "selenium_wait_timeout_seconds": 0,
+            "selenium_scroll_delay_seconds": 0,
+        }
+    )
+    return SeleniumGoogleMapsReviewClient(settings)
+
+
+def test_advance_review_list_clicks_load_more_and_adds_cards(tmp_path):
+    initial_cards = [_FakeEl({"data-review-id": f"r{i}"}) for i in range(5)]
+    more_cards = [_FakeEl({"data-review-id": f"r{i}"}) for i in range(5, 10)]
+    button = _FakeEl()
+    registry = {
+        "div[data-review-id]": initial_cards,
+        "button[aria-label^='Lihat ulasan lainnya' i]": [button],
+    }
+    button.on_click = lambda: registry["div[data-review-id]"].extend(more_cards)
+    client = _client_with_short_wait(tmp_path)
+    driver = _FakeDriver(registry)
+
+    client._advance_review_list(driver, _FakeEl())
+
+    assert button.clicks == 1
+    assert len(client._find_review_cards(driver)) == 10
+
+
+def test_advance_review_list_without_load_more_is_safe(tmp_path):
+    # Tanpa tombol "load more", fungsi tetap harus melakukan scroll biasa -
+    # bukan diam saja - supaya daftar yang benar-benar infinite-scroll masih
+    # maju.
+    client = _client_with_short_wait(tmp_path)
+    scroll_calls = []
+
+    class _RecordingDriver(_FakeDriver):
+        def execute_script(self, _script, *args, **_kwargs):
+            scroll_calls.append(args)
+
+    container = _FakeEl()
+    result = client._advance_review_list(_RecordingDriver({}), container)
+
+    assert scroll_calls == [(container,)]
+    assert result is container
+
+
+def test_advance_review_list_swallows_stale_button_click(tmp_path):
+    # Tombol "load more" bisa hilang/berganti tepat saat diklik (AJAX
+    # menukar markup-nya). Itu bukan kegagalan crawl - harus tetap lanjut ke
+    # scroll, bukan meledak sampai ke fetch_reviews dan membuang ulasan yang
+    # sudah terkumpul.
+    class _StaleButton(_FakeEl):
+        def click(self):
+            raise StaleElementReferenceException("gone")
+
+    button = _StaleButton()
+    registry = {"button[aria-label^='Lihat ulasan lainnya' i]": [button]}
+    client = _client_with_short_wait(tmp_path)
+
+    result = client._advance_review_list(_FakeDriver(registry), _FakeEl())
+
+    assert result is not None  # did not raise
+
+
+def test_advance_review_list_reports_google_auth_wall(tmp_path):
+    button = _FakeEl()
+    dialog = _FakeEl(
+        text=(
+            "Login untuk menikmati fitur terbaik dari Google Maps\n"
+            "Ulasan & foto: Baca dan telusuri setiap ulasan dan foto."
+        )
+    )
+    registry = {
+        "button[aria-label^='Lihat ulasan lainnya' i]": [button],
+        "[role='dialog']": [],
+    }
+    button.on_click = lambda: registry["[role='dialog']"].append(dialog)
+    client = _client_with_short_wait(tmp_path)
+
+    with pytest.raises(ReviewSourceError) as caught:
+        client._advance_review_list(_FakeDriver(registry), _FakeEl())
+
+    assert caught.value.code == "GOOGLE_AUTH_REQUIRED"
+    assert caught.value.retriable is False
+
+
+def test_google_auth_wall_detection_falls_back_to_body_text(tmp_path):
+    client = _client_with_short_wait(tmp_path)
+    driver = _FakeDriver(
+        {},
+        body_text="Sign in to enjoy the best of Google Maps and read reviews.",
+    )
+
+    with pytest.raises(ReviewSourceError) as caught:
+        client._raise_if_google_auth_wall(driver)
+
+    assert caught.value.code == "GOOGLE_AUTH_REQUIRED"
+
+
+def test_open_panel_reports_auth_wall_before_container_error(tmp_path):
+    client = _client_with_short_wait(tmp_path)
+    driver = _FakeDriver(
+        {},
+        body_text=(
+            "Login untuk menikmati fitur terbaik dari Google Maps dan baca "
+            "semua ulasan."
+        ),
+    )
+
+    with pytest.raises(ReviewSourceError) as caught:
+        client._wait_for_review_cards_or_open_panel(driver)
+
+    assert caught.value.code == "GOOGLE_AUTH_REQUIRED"
+    assert caught.value.retriable is False
+    assert "manual sign-in" in str(caught.value)
+
+
+def test_apply_sort_waits_for_option_after_click(tmp_path, monkeypatch):
+    # Opsi menu muncul setelah beberapa kali polling, bukan seketika saat
+    # diklik - kalau _apply_sort membaca sekali saja (perilaku lama), ini
+    # akan gagal.
+    sort_button = _FakeEl()
+    option = _FakeEl()
+    client = _client_with_short_wait(tmp_path)
+    option_xpath = client._sort_menu_option_xpath(client.SORT_KEYWORDS["newest"])
+    registry = {"button[aria-label*='Urutkan ulasan' i]": [sort_button]}
+    polls = {"count": 0}
+
+    class _DelayedMenuDriver(_FakeDriver):
+        def find_elements(self, by, selector):
+            if selector == option_xpath:
+                polls["count"] += 1
+                return [option] if polls["count"] >= 3 else []
+            return super().find_elements(by, selector)
+
+    monkeypatch.setattr(
+        "app.integrations.selenium_google_maps_client.time.sleep", lambda _seconds: None
+    )
+
+    assert client._apply_sort(_DelayedMenuDriver(registry), "newest") is True
+    assert option.clicks == 1
+    assert polls["count"] >= 3
+
+
+def test_overview_only_panel_raises_instead_of_returning_preview_cards(tmp_path):
+    # Panel Ringkasan: tab "Ulasan" ADA tapi tidak aktif, hanya 3 kartu
+    # pratinjau, tidak ada div[role='feed']. Meng-klik tab tidak mengubah
+    # apa pun (DOM statis). Scraper harus gagal keras, bukan mengembalikan 3.
+    overview_tab = _FakeEl({"role": "tab", "aria-selected": "true",
+                            "aria-label": "Ringkasan RS Contoh"})
+    reviews_tab = _FakeEl({"role": "tab", "aria-selected": "false",
+                           "aria-label": "Ulasan untuk RS Contoh"})
+    registry = {
+        "[role='tab']": [overview_tab, reviews_tab],
+        "button[role='tab'][aria-label^='Ulasan' i]": [reviews_tab],
+        "div[data-review-id]": [_FakeEl({"data-review-id": f"r{i}"})
+                                for i in range(3)],
+    }
+    client = _client_with_short_wait(tmp_path)
+
+    with pytest.raises(ReviewSourceError, match="Review container was not found"):
+        client._wait_for_review_cards_or_open_panel(_FakeDriver(registry))
+    assert reviews_tab.clicks == 1  # it did try to open the list
+
+
+def test_click_opens_reviews_list(tmp_path):
+    # Dari panel Ringkasan, klik tab "Ulasan": tab jadi aktif dan panel
+    # menampilkan daftar ulasan penuh. Kartu itulah yang dikembalikan.
+    overview_tab = _FakeEl({"role": "tab", "aria-selected": "true",
+                            "aria-label": "Ringkasan RS Contoh"})
+    reviews_tab = _FakeEl({"role": "tab", "aria-selected": "false",
+                           "aria-label": "Ulasan untuk RS Contoh"})
+    preview = [_FakeEl({"data-review-id": f"p{i}"}) for i in range(3)]
+    full = [_FakeEl({"data-review-id": f"r{i}"}) for i in range(12)]
+    registry = {
+        "[role='tab']": [overview_tab, reviews_tab],
+        "button[role='tab'][aria-label^='Ulasan' i]": [reviews_tab],
+        "div[data-review-id]": preview,
+    }
+
+    def _open_reviews_list():
+        overview_tab._attrs["aria-selected"] = "false"
+        reviews_tab._attrs["aria-selected"] = "true"
+        registry["div[data-review-id]"] = full
+
+    reviews_tab.on_click = _open_reviews_list
+    client = _client_with_short_wait(tmp_path)
+
+    result = client._wait_for_review_cards_or_open_panel(_FakeDriver(registry))
+
+    assert result == full
+
+
+def test_click_then_only_preview_count_cards_raises(tmp_path):
+    # Setelah klik, tab "Ulasan" aktif tapi yang terbaca cuma 3 kartu — tak
+    # bisa dibedakan dari pratinjau Ringkasan (`_find_review_cards` tidak
+    # terlingkup ke daftar). Gagal keras, bukan mengembalikannya sebagai 3.
+    overview_tab = _FakeEl({"role": "tab", "aria-selected": "true",
+                            "aria-label": "Ringkasan RS Contoh"})
+    reviews_tab = _FakeEl({"role": "tab", "aria-selected": "false",
+                           "aria-label": "Ulasan untuk RS Contoh"})
+    preview = [_FakeEl({"data-review-id": f"p{i}"}) for i in range(3)]
+    registry = {
+        "[role='tab']": [overview_tab, reviews_tab],
+        "button[role='tab'][aria-label^='Ulasan' i]": [reviews_tab],
+        "div[data-review-id]": preview,
+    }
+
+    def _flip_selected_only():
+        overview_tab._attrs["aria-selected"] = "false"
+        reviews_tab._attrs["aria-selected"] = "true"
+        # daftar ulasan tak kunjung render — tetap 3 kartu pratinjau
+
+    reviews_tab.on_click = _flip_selected_only
+    client = _client_with_short_wait(tmp_path)
+
+    with pytest.raises(ReviewSourceError, match="Review container was not found"):
+        client._wait_for_review_cards_or_open_panel(_FakeDriver(registry))
+
+
+def test_reviews_tab_active_returns_cards(tmp_path):
+    reviews_tab = _FakeEl({"role": "tab", "aria-selected": "true",
+                           "aria-label": "Ulasan untuk RS Contoh"})
+    cards = [_FakeEl({"data-review-id": f"r{i}"}) for i in range(3)]
+    registry = {"[role='tab']": [reviews_tab], "div[data-review-id]": cards}
+    client = _client_with_short_wait(tmp_path)
+
+    result = client._wait_for_review_cards_or_open_panel(_FakeDriver(registry))
+
+    assert result == cards
+
+
+def test_unconfirmed_reviews_surface_raises_even_with_visible_cards(tmp_path):
+    # Tidak ada tab, tidak ada kontrol pembuka daftar — kartu yang terlihat
+    # tidak bisa dibuktikan sebagai daftar ulasan lengkap (bisa jadi pratinjau
+    # Ringkasan, atau kontrolnya lambat render). Harus gagal keras, bukan
+    # mengembalikan kartu yang belum terkonfirmasi.
+    cards = [_FakeEl({"data-review-id": f"r{i}"}) for i in range(2)]
+    registry = {"[role='tab']": [], "div[data-review-id]": cards}
+    client = _client_with_short_wait(tmp_path)
+
+    with pytest.raises(ReviewSourceError, match="Review container was not found"):
+        client._wait_for_review_cards_or_open_panel(_FakeDriver(registry))

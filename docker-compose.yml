@@ -43,3 +43,7 @@ services:
 
 volumes:
   selenium-profile:
+    # Keep the browser session attached even when the checkout directory or
+    # Compose project name changes. Override per environment; never share one
+    # profile between concurrently running workers.
+    name: ${SELENIUM_PROFILE_VOLUME:-crawlerservice_selenium-profile}
