@@ -113,21 +113,21 @@ def seeded(session_factory):
             company_id=tenant.id,
             hospital_name="Hermina",
             branch_name="Cabang Depok",
-            source="selenium_google_maps",
+            source="apify_google_maps",
             external_place_id="place-depok-1",
         )
         bekasi = Location(
             company_id=tenant.id,
             hospital_name="Hermina",
             branch_name="Cabang Bekasi",
-            source="selenium_google_maps",
+            source="apify_google_maps",
             external_place_id="place-bekasi-1",
         )
         foreign = Location(
             company_id=other.id,
             hospital_name="Rival",
             branch_name="Rival Branch",
-            source="selenium_google_maps",
+            source="apify_google_maps",
             external_place_id="place-rival-1",
         )
         session.add_all([depok, bekasi, foreign])
@@ -136,7 +136,7 @@ def seeded(session_factory):
         positive = Review(
             company_id=tenant.id,
             location_id=depok.id,
-            source="selenium_google_maps",
+            source="apify_google_maps",
             external_place_id="place-depok-1",
             external_review_id="review-depok-1",
             reviewer_name="Customer A",
@@ -155,7 +155,7 @@ def seeded(session_factory):
         negative = Review(
             company_id=tenant.id,
             location_id=depok.id,
-            source="selenium_google_maps",
+            source="apify_google_maps",
             external_place_id="place-depok-1",
             external_review_id="review-depok-2",
             reviewer_name="Customer B",
@@ -172,7 +172,7 @@ def seeded(session_factory):
         unanalyzed = Review(
             company_id=tenant.id,
             location_id=bekasi.id,
-            source="selenium_google_maps",
+            source="apify_google_maps",
             external_place_id="place-bekasi-1",
             rating=3,
             review_text="Parkirannya sempit.",

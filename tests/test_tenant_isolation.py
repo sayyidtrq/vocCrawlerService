@@ -115,7 +115,7 @@ def test_competitor_isolation(session_factory, two_companies):
     competitor_service_a = CompetitorService(company_id=company_a_id, session_factory=session_factory)
     competitor_a = competitor_service_a.add_competitor(
         name="RS Kompetitor A",
-        source="selenium",
+        source="apify",
         external_place_id="comp-a",
     )
 
