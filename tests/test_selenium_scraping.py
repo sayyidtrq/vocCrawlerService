@@ -254,9 +254,15 @@ def test_selenium_driver_uses_container_browser_and_safe_flags(
             captured["cdp_cmd"] = cmd
             captured["cdp_params"] = params
 
-    def fake_chrome(*, service, options):
-        captured["service"] = service
+    def fake_chrome(
+        *, options, browser_executable_path, driver_executable_path,
+        user_data_dir, headless,
+    ):
         captured["options"] = options
+        captured["browser_executable_path"] = browser_executable_path
+        captured["driver_executable_path"] = driver_executable_path
+        captured["user_data_dir"] = user_data_dir
+        captured["headless"] = headless
         return _FakeChromeDriver()
 
     monkeypatch.setattr(
@@ -264,18 +270,18 @@ def test_selenium_driver_uses_container_browser_and_safe_flags(
         fake_which,
     )
     monkeypatch.setattr(
-        "app.integrations.selenium_google_maps_client.webdriver.Chrome",
+        "app.integrations.selenium_google_maps_client.uc.Chrome",
         fake_chrome,
     )
 
     result = SeleniumGoogleMapsReviewClient(settings)._create_driver()
 
     assert result is not None
-    assert captured["options"].binary_location == "/usr/bin/chromium"
-    assert "--headless=new" in captured["options"].arguments
+    assert captured["browser_executable_path"] == "/usr/bin/chromium"
+    assert captured["headless"] is True
     assert "--no-sandbox" in captured["options"].arguments
     assert "--disable-dev-shm-usage" in captured["options"].arguments
-    assert captured["service"].path == "/usr/bin/chromedriver"
+    assert captured["driver_executable_path"] == "/usr/bin/chromedriver"
 
 
 def test_selenium_driver_hides_automation_fingerprint(monkeypatch, tmp_path):
@@ -290,7 +296,10 @@ def test_selenium_driver_hides_automation_fingerprint(monkeypatch, tmp_path):
             captured["cdp_cmd"] = cmd
             captured["cdp_params"] = params
 
-    def fake_chrome(*, service, options):
+    def fake_chrome(
+        *, options, browser_executable_path, driver_executable_path,
+        user_data_dir, headless,
+    ):
         captured["options"] = options
         return _FakeChromeDriver()
 
@@ -299,7 +308,7 @@ def test_selenium_driver_hides_automation_fingerprint(monkeypatch, tmp_path):
         lambda _binary: None,
     )
     monkeypatch.setattr(
-        "app.integrations.selenium_google_maps_client.webdriver.Chrome",
+        "app.integrations.selenium_google_maps_client.uc.Chrome",
         fake_chrome,
     )
 
@@ -324,7 +333,10 @@ def test_selenium_driver_applies_proxy_when_configured(monkeypatch, tmp_path):
         def execute_cdp_cmd(self, cmd, params):
             pass
 
-    def fake_chrome(*, service, options):
+    def fake_chrome(
+        *, options, browser_executable_path, driver_executable_path,
+        user_data_dir, headless,
+    ):
         captured["options"] = options
         return _FakeChromeDriver()
 
@@ -333,7 +345,7 @@ def test_selenium_driver_applies_proxy_when_configured(monkeypatch, tmp_path):
         lambda _binary: None,
     )
     monkeypatch.setattr(
-        "app.integrations.selenium_google_maps_client.webdriver.Chrome",
+        "app.integrations.selenium_google_maps_client.uc.Chrome",
         fake_chrome,
     )
 
@@ -350,7 +362,10 @@ def test_selenium_driver_skips_proxy_flag_when_unset(monkeypatch, tmp_path):
         def execute_cdp_cmd(self, cmd, params):
             pass
 
-    def fake_chrome(*, service, options):
+    def fake_chrome(
+        *, options, browser_executable_path, driver_executable_path,
+        user_data_dir, headless,
+    ):
         captured["options"] = options
         return _FakeChromeDriver()
 
@@ -359,7 +374,7 @@ def test_selenium_driver_skips_proxy_flag_when_unset(monkeypatch, tmp_path):
         lambda _binary: None,
     )
     monkeypatch.setattr(
-        "app.integrations.selenium_google_maps_client.webdriver.Chrome",
+        "app.integrations.selenium_google_maps_client.uc.Chrome",
         fake_chrome,
     )
 
