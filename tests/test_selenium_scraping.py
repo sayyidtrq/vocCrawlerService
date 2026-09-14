@@ -316,8 +316,6 @@ def test_selenium_driver_hides_automation_fingerprint(monkeypatch, tmp_path):
 
     options = captured["options"]
     assert "--disable-blink-features=AutomationControlled" in options.arguments
-    assert options.experimental_options["excludeSwitches"] == ["enable-automation"]
-    assert options.experimental_options["useAutomationExtension"] is False
     assert captured["cdp_cmd"] == "Page.addScriptToEvaluateOnNewDocument"
     assert "navigator" in captured["cdp_params"]["source"]
     assert "webdriver" in captured["cdp_params"]["source"]

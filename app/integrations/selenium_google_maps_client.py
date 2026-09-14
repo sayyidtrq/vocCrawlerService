@@ -190,9 +190,13 @@ class SeleniumGoogleMapsReviewClient(ReviewSourceClient):
         # sendiri untuk itu; flag di bawah menambal sinyal level-browser yang
         # tersisa. Ini untuk crawler ulasan bisnis milik sendiri, bukan untuk
         # melewati proteksi keamanan/pembayaran.
+        #
+        # excludeSwitches/useAutomationExtension SENGAJA tidak dipasang lagi:
+        # chromedriver versi baru (152+) menolaknya sebagai capability yang
+        # tidak dikenal ("unrecognized chrome option: excludeSwitches") dan
+        # membuat driver gagal start sama sekali. undetected-chromedriver
+        # sudah menyembunyikan infobar otomasi dengan caranya sendiri.
         options.add_argument("--disable-blink-features=AutomationControlled")
-        options.add_experimental_option("excludeSwitches", ["enable-automation"])
-        options.add_experimental_option("useAutomationExtension", False)
         if self.settings.selenium_proxy_url:
             options.add_argument(f"--proxy-server={self.settings.selenium_proxy_url}")
         browser_path = (
