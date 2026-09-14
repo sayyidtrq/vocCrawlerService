@@ -6,9 +6,9 @@ from pydantic import BaseModel, Field
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.config import get_settings
+from app.services.apify_fetch_service import ApifyFetchService
 from app.services.entitlement_service import EntitlementService
 from app.services.fetch_service import FetchService
-from app.services.selenium_fetch_service import SeleniumFetchService
 from app.utils.date_parser import resolve_date_range
 from apps.api.app_api.serializers import to_jsonable
 from apps.api.app_api.service_auth import ServicePrincipal, require_service_principal
@@ -41,7 +41,7 @@ def _resolve_range(payload) -> tuple[datetime | None, datetime | None]:
 _FETCH_RESULT_EXAMPLE = {
     "location_id": 5,
     "location_name": "Hermina Depok",
-    "source": "selenium_google_maps",
+    "source": "apify_google_maps",
     "status": "success",
     "total_fetched": 200,
     "total_inserted": 25,
@@ -58,7 +58,7 @@ _FETCH_RESULT_EXAMPLE = {
     summary="Trigger crawling 1 lokasi",
     description=(
         "Menjalankan crawling review untuk satu lokasi (sinkron/blocking). "
-        "Mendukung `source` (selenium/places/mock), `dry_run`, dan rentang tanggal. "
+        "Mendukung `source` (apify/places/mock), `dry_run`, dan rentang tanggal. "
         "`status` bisa `success` | `partial_success` | `failed` | `dry_run`."
     ),
     responses={200: {"content": {"application/json": {"example": _FETCH_RESULT_EXAMPLE}}}},
@@ -79,9 +79,9 @@ def run_fetch_job(payload: FetchJobRequest, principal: ServicePrincipal = Depend
         result = FetchService(company_id=principal.company_id).dry_run_location(
             payload.location_id, date_from=date_from, date_to=date_to
         )
-    elif source in {"selenium", "selenium_google_maps"}:
+    elif source in {"apify", "apify_google_maps"}:
         try:
-            result = SeleniumFetchService(company_id=principal.company_id).fetch_location(
+            result = ApifyFetchService(company_id=principal.company_id).fetch_location(
                 payload.location_id,
                 target=payload.target_review_count,
                 date_from=date_from,

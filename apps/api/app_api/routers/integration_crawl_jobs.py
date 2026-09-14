@@ -78,7 +78,7 @@ def _target_crawl_options(
         404: {"model": IntegrationErrorResponse},
         409: {"model": IntegrationErrorResponse},
     },
-    summary="Queue tenant-scoped crawl jobs without waiting for Selenium",
+    summary="Queue tenant-scoped Apify crawl jobs",
 )
 def enqueue_crawl_jobs(
     payload: CrawlBatchCreateRequest,

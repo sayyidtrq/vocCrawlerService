@@ -5,11 +5,11 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
+from app.services.apify_fetch_service import ApifyFetchService
 from app.services.analysis_service import AnalysisService
 from app.services.export_service import ExportService
 from app.services.fetch_service import FetchService
 from app.services.location_service import LocationService
-from app.services.selenium_fetch_service import SeleniumFetchService
 from apps.api.app_api.dependencies import get_db_session
 from apps.api.app_api.serializers import to_jsonable
 from apps.api.app_api.service_auth import ServicePrincipal, require_service_principal
@@ -42,7 +42,7 @@ class LocationPipelineRequest(BaseModel):
                 "application/json": {
                     "example": {
                         "location_id": 5,
-                        "source": "selenium",
+                        "source": "apify",
                         "dry_run": False,
                         "status": "success",
                         "steps": {
@@ -84,11 +84,11 @@ def run_location_pipeline(
             fetch_result = FetchService(
                 company_id=principal.company_id
             ).dry_run_location(payload.location_id)
-        elif source in {"selenium", "selenium_google_maps"}:
-            # Keep the Selenium path tenant-scoped just like the normal fetch
+        elif source in {"apify", "apify_google_maps"}:
+            # Keep the Apify path tenant-scoped just like the normal fetch
             # service. Without this company_id, a guessed location_id could
             # bypass the ownership check inside LocationService.
-            fetch_result = SeleniumFetchService(
+            fetch_result = ApifyFetchService(
                 company_id=principal.company_id
             ).fetch_location(
                 payload.location_id,

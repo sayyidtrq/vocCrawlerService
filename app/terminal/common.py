@@ -110,26 +110,25 @@ def show_fetch_result(result: dict) -> None:
         print("\nNo new reviews found.")
 
 
-def show_selenium_fetch_result(result: dict) -> None:
+def show_apify_fetch_result(result: dict) -> None:
     if result["status"] == "failed":
-        print("\nSelenium fetch failed.\n")
+        print("\nApify fetch failed.\n")
         print(f"Location : {result['location_name']}")
         print(f"Error    : {result['error_message']}")
         return
     metadata = result.get("metadata") or {}
     heading = (
-        "Selenium fetch completed."
+        "Apify fetch completed."
         if result["status"] == "success"
-        else "Selenium fetch completed with partial result."
+        else "Apify fetch completed with partial result."
     )
     print(f"\n{heading}\n")
     print(f"Location          : {result['location_name']}")
     print(f"Target requested  : {result['target_review_count']}")
-    print(f"Review cards read : {result['total_fetched']}")
+    print(f"Reviews fetched   : {result['total_fetched']}")
     print(f"Inserted          : {result['total_inserted']}")
     print(f"Duplicate         : {result['total_duplicate']}")
     print(f"Failed            : {result['total_failed']}")
-    print(f"Scroll attempts   : {metadata.get('scroll_attempts', 0)}")
     print(f"Status            : {result['status'].replace('_', ' ').title()}")
     if metadata.get("stopped_reason") not in {None, "target_reached"}:
         print(f"Reason            : {metadata['stopped_reason']}")

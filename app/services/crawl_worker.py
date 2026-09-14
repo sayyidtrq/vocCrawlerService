@@ -11,9 +11,10 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.config import Settings, get_settings
 from app.db.models import Competitor, CrawlBatch, CrawlJob, Location
 from app.db.session import get_session_factory
+from app.integrations.apify_token_pool import ApifyTokenPool
+from app.services.apify_fetch_service import ApifyFetchService
 from app.services.crawl_batch_view import serialize_batch
 from app.services.crawl_result import stop_reason
-from app.services.selenium_fetch_service import SeleniumFetchService
 
 logger = logging.getLogger(__name__)
 
@@ -43,17 +44,20 @@ class CrawlWorker:
         self,
         session_factory: sessionmaker[Session] | None = None,
         settings: Settings | None = None,
-        fetch_service_factory: Callable[[int], SeleniumFetchService] | None = None,
+        fetch_service_factory: Callable[[int], ApifyFetchService] | None = None,
     ):
         self.session_factory = session_factory or get_session_factory()
         self.settings = settings or get_settings()
-        self.fetch_service_factory = fetch_service_factory or (
-            lambda company_id: SeleniumFetchService(
+        if fetch_service_factory is not None:
+            self.fetch_service_factory = fetch_service_factory
+        else:
+            token_pool = ApifyTokenPool(self.settings.apify_api_tokens)
+            self.fetch_service_factory = lambda company_id: ApifyFetchService(
                 company_id=company_id,
                 session_factory=self.session_factory,
                 settings=self.settings,
+                token_pool=token_pool,
             )
-        )
 
     def _report_progress(
         self, job_id: int, fetched: int, scanned: int = 0
@@ -181,11 +185,6 @@ class CrawlWorker:
                 date_from=claimed.date_from,
                 date_to=claimed.date_to,
                 sort_by=claimed.sort_by or "newest",
-                scan_limit=claimed.scan_limit,
-                # Batas waktu per job. Tanpa ini satu permintaan rentang jauh
-                # ke belakang bisa menahan worker sampai batas gulir habis,
-                # sementara cabang lain mengantre.
-                time_limit_seconds=600,
                 on_progress=lambda n, total, seen=0: self._report_progress(
                     claimed.id, n, seen
                 ),
@@ -263,8 +262,6 @@ class CrawlWorker:
             date_from=claimed.date_from,
             date_to=claimed.date_to,
             sort_by=claimed.sort_by or "newest",
-            scan_limit=claimed.scan_limit,
-            time_limit_seconds=600,
             on_progress=lambda n, total, seen=0: self._report_progress(
                 claimed.id, n, seen
             ),
@@ -408,4 +405,3 @@ class CrawlWorker:
         else:
             batch.status = "completed"
         batch.finished_at = now
-

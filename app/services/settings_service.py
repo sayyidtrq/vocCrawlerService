@@ -80,27 +80,10 @@ class SettingsService:
             "FETCH_LIMIT_PER_LOCATION": self.settings.fetch_limit_per_location,
             "FETCH_TIMEOUT_SECONDS": self.settings.fetch_timeout_seconds,
             "FETCH_MAX_RETRY": self.settings.fetch_max_retry,
-            "SELENIUM_HEADLESS": self.settings.selenium_headless,
-            "SELENIUM_DEFAULT_TARGET_REVIEWS": (
-                self.settings.selenium_default_target_reviews
-            ),
-            "SELENIUM_MAX_TARGET_REVIEWS": (
-                self.settings.selenium_max_target_reviews
-            ),
-            "SELENIUM_SCROLL_DELAY_SECONDS": (
-                self.settings.selenium_scroll_delay_seconds
-            ),
-            "SELENIUM_MAX_SCROLL_ATTEMPTS": (
-                self.settings.selenium_max_scroll_attempts
-            ),
-            "SELENIUM_WAIT_TIMEOUT_SECONDS": (
-                self.settings.selenium_wait_timeout_seconds
-            ),
-            "SELENIUM_USER_DATA_DIR": (
-                str(self.settings.selenium_user_data_dir)
-                if self.settings.selenium_user_data_dir
-                else ""
-            ),
+            "CRAWL_MAX_TARGET_REVIEWS": self.settings.crawl_max_target_reviews,
+            "APIFY_ACTOR_ID": self.settings.apify_actor_id,
+            "APIFY_RUN_TIMEOUT_SECONDS": self.settings.apify_run_timeout_seconds,
+            "APIFY_POLL_INTERVAL_SECONDS": self.settings.apify_poll_interval_seconds,
             "ANALYSIS_BATCH_SIZE": self.settings.analysis_batch_size,
             "ANALYSIS_LLM_CONCURRENCY": self.settings.analysis_llm_concurrency,
             "PROMPT_VERSION": self.settings.prompt_version,

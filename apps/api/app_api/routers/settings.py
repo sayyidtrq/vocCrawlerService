@@ -15,7 +15,7 @@ router = APIRouter(tags=["settings"])
     "/settings",
     summary="Konfigurasi runtime (non-rahasia)",
     description="Mengembalikan konfigurasi publik aplikasi dan status ketersediaan API key (nilai key selalu di-masking).",
-    responses={200: {"content": {"application/json": {"example": {"app_env": "local", "app_name": "Review System", "review_source_mode": "selenium", "page_size": 20, "google_maps_api_key": "****", "google_maps_api_key_configured": True}}}}},
+    responses={200: {"content": {"application/json": {"example": {"app_env": "local", "app_name": "Review System", "review_source_mode": "apify", "page_size": 20, "google_maps_api_key": "****", "google_maps_api_key_configured": True}}}}},
 )
 def get_public_settings(principal: ServicePrincipal = Depends(require_service_principal)) -> dict:
     settings = get_settings()
@@ -35,17 +35,10 @@ def get_public_settings(principal: ServicePrincipal = Depends(require_service_pr
             "fetch_limit_per_location": settings.fetch_limit_per_location,
             "fetch_timeout_seconds": settings.fetch_timeout_seconds,
             "fetch_max_retry": settings.fetch_max_retry,
-            "selenium_headless": settings.selenium_headless,
-            "selenium_default_target_reviews": (
-                settings.selenium_default_target_reviews
-            ),
-            "selenium_max_target_reviews": settings.selenium_max_target_reviews,
-            "selenium_scroll_delay_seconds": settings.selenium_scroll_delay_seconds,
-            "selenium_max_scroll_attempts": settings.selenium_max_scroll_attempts,
-            "selenium_wait_timeout_seconds": (
-                settings.selenium_wait_timeout_seconds
-            ),
-            "selenium_user_data_dir": settings.selenium_user_data_dir,
+            "crawl_max_target_reviews": settings.crawl_max_target_reviews,
+            "apify_actor_id": settings.apify_actor_id,
+            "apify_run_timeout_seconds": settings.apify_run_timeout_seconds,
+            "apify_poll_interval_seconds": settings.apify_poll_interval_seconds,
             "analysis_batch_size": settings.analysis_batch_size,
             "prompt_version": settings.prompt_version,
             "page_size": settings.page_size,

@@ -1,16 +1,16 @@
 from __future__ import annotations
 
+from app.services.apify_fetch_service import ApifyFetchService
 from app.services.fetch_log_service import FetchLogService
 from app.services.fetch_service import FetchService
 from app.services.location_service import LocationService
-from app.services.selenium_fetch_service import SeleniumFetchService
 from app.terminal.common import (
     handle_menu_error,
     parse_int,
     pause,
     print_heading,
     show_fetch_result,
-    show_selenium_fetch_result,
+    show_apify_fetch_result,
     show_locations,
 )
 from app.utils.date_parser import format_datetime
@@ -20,13 +20,13 @@ def run_fetch_menu() -> None:
     service = FetchService()
     locations = LocationService()
     log_service = FetchLogService()
-    selenium_service = SeleniumFetchService()
+    apify_service = ApifyFetchService()
     while True:
         print_heading("Fetch / Sync Reviews")
         print("1. Fetch Reviews for One Location")
         print("2. Fetch Reviews for All Active Locations")
         print("3. Dry Run Fetch for One Location")
-        print("4. Selenium Fetch from Review URL")
+        print("4. Apify Fetch from Review URL")
         print("5. View Last Fetch Result")
         print("0. Back to Main Menu")
         choice = input("\nSelect menu: ").strip()
@@ -47,18 +47,14 @@ def run_fetch_menu() -> None:
             elif choice == "4":
                 location_id = _select_active_location(locations)
                 if location_id is not None:
-                    target = _select_selenium_target(selenium_service)
+                    target = _select_apify_target(apify_service)
                     location = locations.get_location(location_id)
-                    print("\nStarting Selenium review fetch...\n")
+                    print("\nStarting Apify review fetch...\n")
                     print(f"Location      : {location.branch_name}")
                     print(f"Target review : {target}")
-                    print(
-                        "Headless      : "
-                        f"{str(selenium_service.settings.selenium_headless).lower()}"
-                    )
-                    print("Source        : selenium_google_maps")
-                    result = selenium_service.fetch_location(location_id, target)
-                    show_selenium_fetch_result(result)
+                    print("Source        : apify_google_maps")
+                    result = apify_service.fetch_location(location_id, target)
+                    show_apify_fetch_result(result)
                     pause()
             elif choice == "5":
                 _show_last_log(log_service)
@@ -135,7 +131,7 @@ def _show_last_log(service: FetchLogService) -> None:
     pause()
 
 
-def _select_selenium_target(service: SeleniumFetchService) -> int:
+def _select_apify_target(service: ApifyFetchService) -> int:
     print("\nTarget reviews to fetch:")
     print("1. 100 reviews")
     print("2. 150 reviews")

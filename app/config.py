@@ -28,7 +28,7 @@ REVIEW_SOURCE_MODES = {
     "google_places",
     "google_business_profile",
     "third_party",
-    "selenium",
+    "apify",
 }
 
 # Fields that go through the old _as_int/_as_bool/_as_float/_as_optional_int/
@@ -46,13 +46,10 @@ _BLANK_USES_DEFAULT_FIELDS = (
     "fetch_limit_per_location",
     "fetch_timeout_seconds",
     "fetch_max_retry",
-    "selenium_headless",
-    "selenium_default_target_reviews",
-    "selenium_max_target_reviews",
-    "selenium_scroll_delay_seconds",
-    "selenium_max_scroll_attempts",
-    "selenium_wait_timeout_seconds",
-    "selenium_proxy_url",
+    "crawl_max_target_reviews",
+    "apify_actor_id",
+    "apify_run_timeout_seconds",
+    "apify_poll_interval_seconds",
     "analysis_batch_size",
     "page_size",
     "show_raw_payload",
@@ -118,17 +115,11 @@ class Settings(BaseModel):
     fetch_limit_per_location: int = 50
     fetch_timeout_seconds: int = 30
     fetch_max_retry: int = 3
-    selenium_headless: bool = False
-    selenium_default_target_reviews: int = 100
-    selenium_max_target_reviews: int = 300
-    selenium_scroll_delay_seconds: float = 1.0
-    selenium_max_scroll_attempts: int = 400
-    selenium_wait_timeout_seconds: int = 20
-    selenium_user_data_dir: Path | None = Path(".selenium-profile")
-    # "http://host:port" - no inline user:pass. Chrome's --proxy-server flag
-    # has no credential field; use an IP-whitelisted proxy so the provider
-    # authorizes this server's outbound IP instead.
-    selenium_proxy_url: str | None = None
+    crawl_max_target_reviews: int = 300
+    apify_api_tokens: Annotated[list[str], NoDecode] = []
+    apify_actor_id: str = "zen-studio/google-maps-reviews-scraper"
+    apify_run_timeout_seconds: int = 300
+    apify_poll_interval_seconds: int = 5
     analysis_batch_size: int = 20
     prompt_version: str = "v1"
     page_size: int = 20
@@ -218,6 +209,13 @@ class _EnvSettings(Settings, BaseSettings):
             return tuple(items) if items else DEFAULT_CORS_ALLOWED_ORIGINS
         return value
 
+    @field_validator("apify_api_tokens", mode="before")
+    @classmethod
+    def _parse_apify_api_tokens(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            return [token.strip() for token in value.split(",") if token.strip()]
+        return value or []
+
     @field_validator("local_llm_api_key", mode="before")
     @classmethod
     def _blank_local_llm_api_key_is_none(cls, value: Any) -> Any:
@@ -228,21 +226,13 @@ class _EnvSettings(Settings, BaseSettings):
             return None
         return value
 
-    @field_validator("selenium_user_data_dir", mode="before")
-    @classmethod
-    def _blank_selenium_profile_is_none(cls, value: Any) -> Any:
-        # Absent -> default ".selenium-profile". Explicitly blank -> None
-        # (profile dir disabled), matching Path(value) if value else None.
-        if isinstance(value, str) and not value.strip():
-            return None
-        return value
-
     @field_validator(
         "app_name",
         "google_places_language_code",
         "google_places_region_code",
         "local_llm_base_url",
         "local_llm_model",
+        "apify_actor_id",
         "prompt_version",
         mode="after",
     )
@@ -272,7 +262,7 @@ class _EnvSettings(Settings, BaseSettings):
         if normalized not in REVIEW_SOURCE_MODES:
             raise ValueError(
                 "REVIEW_SOURCE_MODE must be mock, google_places, "
-                "google_business_profile, third_party, or selenium."
+                "google_business_profile, third_party, or apify."
             )
         return normalized
 
@@ -280,29 +270,6 @@ class _EnvSettings(Settings, BaseSettings):
     @classmethod
     def _resolve_export_dir(cls, value: Path) -> Path:
         return value if value.is_absolute() else BASE_DIR / value
-
-    @field_validator("selenium_user_data_dir", mode="after")
-    @classmethod
-    def _resolve_selenium_user_data_dir(cls, value: Path | None) -> Path | None:
-        if value is None:
-            return None
-        return value if value.is_absolute() else BASE_DIR / value
-
-    @field_validator("selenium_scroll_delay_seconds", mode="after")
-    @classmethod
-    def _floor_scroll_delay(cls, value: float) -> float:
-        # Lantai 0.5 detik, bukan 2. Nol tidak diizinkan: kartu perlu waktu
-        # dimuat setelah digulir, dan menggulir lebih cepat dari itu justru
-        # menghasilkan lebih sedikit ulasan.
-        return max(0.5, value)
-
-    @field_validator("selenium_max_scroll_attempts", mode="after")
-    @classmethod
-    def _clamp_max_scroll_attempts(cls, value: int) -> int:
-        # Plafon 1000, bukan 100. Rentang tanggal ke periode lampau harus
-        # menembus ratusan ulasan yang lebih baru sebelum sampai ke
-        # jendelanya; dengan plafon 100 crawl berhenti jauh sebelum itu.
-        return min(1000, max(1, value))
 
     @field_validator("analysis_llm_retry_backoff_seconds", mode="after")
     @classmethod
