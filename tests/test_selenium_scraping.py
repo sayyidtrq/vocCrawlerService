@@ -695,6 +695,59 @@ def test_advance_review_list_swallows_stale_button_click(tmp_path):
     assert result is not None  # did not raise
 
 
+def test_advance_review_list_reports_google_auth_wall(tmp_path):
+    button = _FakeEl()
+    dialog = _FakeEl(
+        text=(
+            "Login untuk menikmati fitur terbaik dari Google Maps\n"
+            "Ulasan & foto: Baca dan telusuri setiap ulasan dan foto."
+        )
+    )
+    registry = {
+        "button[aria-label^='Lihat ulasan lainnya' i]": [button],
+        "[role='dialog']": [],
+    }
+    button.on_click = lambda: registry["[role='dialog']"].append(dialog)
+    client = _client_with_short_wait(tmp_path)
+
+    with pytest.raises(ReviewSourceError) as caught:
+        client._advance_review_list(_FakeDriver(registry), _FakeEl())
+
+    assert caught.value.code == "GOOGLE_AUTH_REQUIRED"
+    assert caught.value.retriable is False
+
+
+def test_google_auth_wall_detection_falls_back_to_body_text(tmp_path):
+    client = _client_with_short_wait(tmp_path)
+    driver = _FakeDriver(
+        {},
+        body_text="Sign in to enjoy the best of Google Maps and read reviews.",
+    )
+
+    with pytest.raises(ReviewSourceError) as caught:
+        client._raise_if_google_auth_wall(driver)
+
+    assert caught.value.code == "GOOGLE_AUTH_REQUIRED"
+
+
+def test_open_panel_reports_auth_wall_before_container_error(tmp_path):
+    client = _client_with_short_wait(tmp_path)
+    driver = _FakeDriver(
+        {},
+        body_text=(
+            "Login untuk menikmati fitur terbaik dari Google Maps dan baca "
+            "semua ulasan."
+        ),
+    )
+
+    with pytest.raises(ReviewSourceError) as caught:
+        client._wait_for_review_cards_or_open_panel(driver)
+
+    assert caught.value.code == "GOOGLE_AUTH_REQUIRED"
+    assert caught.value.retriable is False
+    assert "manual sign-in" in str(caught.value)
+
+
 def test_apply_sort_waits_for_option_after_click(tmp_path, monkeypatch):
     # Opsi menu muncul setelah beberapa kali polling, bukan seketika saat
     # diklik - kalau _apply_sort membaca sekali saja (perilaku lama), ini

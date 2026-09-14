@@ -13,6 +13,7 @@ from app.db.session import get_session_factory
 from app.integrations.selenium_google_maps_client import (
     SeleniumGoogleMapsReviewClient,
 )
+from app.integrations.review_source_client import ReviewSourceError
 from app.services.competitor_review_service import CompetitorReviewService
 from app.services.crawl_result import CrawlFetchResult
 from app.services.crawl_target import CrawlTarget
@@ -305,6 +306,16 @@ class SeleniumFetchService:
                 or result["total_failed"] > 0
             )
             result["status"] = "partial_success" if partial else "success"
+        except ReviewSourceError as exc:
+            result["status"] = "failed"
+            result["error_message"] = str(exc)
+            result["metadata"]["failure_code"] = exc.code
+            result["metadata"]["retriable"] = exc.retriable
+            logger.warning(
+                "Selenium review source rejected %s: %s",
+                crawl_target.branch_name,
+                exc,
+            )
         except Exception as exc:
             result["status"] = "failed"
             result["error_message"] = str(exc)

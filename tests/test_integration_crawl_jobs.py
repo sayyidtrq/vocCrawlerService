@@ -401,3 +401,54 @@ def test_worker_marks_partial_success_without_failed_retry(session_factory):
     assert "jobs" not in latest
     assert latest["stop_reason"] == "sort_unavailable"
     assert latest["stop_reasons"] == {"sort_unavailable": 1}
+
+
+def test_worker_does_not_retry_permanent_source_failure(session_factory):
+    class AuthenticationRequiredFetchService:
+        def fetch_location(
+            self,
+            location_id,
+            target,
+            date_from=None,
+            date_to=None,
+            on_progress=None,
+            sort_by="newest",
+            scan_limit=None,
+            time_limit_seconds=0,
+        ):
+            return {
+                "status": "failed",
+                "location_id": location_id,
+                "target_review_count": target,
+                "metadata": {
+                    "failure_code": "GOOGLE_AUTH_REQUIRED",
+                    "retriable": False,
+                },
+                "error_message": "Google Maps requires a manual sign-in.",
+                "total_fetched": 0,
+                "total_inserted": 0,
+                "total_duplicate": 0,
+                "total_skipped_out_of_range": 0,
+                "total_failed": 0,
+            }
+
+    queue = CrawlQueue(session_factory=session_factory)
+    worker = CrawlWorker(
+        session_factory=session_factory,
+        fetch_service_factory=lambda _company_id: AuthenticationRequiredFetchService(),
+    )
+    queued, _ = queue.enqueue(
+        company_id=1,
+        client_id=1,
+        idempotency_key="169:2026-09-11:google-auth-required",
+        onebox_location_ids=[101],
+        slot="manual",
+    )
+
+    completed = worker.execute_next(worker_id="test-worker")
+
+    assert completed["batch_id"] == queued["batch_id"]
+    assert completed["status"] == "failed"
+    assert completed["jobs"][0]["status"] == "failed"
+    assert completed["jobs"][0]["attempts"] == 1
+    assert completed["jobs"][0]["error"]["code"] == "GOOGLE_AUTH_REQUIRED"

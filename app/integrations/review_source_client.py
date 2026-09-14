@@ -6,9 +6,15 @@ from app.db.models import Location
 
 
 class ReviewSourceError(RuntimeError):
-    def __init__(self, message: str, retriable: bool = False):
+    def __init__(
+        self,
+        message: str,
+        retriable: bool = False,
+        code: str | None = None,
+    ):
         super().__init__(message)
         self.retriable = retriable
+        self.code = code
 
 
 class ReviewSourceClient(ABC):
