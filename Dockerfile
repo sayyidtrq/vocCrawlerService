@@ -10,10 +10,24 @@ WORKDIR /app
 
 # curl is required by the docker-compose healthcheck. Chromium and its
 # distribution-matched driver keep Selenium independent from runtime downloads.
+#
+# chromium/chromium-driver are version-pinned: an unpinned rebuild once pulled
+# a newer chromedriver that rejected the (then-present) excludeSwitches
+# capability outright, taking every crawl down with "Selenium browser failed
+# to start" (see INCIDENT_P0_GOOGLE_MAPS_ONLY_5_REVIEWS.md §12-13).
+#
+# Debian's security archive keeps only the CURRENT build of a package - the
+# exact version below WILL eventually 404 on `apt-get update` once Debian
+# ships the next security point-release (confirmed: the version this pin
+# replaced vanished from the mirror within the same day it was installed).
+# That is the intended failure mode - a loud build break forces a deliberate
+# bump instead of a silent Chrome upgrade breaking crawls again. To bump:
+# `apt-cache madison chromium` for the current version, update both lines,
+# rebuild, and re-verify _create_driver() actually starts before deploying.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
-        chromium \
-        chromium-driver \
+        chromium=152.0.7977.82-1~deb13u1 \
+        chromium-driver=152.0.7977.82-1~deb13u1 \
         curl \
         xauth \
         xvfb \
