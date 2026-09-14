@@ -111,6 +111,21 @@ tanpa job berstatus `failed` tetap menjadi `completed`. UI OneBox memakai status
 batch itu dan menampilkan badge hijau. Detail `counts.partial_success` tidak
 menjadi status utama.
 
+### 4.4 Eksperimen proxy tidak menyelesaikan P0
+
+Pada audit 14 September, server dev menjalankan branch `dev-testing-proxy`
+commit `4fa5a9a`. Branch tersebut sudah mencakup proxy authenticated dan retry
+untuk respons proxy `407`. API tetap healthy dan worker tetap hidup, tetapi
+crawl Hermina Bogor dan Bandung masih gagal menemukan review container setelah
+tiga attempt.
+
+Dengan bukti tersebut, proxy **tidak berhasil menyelesaikan insiden ini**.
+Eksperimen itu belum membuktikan bahwa seluruh penggunaan proxy tidak berguna;
+ia hanya membuktikan bahwa mengganti egress tidak memulihkan pagination atau
+review surface pada runtime yang diuji. Proxy tidak boleh dijadikan jalur utama
+recovery sebelum profil autentik, branch deployment, dan readiness Google
+dibuktikan sehat.
+
 ## 5. Dugaan yang sudah dibantah
 
 | Dugaan | Hasil |
@@ -121,7 +136,31 @@ menjadi status utama.
 | Target atau `scan_limit` membatasi ke 5 | Salah; request 300/3000 tetap berhenti di 5 |
 | Selector panel atau kontainer scroll salah | Salah; tab aktif dan kontainer yang benar terbukti dari DOM |
 | `navigator.webdriver` adalah satu-satunya penyebab | Salah; sudah `null`, pagination tetap diblokir |
-| Proxy wajib | Belum terbukti; jangan menambah proxy sebelum profil autentik pulih |
+| Proxy menyelesaikan kegagalan crawl | Tidak pada pengujian ini; branch proxy tetap gagal setelah 3 attempt |
+
+## 5.1 Pendekatan resolusi yang dipilih
+
+Pendekatan saat ini memulihkan sistem dari lapisan paling deterministik, bukan
+menambah variasi jaringan baru:
+
+1. **Bekukan eksperimen proxy untuk P0.** Simpan branch sebagai bahan
+   observasi, tetapi jangan deploy sebagai baseline acceptance test.
+2. **Kembalikan dev ke branch canonical.** Merge patch P0, deploy commit yang
+   diketahui, dan catat image digest agar kode yang diuji dapat direproduksi.
+3. **Pulihkan profil browser yang benar.** Gunakan volume dev yang stabil,
+   login Google manual melalui tunnel lokal, tutup browser setup, lalu pastikan
+   hanya worker yang memakai volume tersebut.
+4. **Fail fast dan jujur.** Login wall menjadi `GOOGLE_AUTH_REQUIRED` yang
+   non-retryable. Error perubahan DOM tetap dibedakan sebagai kegagalan review
+   surface, bukan akhir daftar review.
+5. **Tambahkan source readiness.** Health API/database dipisahkan dari probe
+   Google agar container healthy tidak disamakan dengan crawler siap bekerja.
+6. **Buktikan end-to-end.** Jalankan probe DOM, crawl target 10 pada lokasi
+   dengan lebih dari 10 review, pastikan lebih dari lima card terbaca, review
+   masuk DB Crawler, lalu terimpor otomatis ke OneBox.
+7. **Evaluasi proxy sesudah baseline pulih.** Proxy baru diuji ulang sebagai
+   opsi mitigasi rate limit atau IP reputation dengan A/B test, bukan sebagai
+   syarat login atau perbaikan selector.
 
 ## 6. Perbaikan kode pada branch P0
 
