@@ -10,7 +10,10 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.config import Settings, get_settings
 from app.db.models import Competitor
 from app.db.session import get_session_factory
-from app.integrations.apify_review_client import ApifyReviewClient
+from app.integrations.apify_review_client import (
+    ApifyReviewClient,
+    ApifyRunIncompleteError,
+)
 from app.integrations.apify_token_pool import ApifyTokenPool
 from app.integrations.review_source_client import ReviewSourceError
 from app.services.apify_checkpoint_store import ApifyCheckpointStore
@@ -190,34 +193,9 @@ class ApifyFetchService:
             result["total_failed"] = int(
                 result["metadata"].get("failed_review_cards", 0)
             )
-            for raw_review in raw_reviews:
-                try:
-                    normalized = self.normalizer.normalize_review(
-                        crawl_target, raw_review
-                    )
-                    if not is_within_date_range(
-                        normalized["review_time"], date_from, date_to
-                    ):
-                        result["total_skipped_out_of_range"] += 1
-                        key = (
-                            "out_of_range_older"
-                            if self._is_older_than_range(
-                                normalized["review_time"], date_from
-                            )
-                            else "out_of_range_newer"
-                        )
-                        result["metadata"][key] = (
-                            int(result["metadata"].get(key) or 0) + 1
-                        )
-                        continue
-                    _, duplicate = insert_review(normalized)
-                    if duplicate:
-                        result["total_duplicate"] += 1
-                    else:
-                        result["total_inserted"] += 1
-                except Exception:
-                    result["total_failed"] += 1
-                    logger.exception("Failed to store one Apify review")
+            self._store_reviews(
+                crawl_target, raw_reviews, date_from, date_to, insert_review, result
+            )
 
             stored = result["total_inserted"] + result["total_duplicate"]
             partial = (
@@ -232,6 +210,40 @@ class ApifyFetchService:
             public_stop_reason = stop_reason(result)
             if public_stop_reason:
                 result["metadata"]["stop_reason"] = public_stop_reason
+        except ApifyRunIncompleteError as exc:
+            # Apify never confirmed this run SUCCEEDED. Store whatever
+            # reviews it did have - real data, not wasted - but do NOT
+            # report this as partial_success: that status is terminal, and
+            # OneBox would read it as "this target is done". Without a
+            # confirmed SUCCEEDED we can't vouch for that, so this stays a
+            # retriable failure. A checkpoint was already saved by the
+            # client before raising, so the retry resumes from here instead
+            # of re-scraping the whole place (that's the actual fix for
+            # wasting API calls - not declaring victory early).
+            if on_progress is not None:
+                on_progress(len(exc.reviews), requested_target, len(exc.reviews))
+            result["metadata"] = dict(self.client.last_metadata)
+            result["metadata"].update(
+                {
+                    "date_from": date_from.isoformat() if date_from else None,
+                    "date_to": date_to.isoformat() if date_to else None,
+                    "failure_code": exc.code,
+                    "retriable": True,
+                }
+            )
+            result["total_fetched"] = len(exc.reviews)
+            self._store_reviews(
+                crawl_target, exc.reviews, date_from, date_to, insert_review, result
+            )
+            result["status"] = "failed"
+            result["error_message"] = str(exc)
+            logger.warning(
+                "Apify run incomplete for %s: %s (kept %s reviews, will "
+                "retry from checkpoint)",
+                crawl_target.branch_name,
+                exc,
+                len(exc.reviews),
+            )
         except ReviewSourceError as exc:
             result["status"] = "failed"
             result["error_message"] = str(exc)
@@ -248,6 +260,42 @@ class ApifyFetchService:
             if enable_fetch_log:
                 self.fetch_log_service.finish_log(log_id, result)
         return result
+
+    def _store_reviews(
+        self,
+        crawl_target: CrawlTarget,
+        raw_reviews: list[dict],
+        date_from: datetime | None,
+        date_to: datetime | None,
+        insert_review,
+        result: CrawlFetchResult,
+    ) -> None:
+        for raw_review in raw_reviews:
+            try:
+                normalized = self.normalizer.normalize_review(
+                    crawl_target, raw_review
+                )
+                if not is_within_date_range(
+                    normalized["review_time"], date_from, date_to
+                ):
+                    result["total_skipped_out_of_range"] += 1
+                    key = (
+                        "out_of_range_older"
+                        if self._is_older_than_range(
+                            normalized["review_time"], date_from
+                        )
+                        else "out_of_range_newer"
+                    )
+                    result["metadata"][key] = int(result["metadata"].get(key) or 0) + 1
+                    continue
+                _, duplicate = insert_review(normalized)
+                if duplicate:
+                    result["total_duplicate"] += 1
+                else:
+                    result["total_inserted"] += 1
+            except Exception:
+                result["total_failed"] += 1
+                logger.exception("Failed to store one Apify review")
 
     def validate_target(self, target: object) -> int:
         try:

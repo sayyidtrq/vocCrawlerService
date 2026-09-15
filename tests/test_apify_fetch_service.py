@@ -282,7 +282,7 @@ class IncompleteRunApifyClient:
         yield from self.items
 
 
-def test_incomplete_run_keeps_reviews_instead_of_failing_and_retrying():
+def test_incomplete_run_stores_reviews_but_stays_retriable_not_finished():
     session_factory = make_session_factory()
     company_id, location, _ = seed_targets(session_factory)
     fixture = json.loads(
@@ -309,17 +309,23 @@ def test_incomplete_run_keeps_reviews_instead_of_failing_and_retrying():
     )
 
     # Asking for more than the two items the fake dataset has, mirroring
-    # "we requested 300, the place only has 270" - it must not loop forever
-    # or raise, just take what exists and finish.
+    # "we requested 300, the place only has 270" combined with Apify never
+    # confirming SUCCEEDED. This must not loop forever, and must NOT report
+    # "finished" to OneBox (partial_success) since Apify never vouched for
+    # this being complete - but the two reviews it did have must still be
+    # stored, and a checkpoint saved so a retry is cheap, not a full re-scrape.
     result = service.fetch_location(location.id, target=5, sort_by="newest")
 
-    assert result["status"] == "partial_success"
+    assert result["status"] == "failed"
+    assert result["metadata"]["retriable"] is True
+    assert result["metadata"]["failure_code"] == "APIFY_RUN_POLL_TIMEOUT"
     assert result["total_inserted"] == 2
-    assert result["metadata"]["stop_reason"] == "apify_run_poll_timeout"
     checkpoint = store.load(
         CrawlTarget.from_location(service.location_service.get_location(location.id))
     )
     assert checkpoint is not None
+    with session_factory() as session:
+        assert session.scalar(select(func.count(Review.id))) == 2
 
 
 def test_incomplete_run_with_zero_reviews_still_fails():

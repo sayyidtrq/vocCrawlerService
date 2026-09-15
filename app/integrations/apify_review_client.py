@@ -26,6 +26,24 @@ SORT_BY_MAP = {
 }
 
 
+class ApifyRunIncompleteError(ReviewSourceError):
+    """Apify never confirmed this run SUCCEEDED - the run failed, was
+    aborted, or our own patience for polling ran out.
+
+    Carries whatever reviews the dataset already had (real data, since
+    Apify pushes items incrementally as the actor scrapes) so the caller can
+    still store them, but is deliberately NOT treated as a completed fetch:
+    without a confirmed SUCCEEDED we have no basis to tell OneBox this
+    target is done. retriable=True lets CrawlWorker retry, and the
+    checkpoint already saved before this is raised (see fetch_reviews) means
+    that retry resumes from here instead of re-scraping from scratch.
+    """
+
+    def __init__(self, message: str, *, reviews: list[dict], code: str):
+        super().__init__(message, retriable=True, code=code)
+        self.reviews = reviews
+
+
 class ApifyReviewClient(ReviewSourceClient):
     source_name = "apify_google_maps"
 
@@ -81,7 +99,6 @@ class ApifyReviewClient(ReviewSourceClient):
         seen_review_ids: set[str] = set()
         last_review: dict | None = None
         exhausted = False
-        incomplete_reason: str | None = None
 
         while len(reviews) < limit:
             try:
@@ -135,23 +152,24 @@ class ApifyReviewClient(ReviewSourceClient):
 
                 # The run didn't confirm SUCCEEDED (Apify reported it
                 # failed/aborted/timed out, or we gave up waiting for a
-                # terminal status - see ApifyClient.get_run_status). Whatever
-                # landed in the dataset before that is still real data, since
-                # Apify pushes items incrementally as the actor scrapes. Stop
-                # here and keep it rather than raise: raising would make the
-                # caller retry this place from scratch on a fresh, full-price
-                # run for reviews we may have already paid for once. An empty
-                # result is the one case genuinely worth treating as a
-                # failure - there's nothing to keep and no cost was wasted.
-                if not reviews:
-                    raise ReviewSourceError(
-                        f"Apify actor run ended with status {status} and "
-                        "produced no reviews.",
-                        retriable=True,
-                        code="APIFY_RUN_FAILED",
-                    )
-                incomplete_reason = f"apify_run_{status.lower().replace('-', '_')}"
-                break
+                # terminal status - see ApifyClient.get_run_status). Without
+                # a confirmed SUCCEEDED we have no basis to tell OneBox this
+                # target is done, even if we already have some reviews in
+                # hand - Apify itself hasn't vouched for this being the
+                # complete picture. Save a checkpoint so a retry resumes
+                # instead of re-scraping from scratch (the actual fix for
+                # "wasting API calls"), keep whatever reviews the dataset
+                # already had (real data, worth storing either way), and
+                # raise retriable so the job stays open rather than
+                # resolving as a false "finished".
+                self._save_checkpoint(crawl_target, effective_sort, last_review)
+                self.last_metadata["matched_review_cards"] = len(reviews)
+                self.last_metadata["scraped_review_cards"] = len(reviews)
+                raise ApifyRunIncompleteError(
+                    f"Apify actor run ended with status {status}.",
+                    reviews=reviews,
+                    code=f"APIFY_RUN_{status.replace('-', '_')}",
+                )
             except ApifyAccountExhaustedError:
                 if last_review is not None:
                     lower_bound = (
@@ -171,9 +189,6 @@ class ApifyReviewClient(ReviewSourceClient):
 
         if exhausted:
             self.last_metadata["stopped_reason"] = "apify_accounts_exhausted"
-            self._save_checkpoint(crawl_target, effective_sort, last_review)
-        elif incomplete_reason is not None:
-            self.last_metadata["stopped_reason"] = incomplete_reason
             self._save_checkpoint(crawl_target, effective_sort, last_review)
         self.last_metadata["matched_review_cards"] = len(reviews)
         self.last_metadata["scraped_review_cards"] = len(reviews)

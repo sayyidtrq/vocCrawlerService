@@ -102,19 +102,32 @@ What actually happens when account A runs out of credit mid-fetch:
    target restarts from scratch under the new sort. Splicing two different
    orderings together is treated as strictly worse than one wasted re-fetch.
 
-The same checkpoint machinery also covers a second, unrelated trigger: an
-actor run that never confirms `SUCCEEDED` at all (Apify reports it
-failed/aborted, or our own poll loop just gives up waiting after
-`apify_run_timeout_seconds`). This happens for real when a place has fewer
-reviews than requested (e.g. asked for 300, the place only has 270) — some
-runs take unusually long trying to confirm there's nothing more to find.
-Apify pushes dataset items incrementally as the actor scrapes, so whatever's
-already in the dataset at that point is kept and treated exactly like an
-account-exhaustion stop: save a checkpoint, mark `partial_success`, done.
-The one thing this deliberately does **not** do is retry the whole place
-from scratch — that would mean paying for a second full run on reviews
-already scraped once. Only a run that produced *zero* reviews and never
-confirmed success is treated as a real failure worth retrying.
+A related but distinct case: an actor run that never confirms `SUCCEEDED`
+at all (Apify reports it failed/aborted, or our own poll loop just gives up
+waiting after `apify_run_timeout_seconds`). **This is deliberately NOT
+treated the same as account exhaustion.** Account exhaustion is us choosing
+to stop (we ran out of budget) and Apify never disputed that the data we
+have is good, so calling it `partial_success` — "done, here's what we
+got" — is accurate. A run that never confirmed `SUCCEEDED` is different:
+Apify itself hasn't vouched for the data being complete, so we have no
+basis to tell OneBox this target is finished, even if we already have
+reviews in hand. Reporting a false "done" here risks a target getting
+silently stuck at partial coverage indefinitely, since a `regular_delta`
+crawl for an already-"finished" target may not get re-triggered for a
+while.
+
+So instead: whatever reviews the dataset already had (real data — Apify
+pushes items incrementally as the actor scrapes) get stored, a checkpoint
+gets saved either way, but the job is raised as `ApifyRunIncompleteError` →
+a retriable **failure**, not a terminal success. `CrawlWorker`'s own retry
+mechanism picks it up again, and because the checkpoint was already saved,
+that retry resumes from where the incomplete run left off instead of
+re-scraping the whole place from zero — that's the actual fix for "wasting
+API calls" (a from-scratch retry would mean paying for a second full run on
+reviews already scraped once), achieved without ever telling OneBox
+something is finished that Apify didn't actually confirm. Only a run that
+produced *zero* reviews and never confirmed success is treated as an
+ordinary hard failure (no checkpoint to save, nothing to keep).
 
 ## Database change
 
