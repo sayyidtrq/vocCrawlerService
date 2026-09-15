@@ -12,11 +12,17 @@ from app.integrations.apify_token_pool import (
 from app.integrations.review_source_client import ReviewSourceClient, ReviewSourceError
 from app.utils.date_parser import parse_datetime
 
+# web_wanderer/google-reviews-scraper's `order` input, confirmed against its
+# published input schema for the first three values. "lowest_rating" is not
+# documented on this actor at all - kept as a best-guess snake_case value
+# consistent with the other three until verified against a real run; if the
+# actor rejects it, CrawlTargetRequest.sort_by="lowest_rating" will surface
+# that as an APIFY_RUN_FAILED error rather than silently sorting wrong.
 SORT_BY_MAP = {
     "newest": "newest",
-    "most_relevant": "mostRelevant",
-    "highest_rating": "highestRanking",
-    "lowest_rating": "lowestRanking",
+    "most_relevant": "most_relevant",
+    "highest_rating": "highest_rating",
+    "lowest_rating": "lowest_rating",
 }
 
 
@@ -80,13 +86,18 @@ class ApifyReviewClient(ReviewSourceClient):
             try:
                 token = self.token_pool.current()
                 actor_input = {
-                    "placeIds": [place_id],
-                    "maxReviewsPerPlace": limit,
-                    "reviewsSort": SORT_BY_MAP[effective_sort],
-                    "reviewsOrigin": "google",
+                    "place_ids": [place_id],
+                    "limit": limit,
+                    "order": SORT_BY_MAP[effective_sort],
+                    # "Googles" (not "google") per the actor's published
+                    # input schema - unconfirmed against a live run, verify
+                    # once a real token exists (see migration doc's
+                    # verification checklist).
+                    "source": "Googles",
                 }
                 if lower_bound is not None:
-                    actor_input["newerThan"] = lower_bound.isoformat()
+                    # anyDate wants YYYY-MM-DD, not a full ISO timestamp.
+                    actor_input["anyDate"] = lower_bound.date().isoformat()
 
                 run_id, dataset_id = self.apify_client.start_run(
                     self.settings.apify_actor_id, actor_input, token=token

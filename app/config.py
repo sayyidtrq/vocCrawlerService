@@ -117,7 +117,7 @@ class Settings(BaseModel):
     fetch_max_retry: int = 3
     crawl_max_target_reviews: int = 300
     apify_api_tokens: Annotated[list[str], NoDecode] = []
-    apify_actor_id: str = "zen-studio/google-maps-reviews-scraper"
+    apify_actor_id: str = "web_wanderer/google-reviews-scraper"
     apify_run_timeout_seconds: int = 300
     apify_poll_interval_seconds: int = 5
     analysis_batch_size: int = 20

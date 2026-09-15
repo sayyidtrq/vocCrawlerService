@@ -254,9 +254,9 @@ def test_both_accounts_exhausted_keeps_partial_reviews_and_checkpoint():
     assert checkpoint.sort_by == "newest"
     assert checkpoint.review_id == fixture[2]["review_id"]
     assert checkpoint.review_time == datetime(2026, 5, 17, tzinfo=timezone.utc)
-    assert low_level.actor_inputs[1]["newerThan"] == "2026-07-16T00:00:00+00:00"
+    assert low_level.actor_inputs[1]["anyDate"] == "2026-07-16"
     assert all(
-        actor_input["reviewsOrigin"] == "google"
+        actor_input["source"] == "Googles"
         for actor_input in low_level.actor_inputs
     )
     with session_factory() as session:
