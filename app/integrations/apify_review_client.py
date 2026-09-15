@@ -81,6 +81,7 @@ class ApifyReviewClient(ReviewSourceClient):
         seen_review_ids: set[str] = set()
         last_review: dict | None = None
         exhausted = False
+        incomplete_reason: str | None = None
 
         while len(reviews) < limit:
             try:
@@ -111,12 +112,6 @@ class ApifyReviewClient(ReviewSourceClient):
                     }
                 )
                 status = self.apify_client.get_run_status(run_id, token=token)
-                if status != "SUCCEEDED":
-                    raise ReviewSourceError(
-                        f"Apify actor run ended with status {status}.",
-                        retriable=True,
-                        code="APIFY_RUN_FAILED",
-                    )
 
                 for item in self.apify_client.iter_dataset_items(
                     dataset_id, token=token
@@ -134,7 +129,28 @@ class ApifyReviewClient(ReviewSourceClient):
                     if len(reviews) >= limit:
                         break
 
-                self.checkpoint_store.clear(crawl_target)
+                if status == "SUCCEEDED":
+                    self.checkpoint_store.clear(crawl_target)
+                    break
+
+                # The run didn't confirm SUCCEEDED (Apify reported it
+                # failed/aborted/timed out, or we gave up waiting for a
+                # terminal status - see ApifyClient.get_run_status). Whatever
+                # landed in the dataset before that is still real data, since
+                # Apify pushes items incrementally as the actor scrapes. Stop
+                # here and keep it rather than raise: raising would make the
+                # caller retry this place from scratch on a fresh, full-price
+                # run for reviews we may have already paid for once. An empty
+                # result is the one case genuinely worth treating as a
+                # failure - there's nothing to keep and no cost was wasted.
+                if not reviews:
+                    raise ReviewSourceError(
+                        f"Apify actor run ended with status {status} and "
+                        "produced no reviews.",
+                        retriable=True,
+                        code="APIFY_RUN_FAILED",
+                    )
+                incomplete_reason = f"apify_run_{status.lower().replace('-', '_')}"
                 break
             except ApifyAccountExhaustedError:
                 if last_review is not None:
@@ -155,24 +171,34 @@ class ApifyReviewClient(ReviewSourceClient):
 
         if exhausted:
             self.last_metadata["stopped_reason"] = "apify_accounts_exhausted"
-            if last_review is not None:
-                review_time = parse_datetime(last_review.get("review_time"))
-                review_id = last_review.get("external_review_id")
-                if review_time is not None and review_id:
-                    from app.services.apify_checkpoint_store import ApifyCheckpoint
-
-                    self.checkpoint_store.save(
-                        crawl_target,
-                        ApifyCheckpoint(
-                            sort_by=effective_sort,
-                            review_time=review_time,
-                            review_id=str(review_id),
-                            recorded_at=datetime.now(timezone.utc),
-                        ),
-                    )
+            self._save_checkpoint(crawl_target, effective_sort, last_review)
+        elif incomplete_reason is not None:
+            self.last_metadata["stopped_reason"] = incomplete_reason
+            self._save_checkpoint(crawl_target, effective_sort, last_review)
         self.last_metadata["matched_review_cards"] = len(reviews)
         self.last_metadata["scraped_review_cards"] = len(reviews)
         return reviews
+
+    def _save_checkpoint(
+        self, crawl_target, effective_sort: str, last_review: dict | None
+    ) -> None:
+        if last_review is None:
+            return
+        review_time = parse_datetime(last_review.get("review_time"))
+        review_id = last_review.get("external_review_id")
+        if review_time is None or not review_id:
+            return
+        from app.services.apify_checkpoint_store import ApifyCheckpoint
+
+        self.checkpoint_store.save(
+            crawl_target,
+            ApifyCheckpoint(
+                sort_by=effective_sort,
+                review_time=review_time,
+                review_id=str(review_id),
+                recorded_at=datetime.now(timezone.utc),
+            ),
+        )
 
     def _capture_place_metadata(self, item: dict) -> None:
         if "place_rating" not in self.last_metadata:

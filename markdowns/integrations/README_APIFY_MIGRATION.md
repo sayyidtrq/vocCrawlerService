@@ -102,6 +102,20 @@ What actually happens when account A runs out of credit mid-fetch:
    target restarts from scratch under the new sort. Splicing two different
    orderings together is treated as strictly worse than one wasted re-fetch.
 
+The same checkpoint machinery also covers a second, unrelated trigger: an
+actor run that never confirms `SUCCEEDED` at all (Apify reports it
+failed/aborted, or our own poll loop just gives up waiting after
+`apify_run_timeout_seconds`). This happens for real when a place has fewer
+reviews than requested (e.g. asked for 300, the place only has 270) — some
+runs take unusually long trying to confirm there's nothing more to find.
+Apify pushes dataset items incrementally as the actor scrapes, so whatever's
+already in the dataset at that point is kept and treated exactly like an
+account-exhaustion stop: save a checkpoint, mark `partial_success`, done.
+The one thing this deliberately does **not** do is retry the whole place
+from scratch — that would mean paying for a second full run on reviews
+already scraped once. Only a run that produced *zero* reviews and never
+confirmed success is treated as a real failure worth retrying.
+
 ## Database change
 
 One nullable JSON column, `apify_resume_checkpoint`, on both `locations`

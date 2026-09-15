@@ -59,11 +59,14 @@ class ApifyClient:
             if status in terminal:
                 return status
             if time.monotonic() >= deadline:
-                raise ReviewSourceError(
-                    "Apify actor run timed out while polling.",
-                    retriable=True,
-                    code="APIFY_RUN_TIMEOUT",
-                )
+                # Not a hard failure: Apify pushes dataset items incrementally
+                # as the actor scrapes, so whatever's already in the dataset
+                # is real, usable data even though the run itself hasn't
+                # confirmed SUCCEEDED yet. The caller reads the dataset
+                # either way and decides what to do with a non-SUCCEEDED
+                # status - raising here would only cost it that data plus a
+                # full-price retry for reviews it may have already paid for.
+                return "POLL_TIMEOUT"
             time.sleep(self.settings.apify_poll_interval_seconds)
 
     def iter_dataset_items(self, dataset_id: str, *, token: str) -> Iterator[dict]:

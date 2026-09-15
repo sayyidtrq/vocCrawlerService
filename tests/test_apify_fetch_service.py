@@ -261,3 +261,89 @@ def test_both_accounts_exhausted_keeps_partial_reviews_and_checkpoint():
     )
     with session_factory() as session:
         assert session.scalar(select(func.count(Review.id))) == 2
+
+
+class IncompleteRunApifyClient:
+    """Actor genuinely has fewer reviews than requested, or our own poll
+    patience ran out - either way it never reports SUCCEEDED, but the
+    dataset already has real items in it."""
+
+    def __init__(self, items, status):
+        self.items = items
+        self.status = status
+
+    def start_run(self, actor_id, input, *, token):
+        return "run-1", "dataset-1"
+
+    def get_run_status(self, run_id, *, token):
+        return self.status
+
+    def iter_dataset_items(self, dataset_id, *, token):
+        yield from self.items
+
+
+def test_incomplete_run_keeps_reviews_instead_of_failing_and_retrying():
+    session_factory = make_session_factory()
+    company_id, location, _ = seed_targets(session_factory)
+    fixture = json.loads(
+        (
+            Path(__file__).parent / "fixtures" / "apify_google_maps_reviews_sample.json"
+        ).read_text()
+    )
+    low_level = IncompleteRunApifyClient([fixture[0], fixture[1]], "POLL_TIMEOUT")
+    settings = Settings(
+        database_url="sqlite+pysqlite:///:memory:",
+        review_source_mode="apify",
+        crawl_max_target_reviews=300,
+        apify_api_tokens=["token-a"],
+    )
+    store = ApifyCheckpointStore(session_factory)
+    client = ApifyReviewClient(
+        settings, ApifyTokenPool(settings.apify_api_tokens), store, apify_client=low_level
+    )
+    service = ApifyFetchService(
+        company_id=company_id,
+        session_factory=session_factory,
+        settings=settings,
+        client=client,
+    )
+
+    # Asking for more than the two items the fake dataset has, mirroring
+    # "we requested 300, the place only has 270" - it must not loop forever
+    # or raise, just take what exists and finish.
+    result = service.fetch_location(location.id, target=5, sort_by="newest")
+
+    assert result["status"] == "partial_success"
+    assert result["total_inserted"] == 2
+    assert result["metadata"]["stop_reason"] == "apify_run_poll_timeout"
+    checkpoint = store.load(
+        CrawlTarget.from_location(service.location_service.get_location(location.id))
+    )
+    assert checkpoint is not None
+
+
+def test_incomplete_run_with_zero_reviews_still_fails():
+    session_factory = make_session_factory()
+    company_id, location, _ = seed_targets(session_factory)
+    low_level = IncompleteRunApifyClient([], "FAILED")
+    settings = Settings(
+        database_url="sqlite+pysqlite:///:memory:",
+        review_source_mode="apify",
+        crawl_max_target_reviews=300,
+        apify_api_tokens=["token-a"],
+    )
+    store = ApifyCheckpointStore(session_factory)
+    client = ApifyReviewClient(
+        settings, ApifyTokenPool(settings.apify_api_tokens), store, apify_client=low_level
+    )
+    service = ApifyFetchService(
+        company_id=company_id,
+        session_factory=session_factory,
+        settings=settings,
+        client=client,
+    )
+
+    result = service.fetch_location(location.id, target=5, sort_by="newest")
+
+    assert result["status"] == "failed"
+    assert result["metadata"]["failure_code"] == "APIFY_RUN_FAILED"
