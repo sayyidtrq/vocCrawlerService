@@ -176,6 +176,22 @@ and should stop being needed once `apify-migration` merges into `dev`.
 - Field-naming inconsistencies between Apify's raw JSON and this repo's
   column names (all bridged internally, OneBox unaffected) are catalogued
   in `TECH_DEBT_ONEBOX_APIFY_FIELD_NAMING.md` for later reference.
+- **Unexplained hang observed once in production, root cause unknown.**
+  Crawl job 542 (2026-09-15, ~300-review target against a location with
+  270 real reviews) fetched all 270 successfully — confirmed via
+  `progress_fetched: 270`, which only gets written *after*
+  `ApifyReviewClient.fetch_reviews()` already returned — but the job never
+  reached a terminal status. The hang was therefore downstream of a
+  successful fetch: somewhere in the per-review insert loop
+  (`ApifyFetchService._store_reviews`, ~270 individual DB commits against
+  Supabase), `FetchLogService.finish_log`, or `CrawlWorker._finish`'s own
+  writes. No log capture was taken before the server was redeployed
+  (which recreated the `crawl-worker` container), so the evidence is gone
+  and this could not be root-caused. If it recurs, capture
+  `docker compose logs crawl-worker --tail 200` and, if possible, a
+  Supabase `pg_stat_activity` snapshot **before** redeploying or restarting
+  anything — redeploying destroys the only evidence a stuck-mid-job hang
+  leaves behind.
 
 ## Further reading
 
