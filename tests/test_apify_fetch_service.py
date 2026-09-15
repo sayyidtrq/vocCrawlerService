@@ -256,7 +256,7 @@ def test_both_accounts_exhausted_keeps_partial_reviews_and_checkpoint():
     assert checkpoint.review_time == datetime(2026, 5, 17, tzinfo=timezone.utc)
     assert low_level.actor_inputs[1]["anyDate"] == "2026-07-16"
     assert all(
-        actor_input["source"] == "Googles"
+        actor_input["source"] == "google"
         for actor_input in low_level.actor_inputs
     )
     with session_factory() as session:

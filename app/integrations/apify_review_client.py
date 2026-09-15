@@ -89,11 +89,12 @@ class ApifyReviewClient(ReviewSourceClient):
                     "place_ids": [place_id],
                     "limit": limit,
                     "order": SORT_BY_MAP[effective_sort],
-                    # "Googles" (not "google") per the actor's published
-                    # input schema - unconfirmed against a live run, verify
-                    # once a real token exists (see migration doc's
-                    # verification checklist).
-                    "source": "Googles",
+                    # Confirmed against a real 400 error from the actor:
+                    # valid values are "all", "google", "tripadvisor",
+                    # "trip_com", "priceline", "zenhotels" - lowercase
+                    # "google", not "Googles" as an earlier docs-page
+                    # summary had it.
+                    "source": "google",
                 }
                 if lower_bound is not None:
                     # anyDate wants YYYY-MM-DD, not a full ISO timestamp.
