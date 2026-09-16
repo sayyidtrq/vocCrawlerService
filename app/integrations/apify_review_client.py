@@ -107,6 +107,14 @@ class ApifyReviewClient(ReviewSourceClient):
                     "place_ids": [place_id],
                     "limit": limit,
                     "order": SORT_BY_MAP[effective_sort],
+                    # Defaults to false on the actor, which returns every
+                    # review with reviewer_name/reviewer_id/reviewer_url
+                    # nulled out - verified across 2920 real records from
+                    # three places, all of them anonymous. The parser maps
+                    # four reviewer fields (apify_review_parser.py) and every
+                    # one of them was landing as NULL, so a VoC ticket raised
+                    # from a complaint had no customer on it.
+                    "include_personal": True,
                     # Confirmed against a real 400 error from the actor:
                     # valid values are "all", "google", "tripadvisor",
                     # "trip_com", "priceline", "zenhotels" - lowercase

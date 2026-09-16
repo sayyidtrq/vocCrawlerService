@@ -259,6 +259,12 @@ def test_both_accounts_exhausted_keeps_partial_reviews_and_checkpoint():
         actor_input["source"] == "google"
         for actor_input in low_level.actor_inputs
     )
+    # Without this the actor nulls out every reviewer field and complaints
+    # arrive with no customer attached to them.
+    assert all(
+        actor_input["include_personal"] is True
+        for actor_input in low_level.actor_inputs
+    )
     with session_factory() as session:
         assert session.scalar(select(func.count(Review.id))) == 2
 
