@@ -1,0 +1,769 @@
+# Fetch Jobs enhancement — Part 1 of 2: OneBox
+
+**Repo:** `onecloud` (OneBox) · **Screen:** `/feature/voc/Mediamonitoring/#/voc/fetchjobs`
+**Paired with:** [`SPEC_FETCHJOBS_CRAWLER.md`](SPEC_FETCHJOBS_CRAWLER.md) — Part 2, the Crawler Service half
+**Contract version consumed:** `crawl-jobs v2` (defined in Part 2 §5)
+**Status:** proposal. No OneBox work started. All `onecloud` paths below are
+relative to `onecloud/onecloud/app/`.
+
+---
+
+## Sync rules — read before editing either document
+
+These two documents describe one change split across two repos. They drift
+the moment someone edits one and not the other.
+
+1. **Part 2 owns the contract.** The crawler serves
+   `POST /api/integration/v1/crawl-jobs`, so the field list, types and
+   validation are defined in Part 2 §5. **§5 here is a caller's view derived
+   from it — never the source.** If the two disagree, Part 2 is right and
+   this document is stale.
+2. **The pairing table (§8) must be byte-identical in both documents.** It
+   is the only place the cross-repo ordering is recorded.
+3. **Accept before emit.** Do not ship a OneBox change that *sends* a new
+   field until the crawler that *accepts* it is in production. The crawler
+   rejects unknown fields with a 422 (Part 2 §5.3), so getting this backwards
+   fails every crawl immediately.
+4. **Remove in the opposite order.** Stop sending a field here before the
+   crawler stops accepting it.
+
+---
+
+## 0. Shared decisions
+
+Identical in both documents.
+
+| # | Decision | Owner |
+|---|---|---|
+| D1 | Ship the reviewer-identity data bug first, alone. ✅ crawler side done; OneBox half is OB-0 | Both |
+| D2 | Replace "target review count" with explicit **coverage intent** (`full_backfill` / `date_window` / `delta`) plus an optional cost **budget**. | Both |
+| D3 | Use Apify's `place_reviews_count` as the **completeness oracle**. | Crawler |
+| D4 | The 300-review cap is entirely ours — the actor accepts up to **100,000**. Remove it in all six places. | Both |
+| D5 | Full backfill **cannot be resumed mid-run**, so the crawler worker must stop blocking on the Apify poll loop. | Crawler |
+| D6 | Quasi-realtime = tight-interval delta polling gated by a cheap change probe. True realtime does not exist for Google Maps. | Both |
+| D7 | Date windows cost in proportion to how **old** the window is, not how wide. Unfixable; must be priced and surfaced. | Both |
+
+---
+
+## 1. Reviewer names — what changed on the crawler, and what OneBox still owes
+
+Full write-up is Part 2 §1. The short version for OneBox devs:
+
+- **Until now every review arrived with `reviewer_name = NULL`.** The Apify
+  actor omits reviewer identity unless asked (`include_personal`, default
+  `false`). Verified across 2,920 real records: zero named. OneBox rendered
+  all of them as "Anonymous"/"Anonim".
+- **Fixed on the crawler.** New crawls arrive named. Re-crawling an old
+  review now fills its missing name in place and advances its
+  `sync_updated_at`, so the next OneBox import re-serves it.
+- **OneBox already merges re-served reviews.**
+  `VocProvider::rowReview()` → `sudahPernahMasuk()` →
+  `perbaruiReviewTersimpan()` (`services/Provider/VocProvider.php:889-895`)
+  replaces `MessageContent.Meta` with fresh `buildMeta()` output, and
+  `buildMeta()` carries `reviewer_name` (`:1178`). **No change needed for
+  that path.**
+
+What the user then sees depends on whether the review has become a ticket.
+The Ulasan screens resolve the name as:
+
+```php
+$r->ContactName ?: ($meta['reviewer_name'] ?? 'Anonim')
+```
+
+(`controllers/VocController.php:3365`, `:4828`, `:7896`; `:3774` is the same
+shape with `ReviewerName`.)
+
+| Review state | After re-crawl + import |
+|---|---|
+| Not yet a ticket — no Contact | ✅ real name, from `Meta` |
+| Already a ticket — Contact exists | ❌ **still "Anonymous"** |
+
+Why the second row fails: `rowReview()` stamps the sender as the literal
+string `'Anonymous'` when `reviewer_name` is empty (`VocProvider.php:907-908`).
+The Contact born from that message when it becomes a ticket inherits
+`'Anonymous'` — a non-empty string, so it wins the `?:` and shadows the
+repaired `Meta` forever. **That is OB-0.**
+
+One mitigating fact makes OB-0 safe: `buildReviewerIdentity()`
+(`VocProvider.php:964-979`) gives an anonymous reviewer the identity
+`anonymous-review:<review_hash>` — **one Contact per review**, not one
+shared "Anonymous" Contact. Renaming it cannot relabel anybody else.
+
+**Reviews still showing no name after all of this** are ones the crawler has
+not re-crawled deeply enough to reach. A `delta` crawl only touches recent
+reviews; older history needs a `date_window` or backfill crawl of that
+cabang, followed by an import.
+
+**Language, separately:** `Meta.language` stays NULL for all Apify reviews.
+The actor never reports the original language (Part 2 §1.2). The review
+*text* is the patient's original — only the language tag is missing. Low
+priority; nothing to do in OneBox until the crawler starts sending it.
+
+---
+
+## 2. OneBox-side flow
+
+Ends where Part 2 §2 picks up. The `>>>` line is the repo boundary.
+
+```
+Fetch Jobs screen                       views/Voc/fetchjobs.volt
+  mode select: delta | backfill | custom          :835-848
+  target input, hard max 300                      :115
+  JS validation 1..300                            :1495
+  delta: date_from = last_review_at - 1 day, locked   :879-884
+  backfill: target=300, no dates                      :840-843, :885-890
+        |
+        v  POST
+VocController::crawlStartAction()                 controllers/VocController.php:10528
+  target required, 1..CRAWL_TARGET_MAX (300)      :67, :10549
+  rejects source !== 'selenium'                   :10557-10561   <-- stale
+  crawlDateRange()   -> {from, to} UTC            :9057
+  crawlSortBy()      -> forced 'newest' if ranged :9044
+  jadwalSedangBerjalan()  -> 409 if a schedule is running   :10594
+  VOC_SCRAPE / VOC_REVIEW / VOC_AI benefit checks :10612
+  verifyBenefit('VOC_SCRAPE', count(targets))     :10635   <-- per call, not per review
+        |
+        v
+Service\VocCrawlQueue::enqueue()                  services/VocCrawlQueue.php:42
+  TARGET_MAX = 300                                :26
+  one $dateFrom/$dateTo for ALL targets           :88-94
+  crawlMode()  -> custom_range | regular_delta    :171   <-- never initial_backfill
+  scanLimit()  -> max(500, target*10), cap 5000   :194   <-- nothing downstream reads it
+        |
+        v
+VoiceOfCustomerSystemClient::enqueueCrawl()       library/VoiceOfCustomerSystemClient.php:706
+  retries WITHOUT crawl_mode/scan_limit on rejection   :834-849
+>>> POST /api/integration/v1/crawl-jobs   (to Crawler)
+
+... crawler works (Part 2) ...
+
+VocController::crawlStatusAction() / crawlHistoryAction()   :11880, :11949
+  polls GET /crawl-jobs/{batch_id}
+
+VocController::crawlImportAction()                :15452
+  VocProvider::receive()                          services/Provider/VocProvider.php
+    page_size default 50, max_pages default 10    :98-99   <-- 500 reviews per call
+    fetchPage() -> GET /integration/v1/reviews    library/VoiceOfCustomerSystemClient.php:194
+    rowReview() per item; re-served -> perbaruiReviewTersimpan()   :889-895
+  applyAnalysis(), labelPendingReviews(), recordRatingSnapshot()
+```
+
+Scheduled crawls take the same `VocCrawlQueue::enqueue()` path, via
+`VocSchedule` / `VocScheduleRun` and `library/VocCron.php`. Relative
+lookback is resolved at run time by `VocCrawlQueue::dateRangeForSchedule()`
+(`:229`), which also applies the watermark (`watermarkFrom()`, `:321`).
+
+---
+
+## 3. OneBox-side bottlenecks
+
+Crawler-side bottlenecks are in Part 2 §3. B-numbers are shared across both
+documents so a bottleneck keeps one name; gaps here are crawler-only items.
+Items marked ⇄ span both repos.
+
+### ⇄ B1. The 300 cap, OneBox half **[blocks fetch-all]**
+
+| Where | Line |
+|---|---|
+| `VocController::CRAWL_TARGET_MAX` | `controllers/VocController.php:67` |
+| `VocCrawlQueue::TARGET_MAX` | `services/VocCrawlQueue.php:26` |
+| Fetch Jobs input `max="300"` | `views/Voc/fetchjobs.volt:115` |
+| Fetch Jobs JS validation `target > 300` | `views/Voc/fetchjobs.volt:1495-1496` |
+
+`CRAWL_TARGET_MAX` is also enforced on the competitor path
+(`VocController.php:9343`).
+
+The actor's own `limit` goes to **100,000**. The 300 was a Selenium
+survivability limit and has no meaning against an HTTP API billed per
+review. The crawler half of the cap is Part 2 §3 B1 — **raising only one
+side changes nothing**, because the crawler also rejects anything above 300.
+
+### B2. "Fetch all" cannot be expressed **[blocks fetch-all]**
+
+`VocCrawlQueue::crawlMode()` (`:171-174`) returns only `custom_range` or
+`regular_delta`. The contract has carried `initial_backfill` at every layer,
+and OneBox has never sent it. The docblock at `:160-166` explains why: it
+needed each cabang's Google review count, which did not exist then.
+
+That count now arrives on every crawled review (`place_reviews_count`) and
+is captured by the crawler. **The stated blocker is gone.**
+
+Meanwhile the UI's "Backfill Awal" mode (`fetchjobs.volt:840-843`) is
+described as *"Ambil riwayat ulasan sedalam mungkin"* and actually sends
+`target = 300`, no dates. On a place with 9,422 reviews that is 3%
+coverage, presented to the user as "as deep as possible". The hint text at
+`:890` — *"Crawler menyisir sedalam yang diizinkan batas waktu"* — describes
+Selenium behaviour that no longer exists.
+
+### ⇄ B7. Date windows cost by age — and the UI does not say so **[blocks timespan]**
+
+Mechanism is in Part 2 §3 B7: the actor only accepts a *lower* date bound,
+so "Jan–Mar 2024" pays to scrape everything from Jan 2024 to today, and the
+crawler discards the rest after paying.
+
+The OneBox part of the problem is that nothing tells the user. The custom
+mode hint (`fetchjobs.volt:845`) reads *"Untuk audit atau menambal periode
+tertentu"* — framing that invites exactly the expensive request.
+`total_skipped_out_of_range` comes back in every batch result and is not
+surfaced as a cost.
+
+### B8. One date range for the whole batch **[biggest cheap saving]**
+
+`VocCrawlQueue::enqueue()` gives every target the same `$dateFrom` /
+`$dateTo` (`:88-94`). For scheduled delta runs, `watermarkFrom()`
+deliberately takes the **oldest** "newest review" across all cabang
+(`:349-357`, rationale `:308-312`) — correct, because one shared date must
+be safe for every cabang in the batch.
+
+The consequence: **one lagging cabang forces all of them to re-scrape from
+its date.** Under Selenium that cost minutes. Under per-review billing it
+costs money, on every scheduled run, for every cabang.
+
+The crawler contract **already accepts `date_from`/`date_to` per target**,
+and the crawler already routes them per location. OneBox just never varies
+them. The fix is local to this repo — OB-1.
+
+The same shape affects `crawlMode()`; its docblock (`:167-169`) notes that a
+per-cabang mode needs the batch split per cabang. Under contract v2 each
+target carries its own `coverage`, so that split is no longer needed.
+
+### B9. The watermark margin's stated reason is now false
+
+`WATERMARK_MARGIN_DAYS = 1` (`VocCrawlQueue.php:284`). Its docblock
+(`:272-283`) says it compensates for `review_time` being *estimated from
+relative text* ("2 minggu lalu") — a Selenium artifact.
+
+Apify returns a real date. That imprecision no longer exists.
+
+**Keep the constant.** It is still needed for a different reason: the actor
+accepts only a date (`YYYY-MM-DD`) as its lower bound, so sub-day precision
+is lost anyway, and a one-day margin covers that. **Rewrite the comment**
+(OB-7). A correct constant with a false justification is how the next person
+deletes it.
+
+The `ZONA_ONEBOX` handling (`:294`, `:379-392`) is still correct and still
+necessary — do not touch it.
+
+### B10. The 60-minute schedule floor is calibrated to Selenium **[blocks realtime]**
+
+`VocCron::MIN_INTERVAL_MINUTES = 60` (`library/VocCron.php:32`), justified
+at `:24-31`: *"pada 11 Agustus 2026 sebuah run bertarget 5 berjalan 619
+detik."*
+
+619 seconds for five reviews was a browser scrolling Google Maps. An Apify
+delta run against a cabang with no new reviews is an HTTP round trip plus
+actor startup. The floor is the single OneBox blocker for quasi-realtime,
+and the measurement behind it describes a system that no longer exists.
+
+It must be **re-measured**, not simply lowered on this argument — OB-5.
+
+### B11. Import stops at 500 reviews per call **[blocks fetch-all]**
+
+`VocProvider.php:98-99`:
+
+```php
+$pageSize = min(200, max(1, (int)($this->extras['page_size'] ?? 50)));
+$maxPages = max(1, (int)($this->extras['max_pages'] ?? 10));
+```
+
+50 × 10 = **500 reviews per `receive()`**, after which the
+`do … while ($hasMore && $page <= $maxPages)` loop (`:252`) stops and parks
+the position in `Options._sync_next_cursor`. The crawler serves at most 200
+per page (`MAX_LIMIT`).
+
+A 3,000-review backfill therefore needs six import presses. The resume
+mechanism exists (`crawlImportAction`'s `resume` flag, and the cursor state
+at `:463-465`, `:592-642`), but nothing drives it to completion. Once
+fetch-all works on the crawler side, this is the next wall — OB-4.
+
+### ⇄ B12. OneBox rejects any source but `selenium`
+
+`VocController.php:10555-10561`:
+
+```php
+// Selenium satu-satunya sumber yang didukung antrean durable saat ini.
+if ($source !== '' && $source !== 'selenium') {
+    return $this->jsonFail('Sumber "' . $source . '" belum didukung. Saat ini crawl hanya lewat Selenium.');
+}
+```
+
+Harmless today because the UI sends nothing, so `$source` defaults to
+`'selenium'`. But the comment is false, the default is false, and the first
+caller to send `source=apify` is refused with a message claiming Selenium is
+the only option. OB-7.
+
+### B15. Benefit quota counts calls, not reviews
+
+`verifyBenefit('VOC_SCRAPE', $jumlahTarget)` (`VocController.php:10633-10635`)
+charges **one unit per target cabang**, regardless of how many reviews the
+crawl will pull. With a 300 cap the ratio was bounded. With the cap removed,
+one "fetch all" unit can mean 10,000 billed reviews.
+
+This is a product decision, not a bug — Q6. It must be decided before OB-2
+reaches production.
+
+### B16. `crawl_mode` / `scan_limit` fallback hides contract mismatches
+
+`VoiceOfCustomerSystemClient::enqueueCrawl()` (`:834-849`) catches a
+rejection of the new fields and **retries without them**, logging
+*"Crawler menolak field kontrak baru (crawl_mode/scan_limit)"*. That was the
+right call for the v1 rollout. For v2 it is dangerous: a `coverage` field
+the crawler does not yet accept would be silently stripped, and a
+`full_backfill` request would quietly run as a default delta. OB-2 must not
+extend this fallback to `coverage`/`budget`.
+
+---
+
+## 4. Design, OneBox side
+
+### 4.1 Mode is the user's choice — make it explicit
+
+The three capabilities map onto the three modes the screen already has.
+Only what each one *sends* changes:
+
+| UI mode (existing) | Capability | Sends (v2) | Date fields | Count field |
+|---|---|---|---|---|
+| **Update Terbaru** (`delta`) | 3, and routine | `coverage: "delta"` | auto from watermark, locked (as today) | hidden; optional budget |
+| **Backfill Awal** (`backfill`) | 1 — fetch all | `coverage: "full_backfill"` | none, **forbidden** by the contract | replaced by the estimate (OB-6) |
+| **Custom** (`custom`) | 2 — timespan | `coverage: "date_window"` | from/to required | optional budget |
+
+The existing autofill guard (`targetDisentuh`, `fetchjobs.volt:853-854`) and
+the zero-review redirect to backfill (`:956-966`) both stay; they are still
+right.
+
+The "Batas pengambilan" field stops being a goal and becomes a ceiling. Its
+current comment (`:110`) already says so — *"sebuah BATAS"* — the rest of
+the screen just does not behave that way yet.
+
+### 4.2 Fetch all needs a cost preview, not a number box
+
+Removing the 300 cap turns one click into a potentially large bill. The
+backfill mode must show, before the Mulai button does anything:
+
+> **Perkiraan ~9.422 ulasan** untuk Hermina Bekasi. Kuota bulan ini tersisa
+> 12.000. [Mulai backfill]
+
+The number comes from the crawler's estimate endpoint (Part 2 CS-5).
+Require an explicit confirm above a threshold. Reject before enqueue — not
+after — when the estimate exceeds the remaining budget; the existing pattern
+of checking quotas *before* touching the queue (`VocController.php:10591-10593`)
+is the model to follow.
+
+### 4.3 Timespan: say what it costs
+
+Per D7, a window's cost is set by its *start*, not its width. Three
+changes:
+
+1. **Estimate.** For a window, show roughly how many reviews will be scanned
+   to find the ones inside it. The crawler returns the place's total count
+   and the cabang's recent cadence can be derived from reviews OneBox
+   already holds.
+2. **Report the waste after the fact.** Show `total_skipped_out_of_range`
+   in the history row as "disisir tapi di luar rentang". The history
+   renderer already separates matched from scanned (`fetchjobs.volt:757-762`,
+   `:1045-1071`); extend that rather than adding a new widget.
+3. **Rewrite the hint** next to the date picker: a window ending recently is
+   cheap; a window ending long ago costs everything since its start.
+
+### 4.4 Quasi-realtime — what OneBox owns
+
+**True realtime is not available for Google Maps reviews** — no webhook
+exists. The only genuine push path is the Google Business Profile API
+(Part 2 §4.4), a separate integration.
+
+What OneBox owns is the **schedule**:
+
+- Allow tighter intervals once the Selenium-era floor is replaced by a real
+  measurement (B10).
+- Before enqueueing, ask the crawler whether the cabang's review count
+  moved (Part 2 CS-4). If not, record the run as skipped and spend nothing.
+- **Keep an unconditional slower delta underneath** (the current hourly
+  schedule is fine). The count probe does not notice an *edited* review, or
+  an add and a delete in the same window. The fast gated schedule is an
+  optimisation; the slow ungated one is the correctness floor.
+
+The existing overlap guard — a running schedule blocks a manual crawl of
+the same cabang (`jadwalSedangBerjalan()`, `VocController.php:10594`; UI
+warning at `fetchjobs.volt:930-935`) — becomes more important at tight
+intervals, not less. Keep it.
+
+---
+
+## 5. Contract `crawl-jobs v2` — CALLER'S VIEW (derived from Part 2 §5)
+
+**Not the source of truth.** If this disagrees with Part 2 §5, Part 2 is
+right.
+
+### 5.1 What OneBox sends per target
+
+```jsonc
+{
+  "kind": "location",
+  "onebox_location_id": 123,
+  "coverage": "delta" | "date_window" | "full_backfill",
+  "budget": 5000,                       // optional ceiling, 1..100000
+  "date_from": "2026-01-01T00:00:00Z",  // date_window only; per target
+  "date_to":   "2026-03-31T16:59:59Z",  // date_window only; per target
+  "sort_by": "newest"
+}
+```
+
+Rules the crawler enforces (and OneBox should pre-check, to give a readable
+error instead of a 422):
+
+- `date_window` needs at least one of `date_from` / `date_to`.
+- `full_backfill` must carry **no** dates.
+- Count fields are capped at 100,000, not 300.
+- Unknown fields are rejected — never send a field the deployed crawler does
+  not know yet.
+
+### 5.2 Legacy fields during rollout
+
+Until OB-2 ships, OneBox keeps sending what it sends today, and the crawler
+maps it:
+
+```
+crawl_mode=regular_delta     -> coverage=delta
+crawl_mode=custom_range      -> coverage=date_window
+target_review_count          -> budget
+scan_limit                   -> ignored
+```
+
+That mapping is what lets the crawler deploy first without OneBox changing.
+
+### 5.3 What comes back — new result metadata
+
+Per job in `GET /crawl-jobs/{batch_id}`:
+
+```jsonc
+"coverage": "full_backfill",
+"expected_review_count": 9422,     // Google's own count for the place
+"collected_unique": 9301,
+"completeness": "complete" | "partial" | "unknown",
+"completeness_ratio": 0.987,
+"budget": null,
+"stop_reason": "coverage_complete" | "budget_exhausted" | ...
+```
+
+`completeness` is the field the history screen should show for backfills —
+it answers "did we get everything?", which the current `n / target` display
+cannot. Treat `"unknown"` as unknown, **never** as complete.
+
+`expected_review_count` is also the right number for
+`recordRatingSnapshot()`'s Google count (`crawlImportAction`), which today
+reads it from the batch via `googleRatingDariBatch()`.
+
+---
+
+## 6. Work packages
+
+Formatted for delegation: exact files, exact change, how to verify, what not
+to touch. Paths relative to `onecloud/onecloud/app/`.
+
+---
+
+### OB-0 — Replace "Anonymous" Contacts once the real name arrives
+
+**Depends on:** crawler CS-0 (shipped). **Independent of everything else.**
+
+**Problem:** §1. Ticketed reviews keep showing "Anonymous" after the crawler
+repairs their name, because the Contact's name shadows `Meta`.
+
+**Change:** in `VocProvider::perbaruiReviewTersimpan()`
+(`services/Provider/VocProvider.php:~790-839`), after the `Meta` merge
+succeeds, when the incoming `reviewer_name` is non-empty:
+
+1. find the Contact attached to this message's ticket, if any;
+2. **only if its name is exactly `'Anonymous'`**, set it to the real name.
+
+Guards, all required:
+
+- **Exact-match only.** Never touch a Contact whose name is anything else —
+  staff may have renamed it by hand.
+- **Only anonymous-identity Contacts.** Their identity is
+  `anonymous-review:<review_hash>` (`buildReviewerIdentity()`, `:964-979`),
+  so each belongs to exactly one review and renaming cannot relabel another
+  person. If the Contact's identity is not of that form, leave it.
+- **Do not re-key the identity.** Merging this Contact into the reviewer's
+  other Contacts (same real name / profile URL) is a separate, riskier
+  feature — out of scope.
+
+**Cheaper partial alternative, if OB-0 must wait:** change the display
+precedence at `VocController.php:3365`, `:3774`, `:4828`, `:7896` so a
+`ContactName` equal to `'Anonymous'` falls through to `Meta.reviewer_name`.
+Four one-line changes, no data written. It fixes the Ulasan screens only —
+the ticket and contact screens still say "Anonymous" — so treat it as a
+stopgap, not the fix.
+
+**Verify** (`tests/voc/`, following the existing `*_check.php` style):
+a ticketed review with Contact `'Anonymous'` becomes named after a re-served
+row carries `reviewer_name`; a Contact already named "Budi" is unchanged by
+a row naming "Andi"; a row with empty `reviewer_name` changes nothing.
+
+**To see the result on real data:** re-crawl the cabang at a depth that
+reaches the old reviews, then run the import (`crawlImportAction`).
+
+---
+
+### OB-1 — Per-cabang date ranges *(cheapest high-value item)*
+
+**Depends on:** nothing — the crawler already accepts per-target dates.
+Ship anytime.
+
+**Files:**
+- `services/VocCrawlQueue.php` — `enqueue()` (`:60-102`) builds each target
+  with **its own** `date_from`; `watermarkFrom()` (`:321-399`) returns a
+  per-connection map instead of one `MIN()`
+- `services/VocCrawlQueue.php` — `dateRangeForSchedule()` (`:229-269`)
+  returns per-location ranges for delta schedules
+
+**Keep, per cabang:** the "a cabang with zero reviews gets no narrowing"
+rule (`:314-317`, `:367-371`). Today one empty cabang cancels narrowing for
+the whole batch; after this it cancels it only for itself.
+
+**Keep unchanged:** "watermark only narrows, never widens" (`:299-306`) —
+still correct per cabang. The `ZONA_ONEBOX` conversion (`:379-392`) — still
+necessary. The explicit-date schedule path (`:234-254`) — explicit dates
+stay shared, since the user chose them.
+
+**Verify:** extend `tests/voc/voc_crawl_queue_check.php` — a two-cabang
+batch where A is current and B is a month behind sends two different
+`date_from` values; a batch with one empty cabang still narrows the other.
+
+**Impact:** direct saving on every scheduled run, proportional to how far
+behind the most-lagging cabang is.
+
+---
+
+### OB-2 — Send contract v2: `coverage` + `budget`; remove the 300 cap
+
+**Depends on:** crawler **CS-1 in production**, and **OB-6 + CS-5** before
+this reaches production (spend guard). Rule 3 of the sync rules applies.
+
+**Files:**
+- `services/VocCrawlQueue.php`
+  - `enqueue()` — take `$coverage` (and per-target dates from OB-1); emit
+    `coverage` + `budget` per target
+  - `TARGET_MAX` (`:26`) — becomes a budget ceiling aligned with the
+    contract's 100,000, or with the company budget from CS-5
+  - `crawlMode()` (`:171`) — delete; the caller states the mode
+  - `scanLimit()` (`:191-199`) — stop sending; delete in OB-7
+- `controllers/VocController.php`
+  - `crawlStartAction()` (`:10528`) — read the UI mode, map to `coverage`;
+    stop requiring `target_review_count` for `full_backfill`
+    (`:10543-10545`)
+  - `CRAWL_TARGET_MAX` (`:67`) — same treatment as `TARGET_MAX`; also used
+    by `competitorCrawlStartAction()` (`:9343`)
+- `library/VoiceOfCustomerSystemClient.php` — `enqueueCrawl()` (`:706`):
+  send the new fields; **do not** add `coverage`/`budget` to the
+  strip-and-retry fallback at `:834-849` (B16) — a stripped `coverage`
+  silently turns a backfill into a delta
+
+**Verify:** `voc_crawl_queue_check.php` — each UI mode produces the right
+`coverage`; `full_backfill` sends no dates; a budget above 100,000 is
+refused locally with a readable message.
+
+**Do not touch:** the idempotency key (`crawlStartAction`, `:10620-10626`),
+the quota-before-queue ordering (`:10591-10593`), the schedule overlap guard.
+
+---
+
+### OB-3 — Fetch Jobs screen: modes that mean what they say
+
+**Depends on:** OB-2 (and therefore CS-1).
+
+**File:** `views/Voc/fetchjobs.volt`
+
+- `MODE` table (`:835-848`) — drop the per-mode `target` defaults; backfill
+  has no count to default
+- `terapkanMode()` (`:869-907`)
+  - `backfill`: hide the count field; show the estimate (OB-6); rewrite the
+    note at `:890`
+  - `custom`: add the cost hint (§4.3); make at least one date required
+    (the existing check at `:1521-1525` already covers the from-date)
+  - `delta`: unchanged behaviour
+- input `#fj-single-target` (`:115`) and its validation (`:1487-1497`) —
+  becomes an optional ceiling, bounds from the contract, not `1..300`
+- history rendering (`:757-762`, `:1045-1071`, `:1178-1193`) — for
+  backfills show `completeness` and `collected_unique / expected_review_count`
+  instead of `n / target`; show `total_skipped_out_of_range` as waste
+- "run again" (`:779`) — must replay `coverage`, not a target count
+
+**Verify:** `tests/voc/volt_compile_check.php` still passes; manual check of
+all three modes against a dev crawler with CS-1 deployed.
+
+**Do not touch:** the zero-review redirect to backfill (`:956-966`), the
+`targetDisentuh` guard (`:853-854`), the status panel warnings
+(`:909-949`) — all still correct.
+
+---
+
+### OB-4 — Import must keep up with fetch-all
+
+**Depends on:** nothing technically; matters once CS-3 makes fetch-all real.
+
+**Problem:** B11 — 500 reviews per `receive()`.
+
+**Options, cheapest first:**
+
+1. **Auto-resume in `crawlImportAction()`** (`:15452`): after a batch that
+   ends with more pages pending, keep calling with `resume=1` until the
+   cursor is exhausted or a time budget per request is spent, and report
+   progress. The cursor bookkeeping already exists
+   (`VocProvider.php:463-465`, `:592-642`).
+2. **Raise the per-connection defaults** — `page_size` to 200 (the
+   crawler's max) and `max_pages` higher. One-line change, but a single
+   request then runs long enough to hit web-server timeouts. Measure before
+   choosing a number.
+3. **Move import to a background task** (`tasks/VocTask.php` exists). The
+   right answer at scale; the largest change.
+
+Recommended: option 1 now, option 3 if backfills of many thousands of
+reviews become routine.
+
+**Verify:** a connection with 1,200 pending reviews imports all of them from
+one user action, and the cursor ends at the checkpoint.
+
+**Do not touch:** the dead-letter logic (`GAGAL_MAKS`, `:509`, `:554`) and
+the "failed rows hold the cursor" rule (`:171-174`, `:228-238`).
+
+---
+
+### OB-5 — Quasi-realtime schedules
+
+**Depends on:** crawler **CS-4** (count probe) in production; practically
+also CS-3, or tight schedules queue up behind long crawls.
+
+**Files:**
+- `library/VocCron.php:32` — lower `MIN_INTERVAL_MINUTES`
+- `views/Voc/schedules.volt` — expose the tighter presets
+- `controllers/VocController.php` — `scheduleSaveAction()` (`:11347`)
+  enforces the new floor; `scheduleRunNowAction()` (`:11625`) unchanged
+- the scheduler run path (`tasks/VocTask.php`) — call the probe first; if
+  the count did not move, write a `VocScheduleRun` row with a
+  `skipped_no_change` outcome and do not enqueue
+
+**Before lowering the floor:** measure real Apify delta-run wall time for a
+cabang with no new reviews, ~20 runs. Set the floor from that measurement
+plus headroom, and **rewrite the docblock at `VocCron.php:24-31`** with the
+new measurement. Do not replace one guess with another.
+
+**Keep:** an unconditional (un-gated) delta schedule per cabang at the
+current hourly rate as the correctness floor (§4.4).
+
+**Verify:** a gated schedule against an unchanged cabang produces
+`skipped_no_change` runs and **no crawl batch**; the ungated floor schedule
+still enqueues.
+
+---
+
+### OB-6 — Cost preview and the quota unit
+
+**Depends on:** crawler **CS-5** (estimate endpoint). **Must land before
+OB-2 reaches production.**
+
+**Files:**
+- `library/VoiceOfCustomerSystemClient.php` — add `estimateCrawl($locationId)`
+  for `GET /integration/v1/crawl-jobs/estimate`
+- `controllers/VocController.php` — a small JSON action the Fetch Jobs
+  screen calls when backfill or custom is selected
+- `views/Voc/fetchjobs.volt` — render the preview (§4.2); require confirm
+  above a threshold
+- `crawlStartAction()` — reject **before** `verifyBenefit` consumes quota
+  when the estimate exceeds the remaining budget (same ordering principle
+  as `:10591-10593`)
+
+**Quota unit (B15, Q6):** decide with the crawler side whether
+`VOC_SCRAPE`/`VOC_REVIEW` start counting reviews rather than calls, or
+whether the crawler-side budget (CS-5) is the only per-review guard.
+**Do not end up with two independent quota systems that disagree.**
+
+**Verify:** a backfill whose estimate exceeds the remaining budget is
+refused with no batch created and no benefit consumed.
+
+---
+
+### OB-7 — Cleanup
+
+**Depends on:** OB-2 and OB-3 shipped. **Ships before** crawler CS-6 — stop
+sending before the crawler stops accepting.
+
+- Delete `VocCrawlQueue::scanLimit()` and its constants (`:191-199`), and
+  stop sending `scan_limit`.
+- Stop sending `crawl_mode`; remove `crawl_mode`/`scan_limit` from the
+  fallback at `VoiceOfCustomerSystemClient.php:834-849`.
+- Remove the `selenium` source check and its comment
+  (`VocController.php:10555-10561`).
+- Rewrite the `WATERMARK_MARGIN_DAYS` docblock (`VocCrawlQueue.php:272-283`)
+  per B9 — **keep the constant.**
+- Rewrite the `VocCrawlQueue::crawlMode()` docblock references
+  (`:152-170`) or remove them with the method.
+- Update `fetchjobs.volt` copy that still describes Selenium behaviour
+  ("menyisir", "kartu", "batas waktu") where it no longer applies.
+
+---
+
+## 7. Open questions, OneBox side
+
+**Q6 — benefit quota unit.** B15 / OB-6. Per-call quotas predate per-review
+billing. Product decision; blocks OB-2 in production.
+
+**Q8 — backfill confirm threshold.** OB-6. Above how many estimated reviews
+should the screen demand explicit confirmation? Product decision.
+
+**Q9 — who may run fetch-all.** Today any user with Fetch Jobs access can
+start a crawl. With no 300 cap, should `full_backfill` require a higher
+permission? `tests/voc/voc_permission_map_check.php` is where that would be
+pinned down.
+
+**Q10 — auto-resume import time budget.** OB-4 option 1. How long may one
+web request run on the target infrastructure before it is killed? Needed to
+size the resume loop.
+
+**Q5 (shared) — Google Business Profile API.** Whether real push is viable
+for Hermina's own cabang decides whether OB-5 is a stopgap or permanent.
+See Part 2 §7.
+
+*(Q1–Q4, Q7 are crawler questions — Part 2 §7.)*
+
+---
+
+## 8. Pairing table — KEEP IDENTICAL IN BOTH DOCUMENTS
+
+| Pair | OneBox (Part 1) | Crawler (Part 2) | Cross-repo rule |
+|---|---|---|---|
+| **Z** | **OB-0** rename anonymous Contacts | **CS-0** reviewer identity + history repair ✅ | CS-0 shipped; OB-0 needed for ticketed reviews |
+| **A** | **OB-1** per-cabang date ranges | — | none — pure OneBox saving, ship anytime |
+| **B** | **OB-2** emit `coverage`+`budget` | **CS-1** accept `coverage`+`budget` | **CS-1 to prod first** (Part 2 §5.3, `extra="forbid"` → 422) |
+| **C** | — | **CS-2** completeness oracle | after CS-1 |
+| **D** | **OB-6** preflight UI + quota unit | **CS-5** estimate endpoint + budget | **both before B reaches prod** |
+| **E** | — | **CS-3** async run phases | after C; unblocks real fetch-all |
+| **F** | **OB-3** Fetch Jobs mode UI | — | after B on both sides |
+| **G** | **OB-4** import cycle caps | — | before fetch-all is usable end to end |
+| **H** | **OB-5** realtime schedules | **CS-4** count probe | **CS-4 first**; contract change, update Part 2 §5 |
+| **I** | **OB-7** cleanup | **CS-6** cleanup | **OB-7 first** — stop sending before we stop accepting |
+
+**Two ordering rules that will bite if ignored:**
+
+- **Adding a field: crawler first.** `extra="forbid"` turns an unknown field
+  into a 422.
+- **Removing a field: OneBox first.** Stop sending before the crawler stops
+  accepting.
+
+**Capability delivery:** capability 1 (fetch all) lands with **E** + **G**.
+Capability 2 (timespan) is usable after **B**+**C** and improves with **A**.
+Capability 3 (quasi-realtime) lands with **H**.
+
+---
+
+## 9. Out of scope
+
+- Changing the OneBox import contract beyond B11's page caps.
+- Competitor fetch jobs (`fetchjobscompetitorAction`,
+  `competitorCrawlStartAction`). Same mechanisms apply; not among the three
+  requested capabilities.
+- Merging per-review anonymous Contacts into real reviewer Contacts (OB-0
+  only renames).
+- Google Business Profile API — named in Part 2 §4.4, not specced.
+- Field renaming catalogued in `TECH_DEBT_ONEBOX_APIFY_FIELD_NAMING.md`.
+- Automatic mode selection. The user picks cabang and mode.

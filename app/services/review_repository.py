@@ -14,12 +14,60 @@ from app.db.models import Location, Review, ReviewAnalysis
 ReviewT = TypeVar("ReviewT")
 
 
+# Kolom yang boleh diisi ulang pada baris yang sudah ada.
+#
+# Semuanya identitas pengulas, dan semuanya NULL pada setiap review yang
+# ditarik sebelum `include_personal` dinyalakan - aktornya memang tidak
+# mengirimkannya. Menariknya lagi tidak memperbaiki apa pun dengan
+# sendirinya: dedup menemukan barisnya lalu melewatinya, jadi nama yang
+# sekarang sudah tersedia tidak pernah mendarat.
+BACKFILLABLE_FIELDS = (
+    "reviewer_name",
+    "reviewer_profile_url",
+    "reviewer_photo_url",
+    "reviewer_local_guide_level",
+    "reviewer_total_reviews",
+)
+
+
+def backfill_missing_fields(
+    session: Session,
+    existing: object | None,
+    incoming: object,
+    fields: tuple[str, ...] = BACKFILLABLE_FIELDS,
+) -> bool:
+    """Isi kolom yang KOSONG pada baris lama dari data yang baru ditarik.
+
+    HANYA mengisi yang kosong. Nilai yang sudah ada tidak pernah ditimpa,
+    sehingga aman dijalankan berulang kali dan tidak bisa menghapus data
+    bagus karena satu penarikan yang kebetulan tidak lengkap.
+    """
+    if existing is None:
+        return False
+    changed = False
+    for field in fields:
+        baru = getattr(incoming, field, None)
+        if baru is None or baru == "":
+            continue
+        lama = getattr(existing, field, None)
+        if lama is not None and lama != "":
+            continue
+        setattr(existing, field, baru)
+        changed = True
+    return changed
+
+
 def insert_review_optimistically(
     session: Session,
     review: ReviewT,
     find_existing: Callable[[], int | None],
+    *,
+    enrich: Callable[[int, ReviewT], None] | None = None,
 ) -> tuple[ReviewT | None, bool]:
-    if find_existing() is not None:
+    existing_id = find_existing()
+    if existing_id is not None:
+        if enrich is not None:
+            enrich(existing_id, review)
         return None, True
     try:
         session.add(review)
@@ -28,7 +76,10 @@ def insert_review_optimistically(
         return review, False
     except IntegrityError:
         session.rollback()
-        if find_existing() is not None:
+        existing_id = find_existing()
+        if existing_id is not None:
+            if enrich is not None:
+                enrich(existing_id, review)
             return None, True
         raise
 

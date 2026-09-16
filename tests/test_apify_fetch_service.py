@@ -22,6 +22,7 @@ from app.integrations.apify_token_pool import ApifyTokenPool
 from app.services.apify_checkpoint_store import ApifyCheckpointStore
 from app.services.apify_fetch_service import ApifyFetchService
 from app.services.crawl_target import CrawlTarget
+from app.services.review_service import ReviewService
 
 
 def make_session_factory():
@@ -359,3 +360,49 @@ def test_incomplete_run_with_zero_reviews_still_fails():
 
     assert result["status"] == "failed"
     assert result["metadata"]["failure_code"] == "APIFY_RUN_FAILED"
+
+
+def test_recrawl_backfills_missing_reviewer_name_without_overwriting():
+    """Review yang ditarik sebelum include_personal menyala punya reviewer_name
+    NULL. Dedup menemukan barisnya lalu melewatinya, jadi tanpa penambalan ini
+    nama yang hilang tidak pernah terisi walaupun sudah di-crawl ulang."""
+    session_factory = make_session_factory()
+    company_id, location, _ = seed_targets(session_factory)
+    service = ReviewService(company_id=company_id, session_factory=session_factory)
+
+    base = {
+        "location_id": location.id,
+        "source": "apify_google_maps",
+        "external_place_id": "place-1",
+        "external_review_id": "review-1",
+        "review_hash": "hash-1",
+        "rating": 5,
+        "review_text": "Baik.",
+        "review_time": datetime(2026, 8, 1, tzinfo=timezone.utc),
+    }
+
+    # Tarikan lama: anonim, persis seperti yang tersimpan hari ini.
+    first, duplicate = service.insert_review(dict(base, reviewer_name=None))
+    assert first is not None and duplicate is False
+    with session_factory() as session:
+        watermark_before = session.scalar(select(Review.sync_updated_at))
+
+    # Tarikan baru atas review yang sama, sekarang membawa nama.
+    second, duplicate = service.insert_review(dict(base, reviewer_name="Andi"))
+    assert second is None and duplicate is True, "harus tetap dihitung duplikat"
+
+    with session_factory() as session:
+        assert session.scalar(select(func.count(Review.id))) == 1, "tidak boleh menggandakan"
+        assert session.scalar(select(Review.reviewer_name)) == "Andi"
+        watermark_after = session.scalar(select(Review.sync_updated_at))
+    # Inilah yang membuat OneBox benar-benar melihat namanya: cursor
+    # /integration/v1/reviews berjalan di atas sync_updated_at. Kalau kolom ini
+    # tidak maju, DB Crawler sudah benar tapi OneBox tetap "Anonymous".
+    assert watermark_after > watermark_before, "OneBox tidak akan menarik ulang"
+
+    # Tarikan berikutnya yang justru kehilangan nama TIDAK boleh menghapusnya,
+    # dan tidak ada yang berubah, jadi watermark juga tidak boleh maju.
+    service.insert_review(dict(base, reviewer_name=None))
+    with session_factory() as session:
+        assert session.scalar(select(Review.reviewer_name)) == "Andi"
+        assert session.scalar(select(Review.sync_updated_at)) == watermark_after

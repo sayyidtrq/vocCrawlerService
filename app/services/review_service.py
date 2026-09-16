@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.models import Review, ReviewAnalysis
 from app.db.session import get_session_factory
 from app.services.review_repository import (
     ReviewRepository,
+    backfill_missing_fields,
     insert_review_optimistically,
 )
 
@@ -46,8 +48,30 @@ class ReviewService:
         review = Review(**data)
         with self.session_factory() as session:
             repo = ReviewRepository(session, self.company_id)
+
+            def enrich(existing_id: int, incoming: Review) -> None:
+                # Review yang ditarik sebelum include_personal menyala punya
+                # identitas pengulas kosong. Menariknya lagi hanya menemukan
+                # duplikat lalu melewatinya, jadi perbaikannya ditempelkan di
+                # sini: satu crawl ulang sekarang mengisi nama yang hilang.
+                existing = session.get(Review, existing_id)
+                if backfill_missing_fields(session, existing, incoming):
+                    # Tanpa ini perbaikannya berhenti di DB Crawler: OneBox
+                    # hanya menarik ulang review yang sync_updated_at-nya maju,
+                    # dan kolom itu sengaja tanpa onupdate= (lihat models.py).
+                    # Ekspresinya sama dengan AnalysisService demi urutan keyset.
+                    existing.sync_updated_at = (
+                        func.clock_timestamp()
+                        if session.bind.dialect.name == "postgresql"
+                        else datetime.now(timezone.utc)
+                    )
+                    session.commit()
+
             return insert_review_optimistically(
-                session, review, lambda: repo.find_existing_dedupe_id(review)
+                session,
+                review,
+                lambda: repo.find_existing_dedupe_id(review),
+                enrich=enrich,
             )
 
     def get_review(self, review_id: int) -> dict | None:

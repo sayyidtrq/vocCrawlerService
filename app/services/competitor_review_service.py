@@ -6,7 +6,10 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.models import CompetitorReview
 from app.db.session import get_session_factory
-from app.services.review_repository import insert_review_optimistically
+from app.services.review_repository import (
+    backfill_missing_fields,
+    insert_review_optimistically,
+)
 
 
 class CompetitorReviewService:
@@ -50,8 +53,20 @@ class CompetitorReviewService:
         review = CompetitorReview(**payload)
         with self.session_factory() as session:
             statement = self._dedupe_statement(review)
+
+            def enrich(existing_id: int, incoming: CompetitorReview) -> None:
+                # Sama seperti review cabang: identitas pengulas kosong pada
+                # semua yang ditarik sebelum include_personal menyala.
+                if backfill_missing_fields(
+                    session, session.get(CompetitorReview, existing_id), incoming
+                ):
+                    session.commit()
+
             return insert_review_optimistically(
-                session, review, lambda: session.scalar(statement)
+                session,
+                review,
+                lambda: session.scalar(statement),
+                enrich=enrich,
             )
 
     @staticmethod
