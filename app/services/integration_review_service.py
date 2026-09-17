@@ -314,6 +314,11 @@ class IntegrationReviewService:
             "rating": review.rating,
             "review_text": review.review_text,
             "review_time": _as_utc(review.review_time),
+            "review_time_precision": review.review_time_precision,
+            "date_approximate": review.review_time_precision
+            in {"week", "month", "year"},
+            "is_edited": bool(review.is_edited),
+            "edited_at": _as_utc(review.edited_at),
             "owner_response_text": review.owner_response_text,
             "owner_response_time": _as_utc(review.owner_response_time),
             "updated_at": _as_utc(review.updated_at),

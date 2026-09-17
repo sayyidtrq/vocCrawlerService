@@ -142,6 +142,103 @@ def is_within_date_range(
     return True
 
 
+# Presisi tanggal ulasan. Tanggal dari Apify kebanyakan hasil taksiran teks
+# relatif ("a year ago" = persis 365 hari sebelum crawl), jadi setiap tanggal
+# membawa seberapa kasar taksirannya. Urutan: halus -> kasar.
+PRECISION_ORDER = ("day", "week", "month", "year", "unknown")
+PRECISION_SPAN = {
+    "day": timedelta(days=1),
+    "week": timedelta(days=7),
+    "month": timedelta(days=30),
+    "year": timedelta(days=365),
+    "unknown": timedelta(days=365),
+}
+_UNIT_PRECISION = {
+    "second": "day", "detik": "day", "minute": "day", "menit": "day",
+    "hour": "day", "jam": "day", "day": "day", "hari": "day",
+    "week": "week", "minggu": "week", "pekan": "week",
+    "month": "month", "bulan": "month",
+    "year": "year", "tahun": "year",
+}
+_EDITED_PREFIXES = ("edited ", "diedit ", "diubah ")
+
+
+def is_edited_text(text: str | None) -> bool:
+    return bool(text) and text.strip().lower().startswith(_EDITED_PREFIXES)
+
+
+def relative_time_precision(
+    text: str | None,
+    review_time: datetime | None = None,
+    reference: datetime | None = None,
+) -> str:
+    """Seberapa kasar review_time, dibaca dari teks relatif Google.
+
+    Bila umur tanggal bukan kelipatan tepat satuannya, aktor ternyata punya
+    tanggal asli, jadi presisinya "day".
+    """
+    if not text or not text.strip():
+        return "unknown"
+    normalized = text.strip().lower()
+    for prefix in _EDITED_PREFIXES:
+        if normalized.startswith(prefix):
+            normalized = normalized[len(prefix):]
+            break
+    if any(pattern in normalized for pattern in _JUST_NOW_PATTERNS):
+        return "day"
+    amount, unit = None, None
+    for word, word_unit in _SINGLE_UNIT_WORDS.items():
+        if word_unit and word in normalized:
+            amount, unit = 1, word_unit
+            break
+    if unit is None:
+        match = _RELATIVE_PATTERN.search(normalized)
+        if not match:
+            return "unknown"
+        amount = _resolve_amount(match.group("amount"))
+        unit = match.group("unit").lower()
+    precision = _UNIT_PRECISION.get(unit, "unknown")
+    if precision in {"day", "unknown"} or review_time is None or reference is None:
+        return precision
+    unit_days = _UNIT_SECONDS[unit] // 86400
+    try:
+        age_days = (reference.date() - review_time.date()).days
+    except (AttributeError, TypeError):
+        return precision
+    return precision if age_days == amount * unit_days else "day"
+
+
+def finer_precision(candidate: str | None, current: str | None) -> bool:
+    """True bila candidate strictly lebih halus daripada current."""
+    order = {name: index for index, name in enumerate(PRECISION_ORDER)}
+    return order.get(candidate or "unknown", 4) < order.get(current or "unknown", 4)
+
+
+def is_within_date_range_approx(
+    review_time: datetime | None,
+    precision: str | None,
+    date_from: datetime | None,
+    date_to: datetime | None,
+) -> bool:
+    """Seperti is_within_date_range, tapi tanggal taksiran dianggap rentang.
+
+    Ulasan bertanggal d dengan presisi p ditulis di (d - 1p, d]; ia masuk bila
+    rentang itu beririsan dengan jendela. Lebih baik ikut terbawa daripada
+    diam-diam terbuang.
+    """
+    if review_time is None or precision in {None, "day"}:
+        return is_within_date_range(review_time, date_from, date_to)
+    earliest = review_time - PRECISION_SPAN.get(precision, PRECISION_SPAN["unknown"])
+    try:
+        if date_from is not None and review_time < date_from:
+            return False
+        if date_to is not None and earliest > date_to:
+            return False
+    except TypeError:
+        return is_within_date_range(review_time, date_from, date_to)
+    return True
+
+
 DATE_PRESETS = {
     "today",
     "yesterday",

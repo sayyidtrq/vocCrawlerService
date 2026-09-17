@@ -49,6 +49,8 @@ _BLANK_USES_DEFAULT_FIELDS = (
     "crawl_max_target_reviews",
     "crawl_default_review_limit",
     "crawl_completeness_tolerance",
+    "crawl_watermark_margin_days",
+    "crawl_safety_sweep_days",
     "apify_actor_id",
     "apify_run_timeout_seconds",
     "apify_poll_interval_seconds",
@@ -120,6 +122,8 @@ class Settings(BaseModel):
     crawl_max_target_reviews: int = 100_000
     crawl_default_review_limit: int = 5_000
     crawl_completeness_tolerance: float = 0.98
+    crawl_watermark_margin_days: int = 1
+    crawl_safety_sweep_days: int = 30
     apify_api_tokens: Annotated[list[str], NoDecode] = []
     apify_actor_id: str = "web_wanderer/google-reviews-scraper"
     apify_run_timeout_seconds: int = 300

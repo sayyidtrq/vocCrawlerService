@@ -13,6 +13,7 @@ class RatingSnapshot(TypedDict):
 class CrawlRequestSnapshot(TypedDict):
     coverage: str
     budget: int | None
+    review_quota_remaining: int | None
     crawl_mode: str
     apify_run_id: str
     apify_dataset_id: str

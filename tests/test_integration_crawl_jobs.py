@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
@@ -401,6 +403,7 @@ def test_worker_claims_and_completes_job(session_factory):
             target,
             coverage=None,
             budget=None,
+            review_quota_remaining=None,
             date_from=None,
             date_to=None,
             on_progress=None,
@@ -489,6 +492,7 @@ def test_worker_marks_partial_success_without_failed_retry(session_factory):
             target,
             coverage=None,
             budget=None,
+            review_quota_remaining=None,
             date_from=None,
             date_to=None,
             on_progress=None,
@@ -550,6 +554,7 @@ def test_worker_does_not_retry_permanent_source_failure(session_factory):
             target,
             coverage=None,
             budget=None,
+            review_quota_remaining=None,
             date_from=None,
             date_to=None,
             on_progress=None,
@@ -593,3 +598,147 @@ def test_worker_does_not_retry_permanent_source_failure(session_factory):
     assert completed["jobs"][0]["status"] == "failed"
     assert completed["jobs"][0]["attempts"] == 1
     assert completed["jobs"][0]["error"]["code"] == "GOOGLE_AUTH_REQUIRED"
+
+
+def test_estimate_is_not_shadowed_by_batch_route_and_reports_probe(session_factory):
+    with session_factory() as session:
+        location = session.scalar(
+            select(Location).where(Location.onebox_location_id == 101)
+        )
+        location.last_probed_review_count = 1100
+        location.last_probed_at = datetime(2026, 9, 16, tzinfo=timezone.utc)
+        location.last_expected_review_count = 1050
+        location.last_successful_crawl_at = datetime(
+            2026, 9, 1, tzinfo=timezone.utc
+        )
+        session.commit()
+    client = make_client(session_factory, principal(1, 1))
+
+    response = client.get(
+        "/api/integration/v1/crawl-jobs/estimate",
+        params={"onebox_location_id": 101},
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["expected_review_count"] == 1100
+    assert data["expected_source"] == "probe"
+    assert data["stored_review_count"] == 0
+    assert data["coverage"]["last_expected_review_count"] == 1050
+
+
+def test_estimate_falls_back_to_the_last_crawl_snapshot(session_factory):
+    with session_factory() as session:
+        location = session.scalar(
+            select(Location).where(Location.onebox_location_id == 101)
+        )
+        location.last_expected_review_count = 1050
+        location.last_successful_crawl_at = datetime(
+            2026, 9, 1, tzinfo=timezone.utc
+        )
+        session.commit()
+    client = make_client(session_factory, principal(1, 1))
+
+    data = client.get(
+        "/api/integration/v1/crawl-jobs/estimate",
+        params={"onebox_location_id": 101},
+    ).json()["data"]
+
+    assert data["expected_review_count"] == 1050
+    assert data["expected_source"] == "snapshot"
+
+
+def test_estimate_is_tenant_scoped(session_factory):
+    client = make_client(session_factory, principal(1, 1))
+
+    response = client.get(
+        "/api/integration/v1/crawl-jobs/estimate",
+        params={"onebox_location_id": 201},
+    )
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "TARGET_NOT_FOUND"
+
+
+class _FakePlaces:
+    def __init__(self, count=None, error=None):
+        self.count = count
+        self.error = error
+        self.calls = 0
+
+    def review_count(self, place_id):
+        self.calls += 1
+        if self.error:
+            raise self.error
+        return self.count
+
+
+def test_probe_reports_unchanged_count_without_touching_apify(
+    session_factory, monkeypatch
+):
+    from app.integrations import apify_client
+    from app.services import review_count_probe
+
+    places = _FakePlaces(count=1100)
+    monkeypatch.setattr(
+        review_count_probe.ReviewCountProbe,
+        "places_client",
+        property(lambda self: places),
+    )
+
+    def _no_apify(*args, **kwargs):
+        raise AssertionError("the probe must never construct an Apify client")
+
+    monkeypatch.setattr(apify_client.ApifyClient, "__init__", _no_apify)
+    client = make_client(session_factory, principal(1, 1))
+    url = "/api/integration/v1/crawl-jobs/probe"
+
+    first = client.get(url, params={"onebox_location_id": 101}).json()["data"]
+    second = client.get(url, params={"onebox_location_id": 101}).json()["data"]
+
+    assert first["changed"] is True
+    assert second["changed"] is False
+    assert second["previous_review_count"] == 1100
+    assert places.calls == 2
+
+
+def test_probe_fails_open(session_factory, monkeypatch):
+    from app.integrations.review_source_client import ReviewSourceError
+    from app.services import review_count_probe
+
+    places = _FakePlaces(error=ReviewSourceError("key missing"))
+    monkeypatch.setattr(
+        review_count_probe.ReviewCountProbe,
+        "places_client",
+        property(lambda self: places),
+    )
+    client = make_client(session_factory, principal(1, 1))
+
+    response = client.get(
+        "/api/integration/v1/crawl-jobs/probe", params={"onebox_location_id": 101}
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["changed"] is True
+    assert data["error"] == "PROBE_UNAVAILABLE"
+
+
+def test_review_quota_is_accepted_and_not_part_of_the_fingerprint(session_factory):
+    client = make_client(session_factory, principal(1, 1))
+    body = {
+        "targets": [{"onebox_location_id": 101, "coverage": "delta"}],
+        "review_quota_remaining": 40,
+    }
+    headers = {"Idempotency-Key": "169:2026-09-17:quota"}
+
+    first = client.post("/api/integration/v1/crawl-jobs", headers=headers, json=body)
+    body["review_quota_remaining"] = 39
+    retry = client.post("/api/integration/v1/crawl-jobs", headers=headers, json=body)
+
+    assert first.status_code == 202
+    assert retry.status_code == 202
+    assert retry.json()["data"]["batch_id"] == first.json()["data"]["batch_id"]
+    with session_factory() as session:
+        job = session.scalar(select(CrawlJob))
+        assert job.result_json["request"]["review_quota_remaining"] == 40

@@ -250,7 +250,29 @@ class CrawlJob(Base):
     batch: Mapped[CrawlBatch] = relationship(back_populates="jobs")
 
 
-class Location(Base):
+class _CrawlCoverageColumns:
+    """Apa yang benar-benar sudah di-crawl untuk satu target (spec §4.5).
+
+    Kursor delta dibaca dari sini, bukan dari apa yang sudah diimpor OneBox,
+    supaya impor yang tertinggal tidak memicu crawl ulang.
+    """
+
+    newest_crawled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    newest_crawled_precision: Mapped[str | None] = mapped_column(String(10))
+    oldest_crawled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    backfill_completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    last_successful_crawl_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    last_expected_review_count: Mapped[int | None] = mapped_column(Integer)
+    last_probed_review_count: Mapped[int | None] = mapped_column(Integer)
+    last_probed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_sweep_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class Location(_CrawlCoverageColumns, Base):
     __tablename__ = "locations"
     __table_args__ = (
         UniqueConstraint(
@@ -341,6 +363,12 @@ class _GoogleReviewColumns:
     rating: Mapped[int | None] = mapped_column(Integer)
     review_text: Mapped[str] = mapped_column(Text, default="", nullable=False)
     review_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # day / week / month / year / unknown — lihat date_parser.PRECISION_ORDER.
+    review_time_precision: Mapped[str | None] = mapped_column(String(10))
+    is_edited: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false"), nullable=False
+    )
+    edited_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     review_relative_time: Mapped[str | None] = mapped_column(String(100))
     review_language: Mapped[str | None] = mapped_column(String(20))
     language: Mapped[str | None] = mapped_column(String(20))
@@ -478,7 +506,7 @@ class FetchLog(Base):
     location: Mapped[Location] = relationship(back_populates="fetch_logs")
 
 
-class Competitor(Base):
+class Competitor(_CrawlCoverageColumns, Base):
     __tablename__ = "competitors"
     __table_args__ = (
         UniqueConstraint(
@@ -549,3 +577,32 @@ class CompetitorReview(_GoogleReviewColumns, Base):
     )
 
     competitor: Mapped[Competitor] = relationship(back_populates="reviews")
+
+
+class CrawlWindowLog(Base):
+    """Satu baris per job date_window: apakah rentangnya sudah lengkap."""
+
+    __tablename__ = "crawl_window_log"
+    __table_args__ = (
+        Index("idx_crawl_window_log_location", "location_id", "finished_at"),
+        Index("idx_crawl_window_log_competitor", "competitor_id", "finished_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    company_id: Mapped[int] = mapped_column(
+        ForeignKey("companies.id", ondelete="CASCADE"), nullable=False
+    )
+    location_id: Mapped[int | None] = mapped_column(
+        ForeignKey("locations.id", ondelete="CASCADE")
+    )
+    competitor_id: Mapped[int | None] = mapped_column(
+        ForeignKey("competitors.id", ondelete="CASCADE")
+    )
+    crawl_job_id: Mapped[int | None] = mapped_column(Integer)
+    date_from: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    date_to: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completeness: Mapped[str] = mapped_column(String(20), nullable=False)
+    stop_reason: Mapped[str | None] = mapped_column(String(50))
+    finished_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )

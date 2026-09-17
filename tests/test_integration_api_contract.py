@@ -21,10 +21,10 @@ from sqlalchemy.pool import StaticPool
 from app.db.base import Base
 from app.db.models import Company, Location, Review, ReviewAnalysis
 from app.services.analysis_service import (
-    ANALYSIS_STATUSES,
     ALLOWED_CATEGORIES,
     ALLOWED_SENTIMENTS,
     ALLOWED_URGENCIES,
+    ANALYSIS_STATUSES,
 )
 from apps.api.app_api.integration_schemas import (
     AnalysisStatus,
@@ -58,6 +58,11 @@ EXPECTED_ITEM_FIELDS = {
     "rating",
     "review_text",
     "review_time",
+    # Aditif (spec §5.5): presisi tanggal dan penanda edit.
+    "review_time_precision",
+    "date_approximate",
+    "is_edited",
+    "edited_at",
     "owner_response_text",
     "owner_response_time",
     "updated_at",

@@ -10,7 +10,11 @@ def test_real_apify_sample_maps_every_review_column():
     items = json.loads(FIXTURE.read_text())
 
     assert len(items) == 4
-    for item in items:
+    # Dua tanggal asli (umurnya bukan kelipatan tepat), satu taksiran bulan,
+    # satu ulasan yang diedit - tanggalnya tanggal edit, taksiran bulan.
+    precisions = ["day", "day", "month", "month"]
+    edited = [False, False, False, True]
+    for index, item in enumerate(items):
         parsed = ApifyReviewParser.parse_review(item)
         expected = {
             "source": "apify_google_maps",
@@ -27,6 +31,9 @@ def test_real_apify_sample_maps_every_review_column():
             "rating": item.get("rating"),
             "review_text": item.get("content") or "",
             "review_time": item.get("reviewed_at_date"),
+            "review_time_precision": precisions[index],
+            "is_edited": edited[index],
+            "edited_at": item.get("reviewed_at_date") if edited[index] else None,
             "review_relative_time": item.get("reviewed_at"),
             "review_language": item.get("content_language"),
             "language": item.get("content_language"),

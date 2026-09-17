@@ -74,6 +74,12 @@ class IntegrationReviewItem(_Base):
     rating: int | None = None
     review_text: str
     review_time: datetime | None = None
+    # Tanggal Google kebanyakan taksiran (spec B17). Opsional dan aditif:
+    # konsumen lama cukup mengabaikannya.
+    review_time_precision: str | None = None
+    date_approximate: bool = False
+    is_edited: bool = False
+    edited_at: datetime | None = None
     owner_response_text: str | None = None
     owner_response_time: datetime | None = None
     updated_at: datetime
@@ -100,7 +106,11 @@ class IntegrationReviewItem(_Base):
     is_patient_safety_issue: bool = False
 
     @field_serializer(
-        "review_time", "owner_response_time", "updated_at", "sync_updated_at"
+        "review_time",
+        "edited_at",
+        "owner_response_time",
+        "updated_at",
+        "sync_updated_at",
     )
     def _serialize_datetime(self, value: datetime | None) -> str | None:
         return to_utc_z(value) if value is not None else None

@@ -1,10 +1,25 @@
 from __future__ import annotations
 
+from app.utils.date_parser import (
+    is_edited_text,
+    parse_datetime,
+    relative_time_precision,
+)
+
 
 class ApifyReviewParser:
     @staticmethod
     def parse_review(item: dict) -> dict:
         language = item.get("content_language")
+        relative = item.get("reviewed_at")
+        # reviewed_at_date kebanyakan taksiran dari teks relatif (spec B17);
+        # untuk ulasan yang diedit, tanggal itu adalah tanggal EDIT-nya.
+        precision = relative_time_precision(
+            relative,
+            parse_datetime(item.get("reviewed_at_date")),
+            parse_datetime(item.get("scraped_at")),
+        )
+        edited = is_edited_text(relative)
         return {
             "source": "apify_google_maps",
             "external_place_id": item.get("place_id"),
@@ -20,7 +35,10 @@ class ApifyReviewParser:
             "rating": item.get("rating"),
             "review_text": item.get("content") or "",
             "review_time": item.get("reviewed_at_date"),
-            "review_relative_time": item.get("reviewed_at"),
+            "review_time_precision": precision,
+            "is_edited": edited,
+            "edited_at": item.get("reviewed_at_date") if edited else None,
+            "review_relative_time": relative,
             "review_language": language,
             "language": language,
             "like_count": item.get("likes_count"),

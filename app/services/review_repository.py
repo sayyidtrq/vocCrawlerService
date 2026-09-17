@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import TypeVar
 
 from sqlalchemy import and_, func, or_, select
@@ -10,13 +10,14 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db.models import Location, Review, ReviewAnalysis
+from app.utils.date_parser import finer_precision, relative_time_precision
 
 ReviewT = TypeVar("ReviewT")
 
 
 # Kolom yang boleh diisi ulang pada baris yang sudah ada.
 #
-# Semuanya identitas pengulas, dan semuanya NULL pada setiap review yang
+# Semuanya identitas pengulas, dan semuanya kosong pada setiap review yang
 # ditarik sebelum `include_personal` dinyalakan - aktornya memang tidak
 # mengirimkannya. Menariknya lagi tidak memperbaiki apa pun dengan
 # sendirinya: dedup menemukan barisnya lalu melewatinya, jadi nama yang
@@ -28,6 +29,21 @@ BACKFILLABLE_FIELDS = (
     "reviewer_local_guide_level",
     "reviewer_total_reviews",
 )
+
+# normalize_review() menyimpan nama kosong sebagai "Anonymous", bukan NULL.
+# Nilai itu harus dianggap kosong, kalau tidak penambalan tidak pernah jalan.
+_PLACEHOLDER_VALUES = {"reviewer_name": {"anonymous", "anonim"}}
+
+
+def _is_blank(field: str, value: object) -> bool:
+    if value is None or value == "":
+        return True
+    placeholders = _PLACEHOLDER_VALUES.get(field)
+    return bool(
+        placeholders
+        and isinstance(value, str)
+        and value.strip().lower() in placeholders
+    )
 
 
 def backfill_missing_fields(
@@ -47,14 +63,86 @@ def backfill_missing_fields(
     changed = False
     for field in fields:
         baru = getattr(incoming, field, None)
-        if baru is None or baru == "":
+        if _is_blank(field, baru):
             continue
-        lama = getattr(existing, field, None)
-        if lama is not None and lama != "":
+        if not _is_blank(field, getattr(existing, field, None)):
             continue
         setattr(existing, field, baru)
         changed = True
     return changed
+
+
+def _same_text(left: object, right: object) -> bool:
+    return " ".join(str(left or "").split()) == " ".join(str(right or "").split())
+
+
+def apply_resighting(existing: object | None, incoming: object) -> tuple[bool, bool]:
+    """Terapkan aturan floating review (spec §4.6) pada baris yang sudah ada.
+
+    F1: tanggal hanya diganti bila presisi yang baru LEBIH halus.
+    F2: ulasan yang diedit memperbarui teks dan bintang di tempat; review_hash
+    dan review_time asli tidak disentuh.
+    Mengembalikan (berubah, isinya_berubah).
+    """
+    if existing is None:
+        return False, False
+    changed = False
+    content_changed = False
+
+    incoming_precision = getattr(incoming, "review_time_precision", None)
+    incoming_time = getattr(incoming, "review_time", None)
+    stored_precision = getattr(existing, "review_time_precision", None)
+    if stored_precision is None and getattr(existing, "review_time", None) is not None:
+        # Baris lama belum punya presisi. Hitung dari data yang disimpannya
+        # sendiri, jangan dianggap "unknown" - kalau dianggap unknown, tanggal
+        # taksiran lama akan ditimpa taksiran baru yang sama kasarnya.
+        stored_precision = relative_time_precision(
+            getattr(existing, "review_relative_time", None),
+            existing.review_time,
+            getattr(existing, "scraped_at", None),
+        )
+        existing.review_time_precision = stored_precision
+        changed = True
+    if (
+        incoming_time is not None
+        and not getattr(incoming, "is_edited", False)
+        and finer_precision(incoming_precision, stored_precision)
+    ):
+        existing.review_time = incoming_time
+        existing.review_time_precision = incoming_precision
+        changed = True
+
+    if getattr(incoming, "is_edited", False):
+        text_differs = not _same_text(existing.review_text, incoming.review_text)
+        rating_differs = (
+            incoming.rating is not None and incoming.rating != existing.rating
+        )
+        if text_differs or rating_differs:
+            payload = dict(existing.raw_payload or {})
+            previous = list(payload.get("previous_versions") or [])
+            previous.append(
+                {
+                    "review_text": existing.review_text,
+                    "rating": existing.rating,
+                    "recorded_at": datetime.now(timezone.utc).isoformat(),
+                }
+            )
+            payload["previous_versions"] = previous
+            # Kolom JSON harus diganti, bukan dimutasi, supaya ORM menyimpannya.
+            existing.raw_payload = payload
+            existing.review_text = incoming.review_text
+            if rating_differs:
+                existing.rating = incoming.rating
+            content_changed = True
+            changed = True
+        if not existing.is_edited or (
+            content_changed and getattr(incoming, "edited_at", None) is not None
+        ):
+            existing.is_edited = True
+            existing.edited_at = getattr(incoming, "edited_at", None) or existing.edited_at
+            changed = True
+
+    return changed, content_changed
 
 
 def insert_review_optimistically(

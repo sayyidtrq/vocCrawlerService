@@ -95,7 +95,10 @@ class CrawlQueue:
                 str(k): {
                     option_key: _iso(option_value)
                     for option_key, option_value in sorted(options.items())
+                    # Sisa kuota berubah antar-retry satu klik yang sama;
+                    # ia bukan bagian dari identitas permintaan.
                     if option_value is not None
+                    and option_key != "review_quota_remaining"
                 }
                 for k, options in sorted(target_crawl_options.items())
             }
@@ -329,6 +332,7 @@ class CrawlQueue:
                             crawl_mode=crawl_mode,
                             max_reviews_to_collect=budget,
                             scan_limit=scan_limit,
+                            review_quota_remaining=options.get("review_quota_remaining"),
                             dry_run=bool(options.get("dry_run", False)),
                             date_from=date_from,
                             date_to=date_to,
@@ -375,6 +379,7 @@ class CrawlQueue:
                             crawl_mode=crawl_mode,
                             max_reviews_to_collect=budget,
                             scan_limit=scan_limit,
+                            review_quota_remaining=spec.get("review_quota_remaining"),
                             dry_run=bool(spec.get("dry_run", False)),
                             date_from=date_from,
                             date_to=date_to,
@@ -489,6 +494,7 @@ class CrawlQueue:
         max_reviews_to_collect: int | None,
         scan_limit: int | None,
         dry_run: bool,
+        review_quota_remaining: int | None = None,
         date_from: datetime | None,
         date_to: datetime | None,
         sort_by: str,
@@ -496,6 +502,7 @@ class CrawlQueue:
         request: CrawlRequestSnapshot = {
             "coverage": coverage,
             "budget": budget,
+            "review_quota_remaining": review_quota_remaining,
             "crawl_mode": crawl_mode,
             "max_reviews_to_collect": max_reviews_to_collect,
             "scan_limit": scan_limit,

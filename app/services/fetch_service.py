@@ -25,7 +25,6 @@ from app.utils.date_parser import (
 )
 from app.utils.hashing import generate_review_hash
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -129,6 +128,9 @@ class FetchService:
             "rating": rating,
             "review_text": str(raw_review.get("review_text") or ""),
             "review_time": self._resolve_review_time(raw_review),
+            "review_time_precision": raw_review.get("review_time_precision"),
+            "is_edited": bool(raw_review.get("is_edited")),
+            "edited_at": parse_datetime(raw_review.get("edited_at")),
             "review_relative_time": raw_review.get("review_relative_time"),
             "review_language": str(
                 raw_review.get("review_language")

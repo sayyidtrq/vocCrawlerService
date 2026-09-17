@@ -9,7 +9,6 @@ from app.config import Settings
 from app.db.models import Location
 from app.integrations.review_source_client import ReviewSourceClient, ReviewSourceError
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -24,21 +23,46 @@ class GooglePlacesClient(ReviewSourceClient):
         self.http_session = http_session or requests.Session()
 
     def fetch_reviews(self, location: Location, limit: int = 50, **kwargs) -> list[dict]:
+        place_id = (location.external_place_id or "").strip()
+        if not place_id:
+            raise ReviewSourceError("External Place ID is required.")
+        payload = self._get_place(
+            place_id, "id,displayName,rating,userRatingCount,reviews"
+        )
+        reviews = payload.get("reviews") or []
+        if not reviews and payload.get("userRatingCount"):
+            place_name = (payload.get("displayName") or {}).get("text") or place_id
+            logger.warning(
+                "Google Places returned no review objects for %s despite "
+                "userRatingCount=%s. The official API may omit reviews for "
+                "this place.",
+                place_name,
+                payload["userRatingCount"],
+            )
+        effective_limit = min(max(0, limit), self.maximum_reviews)
+        return [
+            self._normalize_google_review(review, place_id)
+            for review in reviews[:effective_limit]
+        ]
+
+    def review_count(self, place_id: str) -> int | None:
+        """Jumlah ulasan menurut Google - penanda murah "ada yang berubah?"."""
+        payload = self._get_place(place_id.strip(), "rating,userRatingCount")
+        count = payload.get("userRatingCount")
+        return int(count) if count is not None else None
+
+    def _get_place(self, place_id: str, field_mask: str) -> dict:
         if not self.settings.google_maps_api_key:
             raise ReviewSourceError(
                 "Review source API key is missing. Please check your .env configuration."
             )
-        place_id = (location.external_place_id or "").strip()
         if not place_id:
             raise ReviewSourceError("External Place ID is required.")
-
         url = f"{self.base_url}/{quote(place_id, safe='')}"
         headers = {
             "Accept": "application/json",
             "X-Goog-Api-Key": self.settings.google_maps_api_key,
-            "X-Goog-FieldMask": (
-                "id,displayName,rating,userRatingCount,reviews"
-            ),
+            "X-Goog-FieldMask": field_mask,
         }
         params = {}
         if self.settings.google_places_language_code:
@@ -68,27 +92,11 @@ class GooglePlacesClient(ReviewSourceClient):
             raise ReviewSourceError(message, retriable=retriable)
 
         try:
-            payload = response.json()
+            return response.json()
         except ValueError as exc:
             raise ReviewSourceError(
                 "Google Places returned an invalid JSON response."
             ) from exc
-
-        reviews = payload.get("reviews") or []
-        if not reviews and payload.get("userRatingCount"):
-            place_name = (payload.get("displayName") or {}).get("text") or place_id
-            logger.warning(
-                "Google Places returned no review objects for %s despite "
-                "userRatingCount=%s. The official API may omit reviews for "
-                "this place.",
-                place_name,
-                payload["userRatingCount"],
-            )
-        effective_limit = min(max(0, limit), self.maximum_reviews)
-        return [
-            self._normalize_google_review(review, place_id)
-            for review in reviews[:effective_limit]
-        ]
 
     @staticmethod
     def _normalize_google_review(review: dict, place_id: str) -> dict:

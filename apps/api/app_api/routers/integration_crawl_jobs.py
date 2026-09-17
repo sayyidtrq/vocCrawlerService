@@ -7,9 +7,11 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Header, Query, Request, status
 
+from app.config import get_settings
 from app.db.session import get_session_factory
 from app.services.crawl_queue import CrawlQueue, CrawlQueueError
 from app.services.integration_review_service import IntegrationRequestError
+from app.services.review_count_probe import ReviewCountProbe, ReviewTargetNotFound
 from apps.api.app_api.integration_crawl_schemas import (
     CrawlBatchCreateRequest,
     CrawlBatchListResponse,
@@ -100,6 +102,7 @@ def _target_crawl_options(
         "crawl_mode": crawl_mode,
         "max_reviews_to_collect": budget,
         "scan_limit": target.scan_limit or payload.scan_limit,
+        "review_quota_remaining": payload.review_quota_remaining,
         "dry_run": payload.dry_run,
         "date_from": date_from,
         "date_to": date_to,
@@ -224,6 +227,80 @@ def list_crawl_batches(
     return {
         "data": data,
         "meta": {"api_version": API_VERSION, "request_id": request_id, "limit": limit},
+    }
+
+
+def _probe_service(session_factory) -> ReviewCountProbe:
+    return ReviewCountProbe(session_factory, get_settings())
+
+
+def _target_not_found(onebox_location_id: int) -> IntegrationRequestError:
+    return IntegrationRequestError(
+        404,
+        "TARGET_NOT_FOUND",
+        f"Location {onebox_location_id} is absent or outside this tenant.",
+    )
+
+
+# /estimate dan /probe HARUS dideklarasikan sebelum "/{batch_id}", kalau tidak
+# keduanya tertangkap sebagai batch_id.
+@router.get(
+    "/estimate",
+    responses={
+        401: {"model": IntegrationErrorResponse},
+        403: {"model": IntegrationErrorResponse},
+        404: {"model": IntegrationErrorResponse},
+    },
+    summary="Estimate how many reviews a cabang has, without calling Google",
+)
+def estimate_crawl(
+    request: Request,
+    onebox_location_id: int = Query(gt=0),
+    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    principal: ServicePrincipal = Depends(require_service_principal),
+    session_factory=Depends(get_crawl_queue_session_factory),
+) -> dict:
+    _require_scope(principal, "crawl:read")
+    request_id = _request_id(request, x_request_id)
+    try:
+        data = _probe_service(session_factory).estimate(
+            principal.company_id, onebox_location_id
+        )
+    except ReviewTargetNotFound as exc:
+        raise _target_not_found(onebox_location_id) from exc
+    return {
+        "data": data,
+        "meta": {"api_version": API_VERSION, "request_id": request_id},
+    }
+
+
+@router.get(
+    "/probe",
+    responses={
+        401: {"model": IntegrationErrorResponse},
+        403: {"model": IntegrationErrorResponse},
+        404: {"model": IntegrationErrorResponse},
+    },
+    summary="Ask Google whether a cabang's review count changed",
+)
+def probe_review_count(
+    request: Request,
+    onebox_location_id: int = Query(gt=0),
+    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    principal: ServicePrincipal = Depends(require_service_principal),
+    session_factory=Depends(get_crawl_queue_session_factory),
+) -> dict:
+    _require_scope(principal, "crawl:enqueue")
+    request_id = _request_id(request, x_request_id)
+    try:
+        data = _probe_service(session_factory).probe(
+            principal.company_id, onebox_location_id
+        )
+    except ReviewTargetNotFound as exc:
+        raise _target_not_found(onebox_location_id) from exc
+    return {
+        "data": data,
+        "meta": {"api_version": API_VERSION, "request_id": request_id},
     }
 
 

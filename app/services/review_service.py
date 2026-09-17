@@ -10,6 +10,7 @@ from app.db.models import Review, ReviewAnalysis
 from app.db.session import get_session_factory
 from app.services.review_repository import (
     ReviewRepository,
+    apply_resighting,
     backfill_missing_fields,
     insert_review_optimistically,
 )
@@ -55,7 +56,12 @@ class ReviewService:
                 # duplikat lalu melewatinya, jadi perbaikannya ditempelkan di
                 # sini: satu crawl ulang sekarang mengisi nama yang hilang.
                 existing = session.get(Review, existing_id)
-                if backfill_missing_fields(session, existing, incoming):
+                filled = backfill_missing_fields(session, existing, incoming)
+                resighted, content_changed = apply_resighting(existing, incoming)
+                if content_changed:
+                    # Isi ulasan berubah (diedit pengulas): analisa lama basi.
+                    existing.analysis_status = "pending"
+                if filled or resighted:
                     # Tanpa ini perbaikannya berhenti di DB Crawler: OneBox
                     # hanya menarik ulang review yang sync_updated_at-nya maju,
                     # dan kolom itu sengaja tanpa onupdate= (lihat models.py).
@@ -73,6 +79,16 @@ class ReviewService:
                 lambda: repo.find_existing_dedupe_id(review),
                 enrich=enrich,
             )
+
+    def review_exists(self, data: dict) -> bool:
+        """Apakah review ini sudah tersimpan (aturan dedup yang sama)."""
+        payload = dict(data)
+        if self.company_id is not None:
+            payload.setdefault("company_id", self.company_id)
+        review = Review(**payload)
+        with self.session_factory() as session:
+            repo = ReviewRepository(session, self.company_id)
+            return repo.find_existing_dedupe_id(review) is not None
 
     def get_review(self, review_id: int) -> dict | None:
         with self._read_session() as session:

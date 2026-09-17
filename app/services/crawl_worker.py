@@ -39,6 +39,7 @@ class ClaimedCrawlJob:
     dry_run: bool = False
     coverage: str = "delta"
     budget: int | None = None
+    review_quota_remaining: int | None = None
 
 
 class CrawlWorker:
@@ -129,6 +130,9 @@ class CrawlWorker:
                 batch.started_at = batch.started_at or now
             request_options = dict((job.result_json or {}).get("request") or {})
             crawl_mode = request_options.get("crawl_mode") or "regular_delta"
+            quota_remaining = self._remaining_review_quota(
+                session, job, request_options.get("review_quota_remaining")
+            )
             session.commit()
             return ClaimedCrawlJob(
                 id=job.id,
@@ -149,6 +153,7 @@ class CrawlWorker:
                     "regular_delta": "delta",
                 }.get(crawl_mode, "delta"),
                 budget=request_options.get("budget"),
+                review_quota_remaining=quota_remaining,
                 max_reviews_to_collect=(
                     request_options.get("max_reviews_to_collect")
                     or job.target_review_count
@@ -158,6 +163,29 @@ class CrawlWorker:
                 attempts=job.attempts,
                 max_attempts=job.max_attempts,
             )
+
+    @staticmethod
+    def _remaining_review_quota(
+        session: Session, job: CrawlJob, batch_quota: object
+    ) -> int | None:
+        """Kuota OneBox untuk satu batch, dikurangi yang sudah dipakai job lain.
+
+        ponytail: worker paralel bisa melampaui sebanyak satu job; pakai
+        penghitung atomik per batch kalau itu penting.
+        """
+        if batch_quota is None:
+            return None
+        used = 0
+        siblings = session.scalars(
+            select(CrawlJob.result_json).where(
+                CrawlJob.batch_id == job.batch_id,
+                CrawlJob.id != job.id,
+                CrawlJob.status.in_(["succeeded", "partial_success", "failed"]),
+            )
+        )
+        for result_json in siblings:
+            used += int((result_json or {}).get("total_inserted") or 0)
+        return max(0, int(batch_quota) - used)
 
     def execute_next(self, *, worker_id: str) -> dict | None:
         claimed = self.claim_next(worker_id=worker_id)
@@ -197,6 +225,7 @@ class CrawlWorker:
                 target=claimed.max_reviews_to_collect or claimed.target_review_count,
                 coverage=claimed.coverage,
                 budget=claimed.budget,
+                review_quota_remaining=claimed.review_quota_remaining,
                 date_from=claimed.date_from,
                 date_to=claimed.date_to,
                 sort_by=claimed.sort_by or "newest",
@@ -279,6 +308,7 @@ class CrawlWorker:
             target=claimed.max_reviews_to_collect or claimed.target_review_count,
             coverage=claimed.coverage,
             budget=claimed.budget,
+            review_quota_remaining=claimed.review_quota_remaining,
             date_from=claimed.date_from,
             date_to=claimed.date_to,
             sort_by=claimed.sort_by or "newest",

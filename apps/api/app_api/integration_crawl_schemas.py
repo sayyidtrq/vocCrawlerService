@@ -104,6 +104,9 @@ class CrawlBatchCreateRequest(BaseModel):
     max_reviews_to_collect: int | None = Field(default=None, ge=1, le=100_000)
     scan_limit: int | None = Field(default=None, ge=1, le=5000)
     date_range: CrawlDateRangeRequest | None = None
+    # Sisa kuota VOC_REVIEW bulan ini menurut OneBox. OneBox pemilik kuota;
+    # Crawler hanya menegakkannya. Kosong = tanpa batas.
+    review_quota_remaining: int | None = Field(default=None, ge=0)
     dry_run: bool = False
     targets: list[CrawlTargetRequest] = Field(min_length=1, max_length=500)
 
