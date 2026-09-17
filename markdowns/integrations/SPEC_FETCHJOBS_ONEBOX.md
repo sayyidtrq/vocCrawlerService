@@ -3,7 +3,7 @@
 **Repo:** `onecloud` (OneBox) · **Screen:** `/feature/voc/Mediamonitoring/#/voc/fetchjobs`
 **Paired with:** [`SPEC_FETCHJOBS_CRAWLER.md`](SPEC_FETCHJOBS_CRAWLER.md) — Part 2, the Crawler Service half
 **Contract version consumed:** `crawl-jobs v2` (defined in Part 2 §5)
-**Status:** proposal. No OneBox work started. All `onecloud` paths below are
+**Status:** proposal, revised 2026-09-17 after review. No OneBox work started. All `onecloud` paths below are
 relative to `onecloud/onecloud/app/`.
 
 ---
@@ -18,7 +18,8 @@ the moment someone edits one and not the other.
    validation are defined in Part 2 §5. **§5 here is a caller's view derived
    from it — never the source.** If the two disagree, Part 2 is right and
    this document is stale.
-2. **The pairing table (§8) must be byte-identical in both documents.** It
+2. **The pairing table (§8), the shared decisions (§0) and the review-feedback
+   table must be identical in both documents.** It
    is the only place the cross-repo ordering is recorded.
 3. **Accept before emit.** Do not ship a OneBox change that *sends* a new
    field until the crawler that *accepts* it is in production. The crawler
@@ -26,6 +27,25 @@ the moment someone edits one and not the other.
    fails every crawl immediately.
 4. **Remove in the opposite order.** Stop sending a field here before the
    crawler stops accepting it.
+
+---
+
+## Review feedback 2026-09-17 — where each point is handled
+
+Identical in both documents.
+
+| Feedback | Answer | Part 1 (OneBox) | Part 2 (Crawler) |
+|---|---|---|---|
+| How to handle a "floating" review in the crawler | Four kinds — drifting estimated dates, edited, late-published, deleted — each with its own rule | §4.7, OB-8 | B17–B19, §4.6, CS-7 |
+| Existing cursor (one per cabang, e.g. Pertamina Margonda backfill → 16 Sep → newest) was slow with many duplicates | Keep the design (D9); six causes found; the crawler now owns coverage state | §4.5, OB-1, OB-4 | B20, §4.5, CS-7, CS-8 |
+| Make alerts / toasts / messages unambiguous | Surface rules, wording rules, 25-row message catalogue; existing stop reasons never displayed (bug) | B21, §4.6, OB-9 | CS-8 |
+| Review quota default must not be 300 | Default 5,000, maximum 100,000, one constant per repo; 13 + 6 places listed | B1, OB-2, Q6 | B1, §4.7, Q12 |
+| Read Pak Indra's raw notes on fetch logic and screen | Notulen 2026-08-21 §M: a date-range fetch takes **all** reviews in range; scheduler may keep a count. Notulen 2026-09-08: Google rating is stored, never computed | D8, §4.5 | D8, §4.5 point 5 |
+
+Sources: `markdowns/02-meetings-and-decisions/meeting-notes/2026-08-21-voc-progress-review.md`
+and `2026-09-08_REVIEW_CEO_ULASAN_DAN_WORKSPACE.md` (on `origin/main`);
+ADR-0005 (`02-meetings-and-decisions/adr/`), whose unbuilt cursor fields
+§4.5 of Part 2 now specifies.
 
 ---
 
@@ -38,10 +58,14 @@ Identical in both documents.
 | D1 | Ship the reviewer-identity data bug first, alone. ✅ crawler side done; OneBox half is OB-0 | Both |
 | D2 | Replace "target review count" with explicit **coverage intent** (`full_backfill` / `date_window` / `delta`) plus an optional cost **budget**. | Both |
 | D3 | Use Apify's `place_reviews_count` as the **completeness oracle**. | Crawler |
-| D4 | The 300-review cap is entirely ours — the actor accepts up to **100,000**. Remove it in all six places. | Both |
+| D4 | The 300-review cap is entirely ours — the actor accepts up to **100,000**. Remove it everywhere (13 places in OneBox, 6 in the crawler). | Both |
 | D5 | Full backfill **cannot be resumed mid-run**, so the crawler worker must stop blocking on the Apify poll loop. | Crawler |
 | D6 | Quasi-realtime = tight-interval delta polling gated by a cheap change probe. True realtime does not exist for Google Maps. | Both |
 | D7 | Date windows cost in proportion to how **old** the window is, not how wide. Unfixable; must be priced and surfaced. | Both |
+| D8 | **Pak Indra's rule** (notulen 2026-08-21 §M): a manual fetch over a date range takes **all** reviews in that range — the count never decides when it stops. The scheduler may keep a count. | Both |
+| D9 | **Keep one cursor per cabang** — the existing `last_review_at` design — and extend it: the crawler records what it has actually *crawled*, instead of OneBox inferring it from what it has *imported*. | Both |
+| D10 | **Google review dates are mostly estimates** ("a year ago" = exactly 365 days before the crawl). Floating reviews are handled explicitly, and older dates are shown as approximate. | Both |
+| D11 | **The 300 default goes.** Default per-cabang ceiling becomes **5,000**, held in one constant per repo; hard maximum 100,000. | Both |
 
 ---
 
@@ -165,13 +189,30 @@ Items marked ⇄ span both repos.
 
 | Where | Line |
 |---|---|
-| `VocController::CRAWL_TARGET_MAX` | `controllers/VocController.php:67` |
-| `VocCrawlQueue::TARGET_MAX` | `services/VocCrawlQueue.php:26` |
-| Fetch Jobs input `max="300"` | `views/Voc/fetchjobs.volt:115` |
-| Fetch Jobs JS validation `target > 300` | `views/Voc/fetchjobs.volt:1495-1496` |
+| Where | What it limits | Line |
+|---|---|---|
+| `VocController::CRAWL_TARGET_MAX` | manual crawl, cabang + competitor | `controllers/VocController.php:67` (used `:9343`, `:10549`) |
+| `VocCrawlQueue::TARGET_MAX` | every enqueue | `services/VocCrawlQueue.php:26` |
+| `max(1, min(300, $target))` | **per-cabang review target when a location is saved** | `controllers/VocController.php:10177-10179` |
+| `max(1, min(300, …))` | location payload sent to the crawler | `controllers/VocController.php:12188`, `:13777` |
+| "Target jumlah review … 1 sampai 300" | location form validation | `controllers/VocController.php:13378-13384` |
+| input `max="300"` | Fetch Jobs | `views/Voc/fetchjobs.volt:115` |
+| `target: 300` | Fetch Jobs backfill default | `views/Voc/fetchjobs.volt:842` |
+| JS `target > 300` + modal | Fetch Jobs | `views/Voc/fetchjobs.volt:1495-1496` |
+| input `max="300"` | Schedules | `views/Voc/schedules.volt:235` |
+| JS "harus 1 sampai 300" | Schedules | `views/Voc/schedules.volt:1401` |
+| `$target > 300` | schedule save | `library/VocCron.php:335-336` |
 
-`CRAWL_TARGET_MAX` is also enforced on the competitor path
-(`VocController.php:9343`).
+Thirteen literals, five meanings, no shared constant. The per-cabang target
+at `:10177` is the "benefit quota review" raised in review: every cabang is
+created with a ceiling of at most 300, and the crawler's own default is 100.
+D11 replaces all of them with **one** default (5,000) and **one** maximum
+(100,000) — OB-2.
+
+The `VOC_REVIEW` benefit itself is not 300: the smallest package is 5,000
+per month (`benefitPackages()`, `:2210-2216`; migration
+`1786000000000000_1_123_0/Benefit.php:45`). The per-crawl caps above are
+what actually limited users.
 
 The actor's own `limit` goes to **100,000**. The 300 was a Selenium
 survivability limit and has no meaning against an HTTP API billed per
@@ -227,19 +268,22 @@ The same shape affects `crawlMode()`; its docblock (`:167-169`) notes that a
 per-cabang mode needs the batch split per cabang. Under contract v2 each
 target carries its own `coverage`, so that split is no longer needed.
 
-### B9. The watermark margin's stated reason is now false
+### B9. The watermark margin — keep it, keep its reason
 
 `WATERMARK_MARGIN_DAYS = 1` (`VocCrawlQueue.php:284`). Its docblock
-(`:272-283`) says it compensates for `review_time` being *estimated from
-relative text* ("2 minggu lalu") — a Selenium artifact.
+(`:272-283`) says `review_time` is estimated from relative text
+("2 minggu lalu"), so starting exactly at the watermark would lose reviews.
 
-Apify returns a real date. That imprecision no longer exists.
+**An earlier revision of this document said that reason no longer applied
+under Apify. That was wrong.** Real data shows Apify's dates are *also*
+mostly estimated from relative text (Part 2 B17): "a year ago" is stored as
+exactly 365 days before the crawl for 84 of 91 such reviews. The margin and
+its explanation are both still correct. Add the measurement to the comment
+(OB-7); do not remove either.
 
-**Keep the constant.** It is still needed for a different reason: the actor
-accepts only a date (`YYYY-MM-DD`) as its lower bound, so sub-day precision
-is lost anyway, and a one-day margin covers that. **Rewrite the comment**
-(OB-7). A correct constant with a false justification is how the next person
-deletes it.
+For the delta cursor the estimate is precise enough — reviews near the
+cursor are days old, and Google reports those to the day. The estimate only
+becomes coarse for reviews months or years old (§4.7).
 
 The `ZONA_ONEBOX` handling (`:294`, `:379-392`) is still correct and still
 necessary — do not touch it.
@@ -291,6 +335,52 @@ Harmless today because the UI sends nothing, so `$source` defaults to
 `'selenium'`. But the comment is false, the default is false, and the first
 caller to send `source=apify` is refused with a message claiming Selenium is
 the only option. OB-7.
+
+### ⇄ B17. Old review dates are estimates, and the screens show them as exact
+
+Mechanism in Part 2 B17. In OneBox it shows up as:
+
+- a review from 2024 displayed as *"15 Sep 2025"* because Google said
+  "a year ago" on 15 Sep 2026;
+- monthly trend and "bulan lalu" benchmark (notulen 2026-08-21 §A) built
+  from those dates — old months look empty, a few dates look crowded;
+- a custom date range over an old period appearing to have almost no
+  reviews.
+
+None of this is visible to the user today. §4.7 / OB-8.
+
+### ⇄ B19. Edited reviews never reach OneBox
+
+When a reviewer edits text or stars, the crawler currently drops the change
+(Part 2 B19). Once CS-7 stores it and re-serves the review,
+`perbaruiReviewTersimpan()` refreshes `Meta` — but `MessageContent.Body`,
+the sentiment label and any ticket are left as they were. OB-8.
+
+### ⇄ B20. The cursor measures imports, not crawls
+
+`last_review_at` comes from `ulasanTerbaruPerKoneksi()`
+(`VocController.php:9984`) and `watermarkFrom()` (`VocCrawlQueue.php:343-357`),
+both reading OneBox's own `Message` rows. If import is behind (B11), the
+cursor is behind, and the next fetch re-crawls what the crawler already has.
+Part 2 §4.5 moves the source of truth to the crawler; OneBox keeps its value
+for display and as a fallback.
+
+### B21. Messages that mislead
+
+Found in `fetchjobs.volt`:
+
+| Where | Problem |
+|---|---|
+| `STOP_ALASAN` (`:1163-1167`) | Matches Selenium's raw keys (`time_limit`, `max_scroll_attempts`, `no_new_review_cards`). The crawler publishes mapped codes (`timeout`, `no_more_reviews`, …) and Apify's own. **No stop reason is ever shown.** |
+| `STATE_LABEL.PARTIAL` (`:1012`) | Says *"Sebagian cabang gagal"* for every `partial_success`, including a single cabang that simply hit its ceiling. Nothing failed. |
+| `STATE_LABEL.RUNNING` (`:1007`) | *"Mengambil review dari Google"* for the whole run, then a jump — the crawler only reports progress twice (Part 2 B14). Looks frozen. |
+| `diagnosaCrawl()` (`:1180-1186`) | Talks about the *"Terbaru"* sort failing to apply in Google Maps — a Selenium failure mode that cannot happen with Apify. |
+| backfill hint (`:841`, `:890`) | *"sedalam mungkin"* / *"sedalam yang diizinkan batas waktu"* while sending a 300 cap. |
+| validation (`:1496`) | *"Batas pengambilan antara 1 dan 300"* — the number is ours, not Google's, and the user cannot tell. |
+| duplicates | Shown next to *"gagal"* in the same counter line (`:1091-1097`: *baru · duplikat · di luar rentang · gagal*), so a normal re-crawl reads like an error. |
+
+A user reading these cannot tell *done*, *done but partial*, *nothing new*,
+*still retrying* and *broken* apart. §4.6 / OB-9.
 
 ### B15. Benefit quota counts calls, not reviews
 
@@ -389,6 +479,141 @@ intervals, not less. Keep it.
 
 ---
 
+### 4.5 The per-cabang cursor — what the user sees
+
+The design stays: **one cursor per cabang** (D9). Review example —
+**Pertamina Margonda**: the initial backfill collected ~1,100 reviews, the
+newest dated 16 September; every later fetch, manual or scheduled, defaults
+to *16 September minus one day → newest*.
+
+Why it was slow and produced many duplicates, and what fixes each (full
+table in Part 2 §4.5):
+
+| Cause | Fix | Owner |
+|---|---|---|
+| Cursor read from OneBox's imported rows, so it lags whenever import lags | Crawler keeps its own coverage state and never starts before it | CS-7 |
+| Scheduled batches share the oldest cursor across all cabang | Per-cabang dates | **OB-1** |
+| Import stops at 500 per call, so the cursor falls further behind | Auto-resume import | **OB-4** |
+| Unstable `review_hash` → the same review imported twice | Crawler identity by `external_review_id` (OneBox's own guard stays) | CS-7 |
+| One-day margin re-crawls a day each run | **Keep.** Show these as *"sudah ada"*, not as a problem | **OB-9** |
+| Selenium scrolling | Already gone | — |
+
+What changes on screen:
+
+- The Fetch Jobs status panel shows the **crawler's** coverage for the
+  selected cabang (from the estimate endpoint / job result), not only
+  OneBox's newest imported review:
+
+  > **Pertamina Margonda** · Place ID … · 1.100 ulasan di OneBox
+  > Riwayat lengkap sampai **16 Sep 2026** · penarikan terakhir 17 Sep, 06:00
+
+  and, when the backfill is not complete:
+
+  > Riwayat baru terambil sampai **Mar 2024** (perkiraan). Jalankan
+  > **Ambil Semua** untuk melengkapi.
+
+- **Update Terbaru** keeps its locked start date (`fetchjobs.volt:879-884`)
+  and its note, reworded: *"Mulai dari ulasan terbaru yang sudah
+  diambil (16 Sep), mundur 1 hari supaya tidak ada yang terlewat."*
+- **Rentang Khusus** does not move the cursor (Part 2 §4.5 point 4). Say so
+  under the date picker: *"Rentang khusus tidak mengubah titik mulai Update
+  Terbaru."*
+- Per Pak Indra's rule (D8), **Rentang Khusus takes every review in the
+  range.** The count field is gone from this mode; only the optional cost
+  ceiling remains, collapsed under *"Batas biaya (opsional)"*. If a window
+  ends incomplete, the history row says so and offers *"Lengkapi rentang
+  ini"*.
+- The scheduler may keep its per-run count (D8) — it becomes a ceiling with
+  the new default.
+
+### 4.6 Messages, toasts and alerts
+
+Principle: **every message says what happened, what it means for the
+user's data, and what — if anything — to do next.** No crawler vocabulary on
+screen: no *Apify, worker, actor, cursor, scan, kartu, gulir, batch*.
+
+**Which surface for what:**
+
+| Surface | Use for | Never for |
+|---|---|---|
+| **Toast** (auto-hide ~5 s) | confirmation of an action the user just took | anything the user must act on |
+| **Status panel** (`statusPanel`, stays) | the live state of the current run, and pre-flight warnings | confirmations |
+| **Modal** (`showInfoModal`) | a decision is needed, or the request was refused | progress, success |
+| **History row** | the final outcome, readable days later | — |
+
+One event → one message. Do not show a toast *and* a modal for the same
+thing.
+
+**Wording rules:**
+
+1. Use *ulasan* throughout (not a mix of review / rating / ulasan).
+2. Numbers always carry their meaning: *"12 ulasan baru"*, never *"12 / 50"*.
+3. **Duplicates are not errors.** Say *"sudah ada di OneBox"*, never beside
+   *gagal*.
+4. **Nothing new is a success.** Green, not grey or yellow.
+5. Partial ≠ failed. Say what was kept and what is missing.
+6. Automatic retries say they are automatic, and when.
+7. Old dates are approximate; say so where they are shown (§4.7).
+8. A refusal says **why** and **what to change**, in that order.
+
+**Message catalogue.** `{…}` are values from the job result. Codes are the
+Part 2 CS-8 `stop_reason` list; OB-9 maps each exactly once.
+
+| # | Situation (code / state) | Surface · tone | Title | Body | Action |
+|---|---|---|---|---|---|
+| M1 | Request accepted | toast · info | Penarikan dimulai | {cabang} · {mode}. Hasilnya muncul di Riwayat Fetch; halaman ini boleh ditinggal. | — |
+| M2 | Waiting in queue | panel · neutral | Menunggu giliran | Ada {n} penarikan lain di depan. | — |
+| M3 | Running, count known | panel · neutral | Mengambil ulasan {cabang} | {x} dari sekitar {expected} ulasan · berjalan {mm:ss} | — |
+| M4 | Running, count unknown | panel · neutral | Mengambil ulasan {cabang} | Sedang berjalan {mm:ss}. Jumlah muncul begitu data pertama masuk. | — |
+| M5 | Saving to OneBox (OB-4) | panel · neutral | Menyimpan ke OneBox | {i} dari {n} ulasan disimpan. | — |
+| M6 | `no_new_reviews` | panel + history · **success** | Tidak ada ulasan baru | {cabang} sudah terbaru sampai {tanggal}. {d} ulasan yang dicek sudah ada di OneBox. | — |
+| M7 | delta, new found | panel + history · success | {x} ulasan baru masuk | {d} lainnya sudah ada di OneBox. | Buka Kelola Ulasan |
+| M8 | backfill `coverage_complete` | panel + history · success | Riwayat {cabang} lengkap | {collected} ulasan, sesuai jumlah di Google ({expected}). Selisih kecil wajar: ulasan tanpa teks atau yang dihapus. | Buka Kelola Ulasan |
+| M9 | window `coverage_complete` | panel + history · success | {x} ulasan dalam {from}–{to} | {d} sudah ada sebelumnya. Tanggal ulasan yang lebih lama dari sebulan adalah perkiraan dari Google. | Buka Kelola Ulasan |
+| M10 | window, skipped newer | inline under M9 · neutral | — | Untuk sampai ke rentang ini, {s} ulasan yang lebih baru ikut dicek lalu dilewati. | — |
+| M11 | `budget_exhausted` | panel + history · **warning** | Belum lengkap — batas pengambilan tercapai | Tersimpan {collected} dari sekitar {expected} ulasan. Naikkan batas untuk melanjutkan. | Lanjutkan |
+| M12 | `source_not_confirmed`, will retry | panel + history · warning | Belum selesai — dicoba lagi otomatis | Pengambilan {cabang} belum tuntas. {k} ulasan yang sudah terambil tetap disimpan. Dicoba lagi sekitar pukul {jam}. | — |
+| M13 | `source_quota_exhausted` | panel + history · warning | Kuota layanan pengambilan habis | {k} ulasan tersimpan. Sisanya dilanjutkan otomatis pada penarikan berikutnya. Hubungi admin bila berulang. | — |
+| M14 | `deadline_exceeded` | panel + history · warning | Penarikan terlalu lama dan dihentikan | {k} ulasan tersimpan. Coba **Rentang Khusus** yang lebih pendek. | Coba lagi |
+| M15 | failed, config (`classifyError` = config) | panel + history · error | Penarikan gagal | {alasan dari classifyError}. | Buka Lokasi / hubungi admin |
+| M16 | failed, transient, retries used up | panel + history · error | Penarikan gagal setelah {n} percobaan | {k} ulasan sempat tersimpan. Coba lagi nanti. | Coba lagi |
+| M17 | `target_disabled` | history · neutral | Dilewati | {cabang} nonaktif saat giliran tiba. | Buka Lokasi |
+| M18 | batch, some cabang failed | panel · warning | {f} dari {n} cabang gagal | Cabang lain selesai. Lihat rinciannya di bawah. | — |
+| M19 | batch, some cabang partial | panel · warning | {p} dari {n} cabang belum lengkap | Tidak ada yang gagal. | — |
+| M20 | pre-flight: estimate > remaining quota | modal · refusal | Kuota ulasan bulan ini tidak cukup | Perkiraan {est} ulasan, sisa kuota {rem}. Pilih **Update Terbaru** atau **Rentang Khusus**, atau tambah kuota di Pengaturan. | Pengaturan |
+| M21 | pre-flight: large backfill | modal · confirm | Ambil sekitar {est} ulasan? | Menurut Google, {cabang} punya {est} ulasan. Ini memakai {est} dari sisa kuota {rem}. | Batal · Ambil semua |
+| M22 | invalid ceiling | modal · refusal | Batas pengambilan tidak valid | Isi angka 1 sampai 100.000, atau kosongkan untuk memakai batas bawaan (5.000). | — |
+| M23 | window with no start date | modal · refusal | Rentang Khusus butuh tanggal awal | Pilih tanggal awal. Untuk seluruh riwayat, pakai **Ambil Semua**. | — |
+| M24 | old window chosen | inline hint · neutral | — | Rentang yang jauh ke belakang mengecek semua ulasan sesudahnya, jadi lebih lama dan lebih banyak memakai kuota. | — |
+| M25 | edited review (OB-8), in the list | badge | *Diubah* | tooltip: Diubah pengulas sekitar {edited_at}. Isi dan bintang sudah diperbarui. | — |
+
+Kept as they are (already clear): *Pilih cabang dulu*, *Cabang belum punya
+Place ID*, *Jadwal sedang berjalan untuk cabang ini*, *Rentang tanggal
+terbalik*, *Sudah diantre*, *Cabang ini belum punya ulasan*.
+
+**Renames:** mode *"Backfill Awal"* → **"Ambil Semua"**; *"Update
+Terbaru"* stays; *"Custom"* → **"Rentang Khusus"** (already used in
+messages). *"Batas pengambilan"* → **"Batas biaya (opsional)"**.
+`STATE_LABEL.PARTIAL` → M19 wording. `STATE_LABEL.COMPLETE` stays
+(*"Ulasan siap dikelola"*).
+
+### 4.7 Approximate dates and edited reviews on screen
+
+- Where a review date is shown and `date_approximate` is true, show
+  **"± Sep 2025"** (month) or **"± 2025"** (year) instead of a full date,
+  with the tooltip *"Perkiraan dari Google ('setahun lalu' saat diambil)"*.
+  Sorting still uses the stored date.
+- Trend charts and the *bulan lalu* benchmark: count approximate reviews in
+  a separate, lighter series — or exclude them — and say which in the chart
+  legend. **Do not silently mix them.** Product decides which (Q13).
+- The `Rating Google` snapshot is unaffected: it is stored, not computed
+  from dates.
+- Edited reviews: badge **Diubah** (M25). When the crawler re-serves an
+  edited review, update the body and star rating, re-run the native
+  sentiment label, and — if a ticket exists — add a ticket note
+  *"Ulasan diubah pengulas: ★{lama} → ★{baru}"* instead of editing the
+  ticket's original description.
+
 ## 5. Contract `crawl-jobs v2` — CALLER'S VIEW (derived from Part 2 §5)
 
 **Not the source of truth.** If this disagrees with Part 2 §5, Part 2 is
@@ -449,9 +674,32 @@ Per job in `GET /crawl-jobs/{batch_id}`:
 it answers "did we get everything?", which the current `n / target` display
 cannot. Treat `"unknown"` as unknown, **never** as complete.
 
+`stop_reason` values are the CS-8 list: `coverage_complete`,
+`no_new_reviews`, `budget_exhausted`, `source_quota_exhausted`,
+`source_not_confirmed`, `deadline_exceeded`, `target_disabled`. Map each to
+one message (§4.6) and show unknown codes as a neutral *"Selesai"* with the
+raw code in the detail view — never as silence.
+
+Each job result also carries a `coverage` object (Part 2 §4.5): newest and
+oldest crawled date, their precision, and whether a full backfill has
+completed.
+
 `expected_review_count` is also the right number for
 `recordRatingSnapshot()`'s Google count (`crawlImportAction`), which today
 reads it from the batch via `googleRatingDariBatch()`.
+
+### 5.4 Review API additions (`GET /integration/v1/reviews`)
+
+Optional keys — treat each as possibly absent:
+
+```jsonc
+"review_time_precision": "day" | "week" | "month" | "year" | "unknown",
+"date_approximate": true,
+"is_edited": true,
+"edited_at": "2026-07-17T00:00:00Z"
+```
+
+Store them in `Meta` via `buildMeta()` (`VocProvider.php:~1150-1185`).
 
 ---
 
@@ -544,16 +792,30 @@ this reaches production (spend guard). Rule 3 of the sync rules applies.
 - `services/VocCrawlQueue.php`
   - `enqueue()` — take `$coverage` (and per-target dates from OB-1); emit
     `coverage` + `budget` per target
-  - `TARGET_MAX` (`:26`) — becomes a budget ceiling aligned with the
-    contract's 100,000, or with the company budget from CS-5
+  - replace `TARGET_MIN`/`TARGET_MAX` (`:25-26`) with the **single source
+    of truth** for D11:
+    ```php
+    const DEFAULT_REVIEW_LIMIT = 5000;    // was 300 / 50 / 100
+    const MAX_REVIEW_LIMIT     = 100000;  // the source's own maximum
+    ```
+    and point **all 13 literals in B1** at these two constants —
+    `VocController.php:67, 10177-10179, 12188, 13378-13384, 13777`,
+    `VocCron.php:335`, and pass them to `fetchjobs.volt` / `schedules.volt`
+    as template variables instead of hardcoding them in HTML and JS.
+    Schedules and Update Terbaru may keep a smaller *pre-filled* value
+    (e.g. 500) — pre-fill, not cap
   - `crawlMode()` (`:171`) — delete; the caller states the mode
   - `scanLimit()` (`:191-199`) — stop sending; delete in OB-7
 - `controllers/VocController.php`
   - `crawlStartAction()` (`:10528`) — read the UI mode, map to `coverage`;
     stop requiring `target_review_count` for `full_backfill`
     (`:10543-10545`)
-  - `CRAWL_TARGET_MAX` (`:67`) — same treatment as `TARGET_MAX`; also used
-    by `competitorCrawlStartAction()` (`:9343`)
+  - `CRAWL_TARGET_MAX` (`:67`) — delete; use
+    `VocCrawlQueue::MAX_REVIEW_LIMIT` (also in
+    `competitorCrawlStartAction()`, `:9343`)
+  - location save (`:10177-10179`, `:13378-13384`) — default for a new
+    cabang is `DEFAULT_REVIEW_LIMIT`; existing cabang keep their stored value
+    unless product decides on a one-off raise
 - `library/VoiceOfCustomerSystemClient.php` — `enqueueCrawl()` (`:706`):
   send the new fields; **do not** add `coverage`/`budget` to the
   strip-and-retry fallback at `:834-849` (B16) — a stripped `coverage`
@@ -694,8 +956,12 @@ sending before the crawler stops accepting.
   fallback at `VoiceOfCustomerSystemClient.php:834-849`.
 - Remove the `selenium` source check and its comment
   (`VocController.php:10555-10561`).
-- Rewrite the `WATERMARK_MARGIN_DAYS` docblock (`VocCrawlQueue.php:272-283`)
-  per B9 — **keep the constant.**
+- Extend the `WATERMARK_MARGIN_DAYS` docblock (`VocCrawlQueue.php:272-283`)
+  with the Apify measurement from Part 2 B17 — **keep the constant and its
+  existing reason**; both are still right (B9).
+- Replace `STOP_ALASAN` (`fetchjobs.volt:1163-1167`) and the Selenium-only
+  branch of `diagnosaCrawl()` (`:1180-1186`) — done in OB-9; delete
+  leftovers here.
 - Rewrite the `VocCrawlQueue::crawlMode()` docblock references
   (`:152-170`) or remove them with the method.
 - Update `fetchjobs.volt` copy that still describes Selenium behaviour
@@ -703,9 +969,74 @@ sending before the crawler stops accepting.
 
 ---
 
+### OB-8 — Edited reviews, approximate dates, crawler coverage on screen
+
+**Depends on:** crawler **CS-7** in production. Every new field is optional,
+so OB-8 must also work when they are absent.
+
+**Files:**
+- `services/Provider/VocProvider.php`
+  - `buildMeta()` (`~:1150-1185`) — store `review_time_precision`,
+    `date_approximate`, `is_edited`, `edited_at`
+  - `perbaruiReviewTersimpan()` (`:787`) — when `is_edited` and the text or
+    rating differ from what OneBox holds: update `MessageContent.Body` and
+    the star rating, clear the native sentiment label so
+    `labelPendingReviews()` runs again, and if a ticket exists add the note
+    from §4.7 instead of rewriting the ticket
+- `controllers/VocController.php` — review list payloads (`:3365`, `:3774`,
+  `:4828`, `:7896`) include `date_approximate` and `is_edited`; trend and
+  benchmark queries apply the Q13 decision
+- `views/Voc/reviews.volt`, `workspace.volt`, `workspacebranch.volt`,
+  `dashboardprofile.volt` — "± month/year" date display, **Diubah** badge
+- `views/Voc/fetchjobs.volt` — `perbaruiStatusCabang()` (`:911-949`) shows
+  crawler coverage (§4.5); the Update Terbaru note rewording
+
+**Verify:** a re-served review with new text and ★ updates body, rating and
+label without creating a second message; a ticketed one gets a note and
+keeps its description; a review without the new keys renders exactly as
+today.
+
+**Do not touch:** `RemoteId` / `review_hash` handling, and the
+`sudahPernahMasuk()` guard.
+
+---
+
+### OB-9 — Messages, toasts and alerts
+
+**Depends on:** crawler **CS-8** (stable codes). Wording changes that do not
+depend on codes (M20–M24, renames) can ship first.
+
+**Files:**
+- `views/Voc/fetchjobs.volt`
+  - replace `STOP_ALASAN` with a map from the CS-8 codes to M6–M17
+  - `STATE_LABEL` (`:1004-1014`) — PARTIAL → M19; RUNNING → M3/M4
+  - the counter line (`:1091-1097`) — separate *sudah ada* from *gagal*
+    visually; *gagal* only appears when non-zero
+  - `diagnosaCrawl()` — drop the Selenium sort-order branch
+  - every `showInfoModal` in the table in §4.6 — reword per catalogue
+  - add a small toast helper if the screen has none; use it only for M1
+  - mode labels and hints (renames in §4.6)
+- `views/Voc/schedules.volt` — `:1401` validation wording (M22)
+- `controllers/VocController.php` — `jsonFail()` messages from
+  `crawlStartAction()` that reach the user use the same wording as the
+  modals (e.g. `:10551`, `:10637-10639`)
+
+**Verify:** a checklist run against a dev crawler that produces each code at
+least once — every row M1–M25 appears exactly as written, in the listed
+surface, and no state shows more than one message. Add the mapping to
+`tests/voc/` as a static check that every CS-8 code has a message.
+
+**Review with product before building:** the catalogue is a proposal; the
+wording is the part users will judge the feature by.
+
+---
+
 ## 7. Open questions, OneBox side
 
-**Q6 — benefit quota unit.** B15 / OB-6. Per-call quotas predate per-review
+**Q6 — benefit quota unit, and the 5,000 default.** B15 / OB-6 / D11.
+Is 5,000 the right per-cabang default ceiling (it matches the smallest
+`VOC_REVIEW` package and covers every place measured so far), and should
+existing cabang stored at 300 or 100 be raised? Per-call quotas predate per-review
 billing. Product decision; blocks OB-2 in production.
 
 **Q8 — backfill confirm threshold.** OB-6. Above how many estimated reviews
@@ -715,6 +1046,14 @@ should the screen demand explicit confirmation? Product decision.
 start a crawl. With no 300 cap, should `full_backfill` require a higher
 permission? `tests/voc/voc_permission_map_check.php` is where that would be
 pinned down.
+
+**Q13 — approximate dates in trends.** §4.7. Show old reviews as a separate
+series, exclude them from monthly trends, or include them with a note?
+Affects the "bulan lalu" benchmark from notulen 2026-08-21 §A.
+
+**Q14 — should Rentang Khusus still allow a ceiling at all?** D8 says take
+everything in the range. The optional cost ceiling in §4.5 is a safety
+valve; product may prefer the quota check (M20) as the only guard.
 
 **Q10 — auto-resume import time budget.** OB-4 option 1. How long may one
 web request run on the target infrastructure before it is killed? Needed to
@@ -742,6 +1081,8 @@ See Part 2 §7.
 | **G** | **OB-4** import cycle caps | — | before fetch-all is usable end to end |
 | **H** | **OB-5** realtime schedules | **CS-4** count probe | **CS-4 first**; contract change, update Part 2 §5 |
 | **I** | **OB-7** cleanup | **CS-6** cleanup | **OB-7 first** — stop sending before we stop accepting |
+| **J** | **OB-8** edited reviews + approximate dates + cursor display | **CS-7** floating reviews + crawl-coverage cursor | **CS-7 first** — new response fields; OneBox must tolerate their absence |
+| **K** | **OB-9** user-facing messages | **CS-8** stable `stop_reason` vocabulary | **CS-8 first** — OneBox maps the codes CS-8 publishes |
 
 **Two ordering rules that will bite if ignored:**
 
@@ -752,7 +1093,7 @@ See Part 2 §7.
 
 **Capability delivery:** capability 1 (fetch all) lands with **E** + **G**.
 Capability 2 (timespan) is usable after **B**+**C** and improves with **A**.
-Capability 3 (quasi-realtime) lands with **H**.
+Capability 3 (quasi-realtime) lands with **H**. **J** and **K** make all three trustworthy to a user and should land with the first capability that ships.
 
 ---
 
