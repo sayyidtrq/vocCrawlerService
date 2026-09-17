@@ -19,7 +19,7 @@ the moment someone edits one and not the other.
    from it — never the source.** If the two disagree, Part 2 is right and
    this document is stale.
 2. **The pairing table (§8), the shared decisions (§0) and the review-feedback
-   table must be identical in both documents.** It
+   table and the decisions log must be identical in both documents.** It
    is the only place the cross-repo ordering is recorded.
 3. **Accept before emit.** Do not ship a OneBox change that *sends* a new
    field until the crawler that *accepts* it is in production. The crawler
@@ -47,6 +47,16 @@ and `2026-09-08_REVIEW_CEO_ULASAN_DAN_WORKSPACE.md` (on `origin/main`);
 ADR-0005 (`02-meetings-and-decisions/adr/`), whose unbuilt cursor fields
 §4.5 of Part 2 now specifies.
 
+## Decisions log
+
+Identical in both documents.
+
+| Date | Question | Decision | Effect |
+|---|---|---|---|
+| 2026-09-17 | Default review ceiling (Part 1 Q6, Part 2 Q12) | **5,000** | D11 final; OB-2 / §4.7 use it. Raising existing cabang stored at 300 or 100 is still open (Part 1 Q6) |
+| 2026-09-17 | Approximate dates in trends (Part 1 Q13) | **Include, with a note** | Part 1 §4.7, OB-8 |
+| 2026-09-17 | Ceiling on Rentang Khusus (Part 1 Q14) | **None — a date range always takes everything** | D8; contract forbids `budget` on `date_window` (Part 2 §5.1); Part 1 §4.1, §4.5, OB-3 |
+
 ---
 
 ## 0. Shared decisions
@@ -62,10 +72,11 @@ Identical in both documents.
 | D5 | Full backfill **cannot be resumed mid-run**, so the crawler worker must stop blocking on the Apify poll loop. | Crawler |
 | D6 | Quasi-realtime = tight-interval delta polling gated by a cheap change probe. True realtime does not exist for Google Maps. | Both |
 | D7 | Date windows cost in proportion to how **old** the window is, not how wide. Unfixable; must be priced and surfaced. | Both |
-| D8 | **Pak Indra's rule** (notulen 2026-08-21 §M): a manual fetch over a date range takes **all** reviews in that range — the count never decides when it stops. The scheduler may keep a count. | Both |
+| D8 | **Pak Indra's rule** (notulen 2026-08-21 §M): a manual fetch over a date range takes **all** reviews in that range — **no ceiling of any kind** on Rentang Khusus / `date_window` (decided 2026-09-17). The scheduler may keep a count. | Both |
 | D9 | **Keep one cursor per cabang** — the existing `last_review_at` design — and extend it: the crawler records what it has actually *crawled*, instead of OneBox inferring it from what it has *imported*. | Both |
 | D10 | **Google review dates are mostly estimates** ("a year ago" = exactly 365 days before the crawl). Floating reviews are handled explicitly, and older dates are shown as approximate. | Both |
-| D11 | **The 300 default goes.** Default per-cabang ceiling becomes **5,000**, held in one constant per repo; hard maximum 100,000. | Both |
+| D11 | **The 300 default goes.** Default per-cabang ceiling is **5,000** (decided 2026-09-17), held in one constant per repo; hard maximum 100,000. | Both |
+| D12 | **Old reviews stay in trend charts, with a note** that their dates are Google's estimates (decided 2026-09-17). | Both |
 
 ---
 
@@ -415,7 +426,7 @@ Only what each one *sends* changes:
 |---|---|---|---|---|
 | **Update Terbaru** (`delta`) | 3, and routine | `coverage: "delta"` | auto from watermark, locked (as today) | hidden; optional budget |
 | **Backfill Awal** (`backfill`) | 1 — fetch all | `coverage: "full_backfill"` | none, **forbidden** by the contract | replaced by the estimate (OB-6) |
-| **Custom** (`custom`) | 2 — timespan | `coverage: "date_window"` | from/to required | optional budget |
+| **Custom** (`custom`) | 2 — timespan | `coverage: "date_window"` | from/to required | **none** — always takes everything (D8) |
 
 The existing autofill guard (`targetDisentuh`, `fetchjobs.volt:853-854`) and
 the zero-review redirect to backfill (`:956-966`) both stay; they are still
@@ -519,9 +530,10 @@ What changes on screen:
   under the date picker: *"Rentang khusus tidak mengubah titik mulai Update
   Terbaru."*
 - Per Pak Indra's rule (D8), **Rentang Khusus takes every review in the
-  range.** The count field is gone from this mode; only the optional cost
-  ceiling remains, collapsed under *"Batas biaya (opsional)"*. If a window
-  ends incomplete, the history row says so and offers *"Lengkapi rentang
+  range.** There is no count and no ceiling in this mode (decided
+  2026-09-17). The guard is the monthly review quota, checked before the
+  request is sent (M20). If a window ends incomplete — deadline or the
+  source, never a limit of ours — the history row says so and offers *"Lengkapi rentang
   ini"*.
 - The scheduler may keep its per-run count (D8) — it becomes a ceiling with
   the new default.
@@ -571,7 +583,7 @@ Part 2 CS-8 `stop_reason` list; OB-9 maps each exactly once.
 | M8 | backfill `coverage_complete` | panel + history · success | Riwayat {cabang} lengkap | {collected} ulasan, sesuai jumlah di Google ({expected}). Selisih kecil wajar: ulasan tanpa teks atau yang dihapus. | Buka Kelola Ulasan |
 | M9 | window `coverage_complete` | panel + history · success | {x} ulasan dalam {from}–{to} | {d} sudah ada sebelumnya. Tanggal ulasan yang lebih lama dari sebulan adalah perkiraan dari Google. | Buka Kelola Ulasan |
 | M10 | window, skipped newer | inline under M9 · neutral | — | Untuk sampai ke rentang ini, {s} ulasan yang lebih baru ikut dicek lalu dilewati. | — |
-| M11 | `budget_exhausted` | panel + history · **warning** | Belum lengkap — batas pengambilan tercapai | Tersimpan {collected} dari sekitar {expected} ulasan. Naikkan batas untuk melanjutkan. | Lanjutkan |
+| M11 | `budget_exhausted` (Ambil Semua / Update Terbaru only) | panel + history · **warning** | Belum lengkap — batas pengambilan tercapai | Tersimpan {collected} dari sekitar {expected} ulasan. Naikkan batas untuk melanjutkan. | Lanjutkan |
 | M12 | `source_not_confirmed`, will retry | panel + history · warning | Belum selesai — dicoba lagi otomatis | Pengambilan {cabang} belum tuntas. {k} ulasan yang sudah terambil tetap disimpan. Dicoba lagi sekitar pukul {jam}. | — |
 | M13 | `source_quota_exhausted` | panel + history · warning | Kuota layanan pengambilan habis | {k} ulasan tersimpan. Sisanya dilanjutkan otomatis pada penarikan berikutnya. Hubungi admin bila berulang. | — |
 | M14 | `deadline_exceeded` | panel + history · warning | Penarikan terlalu lama dan dihentikan | {k} ulasan tersimpan. Coba **Rentang Khusus** yang lebih pendek. | Coba lagi |
@@ -582,6 +594,8 @@ Part 2 CS-8 `stop_reason` list; OB-9 maps each exactly once.
 | M19 | batch, some cabang partial | panel · warning | {p} dari {n} cabang belum lengkap | Tidak ada yang gagal. | — |
 | M20 | pre-flight: estimate > remaining quota | modal · refusal | Kuota ulasan bulan ini tidak cukup | Perkiraan {est} ulasan, sisa kuota {rem}. Pilih **Update Terbaru** atau **Rentang Khusus**, atau tambah kuota di Pengaturan. | Pengaturan |
 | M21 | pre-flight: large backfill | modal · confirm | Ambil sekitar {est} ulasan? | Menurut Google, {cabang} punya {est} ulasan. Ini memakai {est} dari sisa kuota {rem}. | Batal · Ambil semua |
+| M26 | pre-flight: Rentang Khusus, quota may run out | modal · confirm | Kuota ulasan mungkin tidak cukup | Rentang ini mengambil **semua** ulasan di dalamnya. Sisa kuota bulan ini {rem}; {cabang} punya {expected} ulasan di Google. Kalau kuota habis di tengah jalan, yang sudah terambil tetap disimpan. | Batal · Lanjutkan |
+| M27 | `review_quota_exhausted` | panel + history · warning | Belum lengkap — kuota ulasan bulan ini habis | Tersimpan {collected} ulasan dari rentang {from}–{to}. Tambah kuota lalu jalankan lagi untuk melengkapi. | Pengaturan |
 | M22 | invalid ceiling | modal · refusal | Batas pengambilan tidak valid | Isi angka 1 sampai 100.000, atau kosongkan untuk memakai batas bawaan (5.000). | — |
 | M23 | window with no start date | modal · refusal | Rentang Khusus butuh tanggal awal | Pilih tanggal awal. Untuk seluruh riwayat, pakai **Ambil Semua**. | — |
 | M24 | old window chosen | inline hint · neutral | — | Rentang yang jauh ke belakang mengecek semua ulasan sesudahnya, jadi lebih lama dan lebih banyak memakai kuota. | — |
@@ -593,7 +607,7 @@ terbalik*, *Sudah diantre*, *Cabang ini belum punya ulasan*.
 
 **Renames:** mode *"Backfill Awal"* → **"Ambil Semua"**; *"Update
 Terbaru"* stays; *"Custom"* → **"Rentang Khusus"** (already used in
-messages). *"Batas pengambilan"* → **"Batas biaya (opsional)"**.
+messages). *"Batas pengambilan"* → **"Batas biaya (opsional)"**, shown only for Ambil Semua and Update Terbaru — Rentang Khusus has no limit (D8).
 `STATE_LABEL.PARTIAL` → M19 wording. `STATE_LABEL.COMPLETE` stays
 (*"Ulasan siap dikelola"*).
 
@@ -603,9 +617,14 @@ messages). *"Batas pengambilan"* → **"Batas biaya (opsional)"**.
   **"± Sep 2025"** (month) or **"± 2025"** (year) instead of a full date,
   with the tooltip *"Perkiraan dari Google ('setahun lalu' saat diambil)"*.
   Sorting still uses the stored date.
-- Trend charts and the *bulan lalu* benchmark: count approximate reviews in
-  a separate, lighter series — or exclude them — and say which in the chart
-  legend. **Do not silently mix them.** Product decides which (Q13).
+- Trend charts and the *bulan lalu* benchmark **include approximate reviews,
+  with a note** (decided 2026-09-17). Wherever a chart or benchmark covers a
+  period that contains any, show under it:
+  *"Sebagian ulasan lama memakai tanggal perkiraan dari Google (mis.
+  'setahun lalu'), sehingga pembagian per bulan untuk periode lama tidak
+  persis."* Show the note only when approximate reviews are actually in the
+  period — not on every chart. Where the payload allows, add the count:
+  *"… ({n} dari {total} ulasan)."*
 - The `Rating Google` snapshot is unaffected: it is stored, not computed
   from dates.
 - Edited reviews: badge **Diubah** (M25). When the crawler re-serves an
@@ -626,7 +645,7 @@ right.
   "kind": "location",
   "onebox_location_id": 123,
   "coverage": "delta" | "date_window" | "full_backfill",
-  "budget": 5000,                       // optional ceiling, 1..100000
+  "budget": 5000,                       // optional ceiling, 1..100000; NOT allowed with date_window
   "date_from": "2026-01-01T00:00:00Z",  // date_window only; per target
   "date_to":   "2026-03-31T16:59:59Z",  // date_window only; per target
   "sort_by": "newest"
@@ -636,7 +655,8 @@ right.
 Rules the crawler enforces (and OneBox should pre-check, to give a readable
 error instead of a 422):
 
-- `date_window` needs at least one of `date_from` / `date_to`.
+- `date_window` needs at least one of `date_from` / `date_to`, and must
+  **not** carry `budget` (D8).
 - `full_backfill` must carry **no** dates.
 - Count fields are capped at 100,000, not 300.
 - Unknown fields are rejected — never send a field the deployed crawler does
@@ -650,7 +670,7 @@ maps it:
 ```
 crawl_mode=regular_delta     -> coverage=delta
 crawl_mode=custom_range      -> coverage=date_window
-target_review_count          -> budget
+target_review_count          -> budget (dropped for date_window)
 scan_limit                   -> ignored
 ```
 
@@ -675,7 +695,8 @@ it answers "did we get everything?", which the current `n / target` display
 cannot. Treat `"unknown"` as unknown, **never** as complete.
 
 `stop_reason` values are the CS-8 list: `coverage_complete`,
-`no_new_reviews`, `budget_exhausted`, `source_quota_exhausted`,
+`no_new_reviews`, `budget_exhausted`, `review_quota_exhausted`,
+`source_quota_exhausted`,
 `source_not_confirmed`, `deadline_exceeded`, `target_disabled`. Map each to
 one message (§4.6) and show unknown codes as a neutral *"Selesai"* with the
 raw code in the detail view — never as silence.
@@ -841,11 +862,14 @@ the quota-before-queue ordering (`:10591-10593`), the schedule overlap guard.
 - `terapkanMode()` (`:869-907`)
   - `backfill`: hide the count field; show the estimate (OB-6); rewrite the
     note at `:890`
-  - `custom`: add the cost hint (§4.3); make at least one date required
-    (the existing check at `:1521-1525` already covers the from-date)
+  - `custom`: **hide the count field entirely** (D8, no ceiling); add the
+    cost hint (M24); make at least one date required (the existing check at
+    `:1521-1525` already covers the from-date)
   - `delta`: unchanged behaviour
 - input `#fj-single-target` (`:115`) and its validation (`:1487-1497`) —
-  becomes an optional ceiling, bounds from the contract, not `1..300`
+  becomes an optional ceiling for **Ambil Semua** and **Update Terbaru**
+  only, pre-filled from `DEFAULT_REVIEW_LIMIT` (5,000), bounds
+  1..`MAX_REVIEW_LIMIT`, not `1..300`. Never sent for Rentang Khusus
 - history rendering (`:757-762`, `:1045-1071`, `:1178-1193`) — for
   backfills show `completeness` and `collected_unique / expected_review_count`
   instead of `n / target`; show `total_skipped_out_of_range` as waste
@@ -985,7 +1009,8 @@ so OB-8 must also work when they are absent.
     from §4.7 instead of rewriting the ticket
 - `controllers/VocController.php` — review list payloads (`:3365`, `:3774`,
   `:4828`, `:7896`) include `date_approximate` and `is_edited`; trend and
-  benchmark queries apply the Q13 decision
+  benchmark queries include approximate reviews and return how many were
+  approximate, so the note in §4.7 can be shown with a count
 - `views/Voc/reviews.volt`, `workspace.volt`, `workspacebranch.volt`,
   `dashboardprofile.volt` — "± month/year" date display, **Diubah** badge
 - `views/Voc/fetchjobs.volt` — `perbaruiStatusCabang()` (`:911-949`) shows
@@ -1022,7 +1047,7 @@ depend on codes (M20–M24, renames) can ship first.
   modals (e.g. `:10551`, `:10637-10639`)
 
 **Verify:** a checklist run against a dev crawler that produces each code at
-least once — every row M1–M25 appears exactly as written, in the listed
+least once — every row M1–M27 appears exactly as written, in the listed
 surface, and no state shows more than one message. Add the mapping to
 `tests/voc/` as a static check that every CS-8 code has a message.
 
@@ -1033,11 +1058,10 @@ wording is the part users will judge the feature by.
 
 ## 7. Open questions, OneBox side
 
-**Q6 — benefit quota unit, and the 5,000 default.** B15 / OB-6 / D11.
-Is 5,000 the right per-cabang default ceiling (it matches the smallest
-`VOC_REVIEW` package and covers every place measured so far), and should
-existing cabang stored at 300 or 100 be raised? Per-call quotas predate per-review
-billing. Product decision; blocks OB-2 in production.
+**Q6 — benefit quota unit, and existing cabang.** B15 / OB-6 / D11. The
+default is **decided: 5,000**. Still open: should existing cabang stored at
+300 or 100 be raised to it, and should `VOC_SCRAPE` keep counting calls while
+reviews are billed per review? Product decision; blocks OB-2 in production.
 
 **Q8 — backfill confirm threshold.** OB-6. Above how many estimated reviews
 should the screen demand explicit confirmation? Product decision.
@@ -1047,13 +1071,11 @@ start a crawl. With no 300 cap, should `full_backfill` require a higher
 permission? `tests/voc/voc_permission_map_check.php` is where that would be
 pinned down.
 
-**Q13 — approximate dates in trends.** §4.7. Show old reviews as a separate
-series, exclude them from monthly trends, or include them with a note?
-Affects the "bulan lalu" benchmark from notulen 2026-08-21 §A.
+**Q13 — approximate dates in trends. RESOLVED 2026-09-17: include, with a
+note.** §4.7.
 
-**Q14 — should Rentang Khusus still allow a ceiling at all?** D8 says take
-everything in the range. The optional cost ceiling in §4.5 is a safety
-valve; product may prefer the quota check (M20) as the only guard.
+**Q14 — ceiling on Rentang Khusus. RESOLVED 2026-09-17: none.** A date range
+always takes everything; the monthly quota check (M20) is the only guard.
 
 **Q10 — auto-resume import time budget.** OB-4 option 1. How long may one
 web request run on the target infrastructure before it is killed? Needed to

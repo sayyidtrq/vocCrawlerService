@@ -19,7 +19,7 @@ the moment someone edits one and not the other.
    derived. **If you change §5, update the OneBox document's §5 in the same
    commit.**
 2. **The pairing table (§8), the shared decisions (§0) and the review-feedback
-   table must be identical in both documents.** It
+   table and the decisions log must be identical in both documents.** It
    is the only place the cross-repo ordering is recorded.
 3. **Accept before emit.** The crawler must accept a new contract field in
    production *before* OneBox starts sending it. Reversing this produces a
@@ -46,6 +46,16 @@ and `2026-09-08_REVIEW_CEO_ULASAN_DAN_WORKSPACE.md` (on `origin/main`);
 ADR-0005 (`02-meetings-and-decisions/adr/`), whose unbuilt cursor fields
 §4.5 of Part 2 now specifies.
 
+## Decisions log
+
+Identical in both documents.
+
+| Date | Question | Decision | Effect |
+|---|---|---|---|
+| 2026-09-17 | Default review ceiling (Part 1 Q6, Part 2 Q12) | **5,000** | D11 final; OB-2 / §4.7 use it. Raising existing cabang stored at 300 or 100 is still open (Part 1 Q6) |
+| 2026-09-17 | Approximate dates in trends (Part 1 Q13) | **Include, with a note** | Part 1 §4.7, OB-8 |
+| 2026-09-17 | Ceiling on Rentang Khusus (Part 1 Q14) | **None — a date range always takes everything** | D8; contract forbids `budget` on `date_window` (Part 2 §5.1); Part 1 §4.1, §4.5, OB-3 |
+
 ---
 
 ## 0. Shared decisions
@@ -62,10 +72,11 @@ Identical in both documents. Full rationale for the crawler-side ones is in
 | D5 | Full backfill **cannot be resumed mid-run**, so the crawler worker must stop blocking on the Apify poll loop. | Crawler |
 | D6 | Quasi-realtime = tight-interval delta polling gated by a cheap change probe. True realtime does not exist for Google Maps. | Both |
 | D7 | Date windows cost in proportion to how **old** the window is, not how wide. Unfixable; must be priced and surfaced. | Both |
-| D8 | **Pak Indra's rule** (notulen 2026-08-21 §M): a manual fetch over a date range takes **all** reviews in that range — the count never decides when it stops. The scheduler may keep a count. | Both |
+| D8 | **Pak Indra's rule** (notulen 2026-08-21 §M): a manual fetch over a date range takes **all** reviews in that range — **no ceiling of any kind** on Rentang Khusus / `date_window` (decided 2026-09-17). The scheduler may keep a count. | Both |
 | D9 | **Keep one cursor per cabang** — the existing `last_review_at` design — and extend it: the crawler records what it has actually *crawled*, instead of OneBox inferring it from what it has *imported*. | Both |
 | D10 | **Google review dates are mostly estimates** ("a year ago" = exactly 365 days before the crawl). Floating reviews are handled explicitly, and older dates are shown as approximate. | Both |
-| D11 | **The 300 default goes.** Default per-cabang ceiling becomes **5,000**, held in one constant per repo; hard maximum 100,000. | Both |
+| D11 | **The 300 default goes.** Default per-cabang ceiling is **5,000** (decided 2026-09-17), held in one constant per repo; hard maximum 100,000. | Both |
+| D12 | **Old reviews stay in trend charts, with a note** that their dates are Google's estimates (decided 2026-09-17). | Both |
 
 ---
 
@@ -522,7 +533,7 @@ ceiling:
 | Coverage | Bound sent to actor | Terminates when | OneBox supplies |
 |---|---|---|---|
 | `full_backfill` | `limit = place_reviews_count` (or `budget`) | collected ≥ expected × tolerance | cabang only |
-| `date_window` | `anyDate = date_from`, `limit = budget` | run SUCCEEDED, rows filtered to window | cabang + from/to |
+| `date_window` | `anyDate = date_from`, `limit = crawl_max_target_reviews` — **no budget** (D8) | run SUCCEEDED, rows filtered to window | cabang + from/to |
 | `delta` | `anyDate = watermark − margin` | run SUCCEEDED | cabang only |
 
 `budget` is a **ceiling, not a target**. Hitting it is an abnormal outcome
@@ -680,8 +691,10 @@ impact:
    `oldest_crawled_at` back. (Answers ADR-0005 open question 4: a custom
    range does not disturb the regular delta cursor.)
 5. **Pak Indra's rule (D8)** applies to `date_window`: it collects every
-   review in the window; `budget` is only a cost guard. If the budget or a
-   timeout stops it early, the job ends `completeness: partial` and the
+   review in the window, and it carries **no ceiling** — `budget` is
+   rejected for this mode (§5.1). The only guards are the company's review
+   quota, checked before enqueue (CS-5), and the run deadline (CS-3). If the
+   deadline, or Apify itself, stops it early, the job ends `completeness: partial` and the
    crawler records the window as incomplete (`crawl_window_log`: target,
    from, to, completeness, finished_at), so the UI can say *"rentang ini
    belum lengkap"* and offer to run it again. Because the actor has no upper
@@ -750,9 +763,10 @@ crawl_max_target_reviews:   int = 100_000    # the actor's own maximum
 Why 5,000: it covers the real places seen so far (Pertamina Margonda ~1,100;
 Astra TB Simatupang 1,022 per Google), matches OneBox's smallest `VOC_REVIEW`
 package (`rev_5000`), and is still a ceiling rather than a target — a delta
-run stops at the cursor long before reaching it. **Confirm the number with
-product** (Part 1 Q6) before shipping; changing it later is a one-line
-config edit.
+run stops at the cursor long before reaching it. **Decided 2026-09-17.**
+Changing it later is a one-line config edit.
+
+It does not apply to `date_window`, which has no ceiling (D8).
 
 `Location.target_review_count` / `Competitor.target_review_count` defaults
 move from 100 to this setting. Existing rows keep their stored value; a
@@ -779,7 +793,11 @@ scan_limit: int | None = None          # accepted, ignored, logged once
 
 Validator rules:
 
-- `coverage == "date_window"` requires at least one of `date_from`/`date_to`.
+- `coverage == "date_window"` requires at least one of `date_from`/`date_to`,
+  and **forbids `budget`** (D8 — a date range always takes everything). A
+  legacy request mapped to `date_window` has its `target_review_count`
+  dropped with a log line rather than rejected, so an old OneBox keeps
+  working.
 - `coverage == "full_backfill"` **forbids** `date_from`/`date_to`. A bounded
   backfill is a `date_window`; allowing both is how two modes silently
   become one.
@@ -794,7 +812,7 @@ crawl_mode=custom_range      -> coverage=date_window
 crawl_mode=initial_backfill  -> coverage=full_backfill
 absent + no dates            -> coverage=delta
 absent + dates               -> coverage=date_window
-target_review_count          -> budget
+target_review_count          -> budget (ignored for date_window)
 scan_limit                   -> ignored
 ```
 
@@ -903,7 +921,7 @@ end against production Apify.
 
 **Verify:** in `tests/test_integration_crawl_jobs.py` —
 `budget=5000` accepted; `budget=100001` rejected; `coverage="full_backfill"`
-with dates rejected; **a legacy request carrying only
+with dates rejected; `coverage="date_window"` with `budget` rejected; **a legacy request carrying only
 `target_review_count=300` and `crawl_mode=regular_delta` behaves exactly as
 today.** That last one is the deploy-safety test — it is what lets the two
 repos ship independently.
@@ -1113,7 +1131,8 @@ export):
    |---|---|
    | `coverage_complete` | got everything the mode asked for |
    | `no_new_reviews` | delta found nothing past the cursor |
-   | `budget_exhausted` | our ceiling was hit first |
+   | `budget_exhausted` | the per-request ceiling was hit first (never on `date_window`) |
+   | `review_quota_exhausted` | the company's monthly review quota ran out mid-run (CS-5) |
    | `source_quota_exhausted` | every Apify account ran out (was `apify_accounts_exhausted`) |
    | `source_not_confirmed` | Apify never confirmed the run; will retry (was `APIFY_RUN_*` failure codes) |
    | `deadline_exceeded` | CS-3 wall-clock deadline hit |
@@ -1163,8 +1182,7 @@ though the schema now confirms it is a valid enum value. Low priority.
 publish its moderation delay. Measure how many reviews the first few sweeps
 find that the regular delta missed, then tune.
 
-**Q12 — is 5,000 the right default ceiling?** D11 / §4.7. Product decision,
-shared with Part 1 Q6.
+**Q12 — is 5,000 the right default ceiling? RESOLVED 2026-09-17: yes.**
 
 *(Q6 is an OneBox question — benefit quota unit. See Part 1 §7.)*
 
