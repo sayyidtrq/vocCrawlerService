@@ -34,9 +34,9 @@ class ApifyRunIncompleteError(ReviewSourceError):
     Apify pushes items incrementally as the actor scrapes) so the caller can
     still store them, but is deliberately NOT treated as a completed fetch:
     without a confirmed SUCCEEDED we have no basis to tell OneBox this
-    target is done. retriable=True lets CrawlWorker retry, and the
-    checkpoint already saved before this is raised (see fetch_reviews) means
-    that retry resumes from here instead of re-scraping from scratch.
+    target is done. retriable=True lets CrawlWorker retry. The retry repeats
+    the same window - the actor has no offset, so there is no cheap resume
+    (spec B13); reviews already stored are skipped as duplicates.
     """
 
     def __init__(self, message: str, *, reviews: list[dict], code: str):
@@ -114,12 +114,11 @@ class ApifyReviewClient(ReviewSourceClient):
                 # a confirmed SUCCEEDED we have no basis to tell OneBox this
                 # target is done, even if we already have some reviews in
                 # hand - Apify itself hasn't vouched for this being the
-                # complete picture. Save a checkpoint so a retry resumes
-                # instead of re-scraping from scratch (the actual fix for
-                # "wasting API calls"), keep whatever reviews the dataset
-                # already had (real data, worth storing either way), and
-                # raise retriable so the job stays open rather than
-                # resolving as a false "finished".
+                # complete picture. Record where it stopped (the checkpoint is
+                # a record, not a resume point - spec B13), keep whatever
+                # reviews the dataset already had (real data, worth storing
+                # either way), and raise retriable so the job stays open
+                # rather than resolving as a false "finished".
                 self._save_checkpoint(crawl_target, effective_sort, last_review)
                 self.last_metadata["matched_review_cards"] = len(reviews)
                 self.last_metadata["scraped_review_cards"] = len(reviews)
@@ -130,10 +129,11 @@ class ApifyReviewClient(ReviewSourceClient):
                     code=f"APIFY_RUN_{status.replace('-', '_')}",
                 )
             except ApifyAccountExhaustedError:
-                if last_review is not None:
-                    lower_bound = (
-                        parse_datetime(last_review.get("review_time")) or lower_bound
-                    )
+                # Batas bawah sengaja TIDAK dimajukan ke review terakhir (spec
+                # B13): itu review tertua yang terbaca, jadi memajukannya akan
+                # melompati review yang belum terbaca. Akun berikutnya mengulang
+                # jendela yang sama; review yang sudah ada dilewati lewat
+                # seen_review_ids.
                 try:
                     if self.token_pool.rotate() is None:
                         raise ApifyAllAccountsExhaustedError(

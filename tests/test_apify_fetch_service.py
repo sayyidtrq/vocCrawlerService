@@ -363,7 +363,9 @@ def test_both_accounts_exhausted_keeps_partial_reviews_and_checkpoint():
     assert checkpoint.sort_by == "newest"
     assert checkpoint.review_id == fixture[2]["review_id"]
     assert checkpoint.review_time == datetime(2026, 5, 17, tzinfo=timezone.utc)
-    assert low_level.actor_inputs[1]["anyDate"] == "2026-07-16"
+    # The second account repeats the same window rather than advancing the
+    # lower bound to the oldest review read (spec B13).
+    assert "anyDate" not in low_level.actor_inputs[1]
     assert all(
         actor_input["source"] == "google"
         for actor_input in low_level.actor_inputs

@@ -88,15 +88,16 @@ class ApifyCheckpointStore:
             )
             self.clear(crawl_target)
             return requested_sort_by, requested_date_from
-        if requested_date_from is None:
-            return requested_sort_by, checkpoint.review_time
-        try:
-            lower_bound = max(requested_date_from, checkpoint.review_time)
-        except TypeError:
-            lower_bound = max(
-                self._aware(requested_date_from), self._aware(checkpoint.review_time)
-            )
-        return requested_sort_by, lower_bound
+        # Checkpoint TIDAK lagi menjadi batas bawah (spec B13). Dengan urutan
+        # terbaru-dulu, review terakhir yang terbaca adalah yang PALING TUA;
+        # memakainya sebagai anyDate berarti run berikutnya hanya meminta yang
+        # lebih baru dari itu - yaitu yang sudah dipunyai - dan melompati
+        # review lama yang belum sempat terbaca. Aktor tidak punya offset atau
+        # batas atas, jadi tidak ada cara benar untuk "melanjutkan": ulangi
+        # jendela yang sama dan biarkan dedup menangani tumpang-tindih.
+        # Kemajuan delta dipegang CrawlCoverageStore (newest_crawled_at).
+        # Checkpoint tetap disimpan sebagai catatan di mana run berhenti.
+        return requested_sort_by, requested_date_from
 
     @staticmethod
     def _model(crawl_target):

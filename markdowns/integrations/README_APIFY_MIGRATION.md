@@ -25,7 +25,7 @@ app/integrations/
   apify_review_client.py    orchestrates the three above into fetch_reviews()
 
 app/services/
-  apify_checkpoint_store.py persists/validates the "resume from here" cursor
+  apify_checkpoint_store.py records where a run stopped (not a resume point)
   apify_fetch_service.py    DB wiring: FetchLogService, ReviewService, CrawlFetchResult shape
 ```
 
@@ -41,7 +41,7 @@ OneBox POST /integration/v1/crawl-jobs
   -> CrawlWorker.execute_next()                   (app/services/crawl_worker.py)
   -> ApifyFetchService.fetch_location/fetch_competitor()
   -> ApifyReviewClient.fetch_reviews()
-       -> ApifyCheckpointStore.resolve_effective_lower_bound()   (where did we leave off?)
+       -> ApifyCheckpointStore.resolve_effective_lower_bound()   (sort check only)
        -> ApifyClient.start_run() -> get_run_status() -> iter_dataset_items()
        -> ApifyReviewParser.parse_review() per item
   -> ReviewService.insert_review() per parsed review   (dedup + write to `reviews`)
@@ -66,68 +66,48 @@ APIFY_ACTOR_ID=web_wanderer/google-reviews-scraper # default, only set to overri
 immediately with "all accounts exhausted." `scripts/deploy-apify.sh` warns
 about this at deploy time if it's missing, but it won't block the deploy.
 
-## The two-account rotation, and why it's not just "retry with token 2"
+## The two-account rotation, the checkpoint, and what "resume" really means
 
-If you only remember one thing from this migration, make it this: **a
-resume position is `(sort_by, review_time, review_id)`, never a bare
-position/offset.** Position 150 under `newest` sort and position 150 under
-`most_relevant` sort are two unrelated reviews — you cannot hand a
-half-finished fetch from one account to the other unless both are using the
-exact same sort order, and you have to track *which* order got you *how
-far*.
+> **Corrected 2026-09-17.** An earlier version of this section said an
+> interrupted fetch "picks up from exactly where it left off" via a
+> checkpoint. That was wrong, and the code that implemented it lost data.
+> See `SPEC_FETCHJOBS_CRAWLER.md` B13.
 
 What actually happens when account A runs out of credit mid-fetch:
 
-1. `ApifyReviewClient` keeps whatever reviews were already parsed before the
-   failure — nothing already fetched is thrown away.
+1. `ApifyReviewClient` keeps whatever reviews were already parsed.
 2. `ApifyTokenPool.rotate()` moves to account B (shared across every job in
-   the worker process — if job 1 in a batch discovers account A is dead,
-   jobs 2 and 3 go straight to B, they never re-attempt a token already
-   known exhausted).
-3. The *same* actor call is re-issued on account B, with `anyDate` advanced
-   to the last successfully parsed review's date — continuing, not
-   restarting.
-4. If B *also* runs out before the target count is reached, the job doesn't
-   fail. It's marked `partial_success` (an existing, already-terminal status
-   — nothing new invented) and a checkpoint —
-   `{sort_by, review_time, review_id, recorded_at}` — is written to
-   `apify_resume_checkpoint` on the `Location`/`Competitor` row itself.
-5. The next time that target is crawled (next scheduled `regular_delta` run,
-   a manual retry, whenever), `ApifyCheckpointStore.resolve_effective_lower_bound()`
-   reads that checkpoint and picks up from exactly where it left off —
-   automatically, with zero OneBox involvement (OneBox has no idea this
-   checkpoint exists and doesn't need to).
-6. **The one safety rule**: if a stored checkpoint's `sort_by` doesn't match
-   what the new request wants, the checkpoint is discarded (logged) and the
-   target restarts from scratch under the new sort. Splicing two different
-   orderings together is treated as strictly worse than one wasted re-fetch.
+   the worker process, so later jobs never retry an account already known
+   to be exhausted).
+3. The **same window** is re-run on account B. The lower bound is *not*
+   moved: with `order: newest` the last review read is the **oldest** one,
+   so advancing `anyDate` to it would ask only for reviews already in hand
+   and skip every older review that was never read. Duplicates from the
+   repeat are dropped by `seen_review_ids` and by DB dedup.
+4. If B also runs out, the job ends `partial_success` with
+   `stop_reason: source_quota_exhausted`.
 
-A related but distinct case: an actor run that never confirms `SUCCEEDED`
-at all (Apify reports it failed/aborted, or our own poll loop just gives up
-waiting after `apify_run_timeout_seconds`). **This is deliberately NOT
-treated the same as account exhaustion.** Account exhaustion is us choosing
-to stop (we ran out of budget) and Apify never disputed that the data we
-have is good, so calling it `partial_success` — "done, here's what we
-got" — is accurate. A run that never confirmed `SUCCEEDED` is different:
-Apify itself hasn't vouched for the data being complete, so we have no
-basis to tell OneBox this target is finished, even if we already have
-reviews in hand. Reporting a false "done" here risks a target getting
-silently stuck at partial coverage indefinitely, since a `regular_delta`
-crawl for an already-"finished" target may not get re-triggered for a
-while.
+The actor has **no offset and no upper date bound**, so there is no correct
+way to resume a partially-read window. The `apify_resume_checkpoint`
+column is still written, as a record of where a run stopped, but it no
+longer narrows the next run. A retry repeats the window and pays for it
+again; that is the honest cost.
 
-So instead: whatever reviews the dataset already had (real data — Apify
-pushes items incrementally as the actor scrapes) get stored, a checkpoint
-gets saved either way, but the job is raised as `ApifyRunIncompleteError` →
-a retriable **failure**, not a terminal success. `CrawlWorker`'s own retry
-mechanism picks it up again, and because the checkpoint was already saved,
-that retry resumes from where the incomplete run left off instead of
-re-scraping the whole place from zero — that's the actual fix for "wasting
-API calls" (a from-scratch retry would mean paying for a second full run on
-reviews already scraped once), achieved without ever telling OneBox
-something is finished that Apify didn't actually confirm. Only a run that
-produced *zero* reviews and never confirmed success is treated as an
-ordinary hard failure (no checkpoint to save, nothing to keep).
+Progress between crawls is tracked separately, by the crawler's own
+coverage state on each location (`newest_crawled_at`, `oldest_crawled_at`,
+`backfill_completed_at`, …). A `delta` crawl starts from
+`newest_crawled_at` minus one day, and once a week from minus thirty days
+as a safety sweep for late-published reviews.
+
+An actor run that never confirms `SUCCEEDED` (failed, aborted, or past its
+deadline) is **not** treated like account exhaustion: whatever the dataset
+had is stored, but the job fails as retriable (or, past the deadline, as
+permanent with `stop_reason: deadline_exceeded`) instead of telling OneBox
+the target is done.
+
+Runs are no longer waited on in-process: the worker starts the run, parks
+the job (`awaiting_source`, shown to OneBox as `running`), and re-checks it
+every 30 seconds. See `SPEC_FETCHJOBS_CRAWLER.md` CS-3.
 
 ## Database change
 

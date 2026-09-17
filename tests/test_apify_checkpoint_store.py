@@ -48,15 +48,22 @@ def checkpoint(sort_by="newest"):
     )
 
 
-def test_same_sort_uses_more_restrictive_checkpoint_time():
+def test_checkpoint_never_narrows_the_requested_window():
+    # The checkpoint is the OLDEST review read (newest-first order). Using it as
+    # a lower bound would skip every older review that was never read.
     _, store, target = seeded_store()
     store.save(target, checkpoint())
+    requested = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
-    assert store.resolve_effective_lower_bound(
-        target,
+    assert store.resolve_effective_lower_bound(target, "newest", requested) == (
         "newest",
-        datetime(2026, 1, 1, tzinfo=timezone.utc),
-    ) == ("newest", datetime(2026, 6, 1, tzinfo=timezone.utc))
+        requested,
+    )
+    assert store.resolve_effective_lower_bound(target, "newest", None) == (
+        "newest",
+        None,
+    )
+    assert store.load(target) is not None
 
 
 def test_different_sort_discards_checkpoint_and_uses_requested_date(caplog):

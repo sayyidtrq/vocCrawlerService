@@ -353,10 +353,9 @@ class ApifyFetchService:
             # report this as partial_success: that status is terminal, and
             # OneBox would read it as "this target is done". Without a
             # confirmed SUCCEEDED we can't vouch for that, so this stays a
-            # retriable failure. A checkpoint was already saved by the
-            # client before raising, so the retry resumes from here instead
-            # of re-scraping the whole place (that's the actual fix for
-            # wasting API calls - not declaring victory early).
+            # retriable failure. The retry repeats the same window (no cheap
+            # resume exists - spec B13); what is stored now comes back as
+            # duplicates and costs nothing further on our side.
             if on_progress is not None:
                 on_progress(len(exc.reviews), requested_target, len(exc.reviews))
             result["metadata"] = dict(self.client.last_metadata)
