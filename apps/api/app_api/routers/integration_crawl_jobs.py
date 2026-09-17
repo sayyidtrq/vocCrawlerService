@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Header, Query, Request, status
@@ -19,6 +20,14 @@ from apps.api.app_api.integration_schemas import API_VERSION, IntegrationErrorRe
 from apps.api.app_api.service_auth import ServicePrincipal, require_service_principal
 
 router = APIRouter(prefix="/integration/v1/crawl-jobs", tags=["integration-crawl"])
+logger = logging.getLogger(__name__)
+
+_COVERAGE_TO_CRAWL_MODE = {
+    "full_backfill": "initial_backfill",
+    "date_window": "custom_range",
+    "delta": "regular_delta",
+}
+_CRAWL_MODE_TO_COVERAGE = {value: key for key, value in _COVERAGE_TO_CRAWL_MODE.items()}
 
 
 def get_crawl_queue_session_factory():
@@ -54,11 +63,42 @@ def _target_crawl_options(
     payload: CrawlBatchCreateRequest, target: CrawlTargetRequest
 ) -> dict:
     date_from, date_to = _target_date_range(payload, target)
+    crawl_mode = target.crawl_mode or payload.crawl_mode
+    coverage = target.coverage or _CRAWL_MODE_TO_COVERAGE.get(
+        crawl_mode, "date_window" if date_from or date_to else "delta"
+    )
+    legacy_budget = target.effective_review_limit or payload.max_reviews_to_collect
+    if coverage == "date_window":
+        if target.budget is not None:
+            raise CrawlQueueError(
+                400, "INVALID_PARAMETER", "budget is not allowed for date_window coverage."
+            )
+        if date_from is None and date_to is None:
+            raise CrawlQueueError(
+                400,
+                "INVALID_PARAMETER",
+                "date_window coverage requires date_from or date_to.",
+            )
+        if legacy_budget is not None:
+            logger.info("Ignoring legacy review limit for date_window coverage.")
+        budget = None
+    else:
+        budget = target.budget or legacy_budget
+    if coverage == "full_backfill" and (date_from is not None or date_to is not None):
+        raise CrawlQueueError(
+            400,
+            "INVALID_PARAMETER",
+            "full_backfill coverage does not accept date bounds.",
+        )
+    # crawl_mode lama tetap disimpan untuk pembaca lama, tapi harus sejalan
+    # dengan coverage; coverage eksplisit yang menang.
+    if target.coverage or not crawl_mode:
+        crawl_mode = _COVERAGE_TO_CRAWL_MODE[coverage]
     return {
-        "crawl_mode": target.crawl_mode or payload.crawl_mode,
-        "max_reviews_to_collect": (
-            target.effective_review_limit or payload.max_reviews_to_collect
-        ),
+        "coverage": coverage,
+        "budget": budget,
+        "crawl_mode": crawl_mode,
+        "max_reviews_to_collect": budget,
         "scan_limit": target.scan_limit or payload.scan_limit,
         "dry_run": payload.dry_run,
         "date_from": date_from,
@@ -97,6 +137,16 @@ def enqueue_crawl_jobs(
     location_targets = [t for t in payload.targets if t.kind == "location"]
     competitor_targets = [t for t in payload.targets if t.kind == "competitor"]
     try:
+        location_options = {
+            target.onebox_location_id: _target_crawl_options(payload, target)
+            for target in location_targets
+        }
+        competitor_options = {
+            (target.external_place_id or "").strip(): _target_crawl_options(
+                payload, target
+            )
+            for target in competitor_targets
+        }
         batch, _created = service.enqueue(
             company_id=principal.company_id,
             client_id=principal.client_id,
@@ -105,14 +155,11 @@ def enqueue_crawl_jobs(
                 target.onebox_location_id for target in location_targets
             ],
             target_review_counts={
-                target.onebox_location_id: (
-                    target.effective_review_limit or payload.max_reviews_to_collect
-                )
+                target.onebox_location_id: location_options[
+                    target.onebox_location_id
+                ]["budget"]
                 for target in location_targets
-                if (
-                    target.effective_review_limit is not None
-                    or payload.max_reviews_to_collect is not None
-                )
+                if location_options[target.onebox_location_id]["budget"] is not None
             },
             target_date_ranges={
                 target.onebox_location_id: _target_date_range(payload, target)
@@ -128,22 +175,17 @@ def enqueue_crawl_jobs(
                 for target in location_targets
                 if target.sort_by and target.sort_by != "newest"
             },
-            target_crawl_options={
-                target.onebox_location_id: _target_crawl_options(payload, target)
-                for target in location_targets
-            },
+            target_crawl_options=location_options,
             competitor_targets=[
                 {
                     "external_place_id": (target.external_place_id or "").strip(),
-                    "target_review_count": (
-                        target.effective_review_limit
-                        or payload.max_reviews_to_collect
-                    ),
+                    "target_review_count": competitor_options[
+                        (target.external_place_id or "").strip()
+                    ]["budget"],
                     "date_from": _target_date_range(payload, target)[0],
                     "date_to": _target_date_range(payload, target)[1],
                     "sort_by": target.sort_by,
-                    "crawl_mode": target.crawl_mode or payload.crawl_mode,
-                    "scan_limit": target.scan_limit or payload.scan_limit,
+                    **competitor_options[(target.external_place_id or "").strip()],
                     "dry_run": payload.dry_run,
                 }
                 for target in competitor_targets

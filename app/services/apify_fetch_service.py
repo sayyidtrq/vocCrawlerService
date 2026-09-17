@@ -18,7 +18,7 @@ from app.integrations.apify_token_pool import ApifyTokenPool
 from app.integrations.review_source_client import ReviewSourceError
 from app.services.apify_checkpoint_store import ApifyCheckpointStore
 from app.services.competitor_review_service import CompetitorReviewService
-from app.services.crawl_result import CrawlFetchResult, stop_reason
+from app.services.crawl_result import CrawlFetchResult
 from app.services.crawl_target import CrawlTarget
 from app.services.entitlement_service import EntitlementService
 from app.services.fetch_log_service import FetchLogService
@@ -73,6 +73,8 @@ class ApifyFetchService:
         self,
         location_id: int,
         target: int | None = None,
+        coverage: str | None = None,
+        budget: int | None = None,
         date_from: datetime | None = None,
         date_to: datetime | None = None,
         on_progress=None,
@@ -84,6 +86,9 @@ class ApifyFetchService:
         return self._run_fetch(
             CrawlTarget.from_location(location),
             target=target,
+            coverage=coverage or "delta",
+            budget=budget,
+            new_contract=coverage is not None or budget is not None,
             date_from=date_from,
             date_to=date_to,
             on_progress=on_progress,
@@ -96,6 +101,8 @@ class ApifyFetchService:
         self,
         competitor_id: int,
         target: int | None = None,
+        coverage: str | None = None,
+        budget: int | None = None,
         date_from: datetime | None = None,
         date_to: datetime | None = None,
         on_progress=None,
@@ -114,6 +121,9 @@ class ApifyFetchService:
         return self._run_fetch(
             crawl_target,
             target=target,
+            coverage=coverage or "delta",
+            budget=budget,
+            new_contract=coverage is not None or budget is not None,
             date_from=date_from,
             date_to=date_to,
             on_progress=on_progress,
@@ -129,6 +139,9 @@ class ApifyFetchService:
         crawl_target: CrawlTarget,
         *,
         target: int | None,
+        coverage: str = "delta",
+        budget: int | None = None,
+        new_contract: bool = False,
         date_from: datetime | None,
         date_to: datetime | None,
         on_progress,
@@ -136,9 +149,14 @@ class ApifyFetchService:
         insert_review,
         enable_fetch_log: bool,
     ) -> CrawlFetchResult:
-        requested_target = self.validate_target(
-            target or crawl_target.target_review_count
+        requested_target = self._resolve_actor_limit(
+            crawl_target,
+            target=target,
+            coverage=coverage,
+            budget=budget,
+            new_contract=new_contract,
         )
+        effective_budget = None if coverage == "date_window" else requested_target
         result: CrawlFetchResult = {
             f"{crawl_target.kind}_id": crawl_target.id,
             f"{crawl_target.kind}_name": crawl_target.branch_name,
@@ -152,6 +170,8 @@ class ApifyFetchService:
             "total_skipped_out_of_range": 0,
             "error_message": None,
             "metadata": {
+                "coverage": coverage,
+                "budget": effective_budget,
                 "target_review_count": requested_target,
                 "max_reviews_to_collect": requested_target,
                 "date_from": date_from.isoformat() if date_from else None,
@@ -187,6 +207,8 @@ class ApifyFetchService:
                     "date_to": date_to.isoformat() if date_to else None,
                     "sort_forced_to_newest": False,
                     "max_reviews_to_collect": requested_target,
+                    "coverage": coverage,
+                    "budget": effective_budget,
                 }
             )
             result["total_fetched"] = len(raw_reviews)
@@ -197,19 +219,62 @@ class ApifyFetchService:
                 crawl_target, raw_reviews, date_from, date_to, insert_review, result
             )
 
+            expected = result["metadata"].get("expected_review_count")
+            collected = result["metadata"].get("collected_unique")
+            collected = len(raw_reviews) if collected is None else int(collected)
+            exhausted = (
+                result["metadata"].get("stopped_reason")
+                == "apify_accounts_exhausted"
+            )
+            budget_reached = (
+                effective_budget is not None and collected >= effective_budget
+            )
+            if coverage == "full_backfill":
+                if expected is None:
+                    completeness = "unknown"
+                elif collected >= int(expected) * self.settings.crawl_completeness_tolerance:
+                    completeness = "complete"
+                else:
+                    completeness = "partial"
+            else:
+                completeness = (
+                    "partial" if exhausted or budget_reached else "complete"
+                )
+            ratio = (
+                round(collected / int(expected), 4)
+                if expected not in {None, 0}
+                else None
+            )
+            result["metadata"].update(
+                {
+                    "expected_review_count": expected,
+                    "collected_unique": collected,
+                    "completeness": completeness,
+                    "completeness_ratio": ratio,
+                }
+            )
             stored = result["total_inserted"] + result["total_duplicate"]
-            partial = (
-                result["metadata"].get("stopped_reason") == "apify_accounts_exhausted"
+            old_partial = (
+                exhausted
                 or (
                     stored < requested_target
                     and result["total_skipped_out_of_range"] == 0
                 )
+            )
+            partial = (
+                completeness == "partial"
+                or (completeness == "unknown" and old_partial)
                 or result["total_failed"] > 0
             )
             result["status"] = "partial_success" if partial else "success"
-            public_stop_reason = stop_reason(result)
-            if public_stop_reason:
-                result["metadata"]["stop_reason"] = public_stop_reason
+            if exhausted:
+                result["metadata"]["stop_reason"] = "source_quota_exhausted"
+            elif budget_reached:
+                result["metadata"]["stop_reason"] = "budget_exhausted"
+            elif coverage == "delta" and result["total_inserted"] == 0:
+                result["metadata"]["stop_reason"] = "no_new_reviews"
+            elif completeness == "complete":
+                result["metadata"]["stop_reason"] = "coverage_complete"
         except ApifyRunIncompleteError as exc:
             # Apify never confirmed this run SUCCEEDED. Store whatever
             # reviews it did have - real data, not wasted - but do NOT
@@ -229,6 +294,9 @@ class ApifyFetchService:
                     "date_to": date_to.isoformat() if date_to else None,
                     "failure_code": exc.code,
                     "retriable": True,
+                    "coverage": coverage,
+                    "budget": effective_budget,
+                    "stop_reason": "source_not_confirmed",
                 }
             )
             result["total_fetched"] = len(exc.reviews)
@@ -302,7 +370,7 @@ class ApifyFetchService:
             value = int(target)
         except (TypeError, ValueError) as exc:
             raise ValueError("Target review count must be numeric.") from exc
-        maximum = min(self.settings.crawl_max_target_reviews, 300)
+        maximum = self.settings.crawl_max_target_reviews
         if self.company_id is not None:
             quota = EntitlementService(
                 self.company_id, self.session_factory
@@ -312,6 +380,44 @@ class ApifyFetchService:
         if not 1 <= value <= maximum:
             raise ValueError(f"Target review count must be between 1 and {maximum}.")
         return value
+
+    def _resolve_actor_limit(
+        self,
+        crawl_target: CrawlTarget,
+        *,
+        target: int | None,
+        coverage: str,
+        budget: int | None,
+        new_contract: bool,
+    ) -> int:
+        if coverage not in {"full_backfill", "date_window", "delta"}:
+            raise ValueError(f"Unsupported coverage: {coverage}.")
+        if coverage == "date_window":
+            return self.settings.crawl_max_target_reviews
+        requested = (
+            budget or self.settings.crawl_max_target_reviews
+            if coverage == "full_backfill"
+            else budget
+            or target
+            or crawl_target.target_review_count
+            or self.settings.crawl_default_review_limit
+        )
+        if not new_contract:
+            return self.validate_target(requested)
+        try:
+            value = int(requested)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Target review count must be numeric.") from exc
+        if not 1 <= value <= self.settings.crawl_max_target_reviews:
+            raise ValueError(
+                "Target review count must be between 1 and "
+                f"{self.settings.crawl_max_target_reviews}."
+            )
+        if self.company_id is None:
+            return value
+        return EntitlementService(
+            self.company_id, self.session_factory
+        ).clamp_review_target(value)
 
     @staticmethod
     def _is_older_than_range(

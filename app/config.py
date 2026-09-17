@@ -47,6 +47,8 @@ _BLANK_USES_DEFAULT_FIELDS = (
     "fetch_timeout_seconds",
     "fetch_max_retry",
     "crawl_max_target_reviews",
+    "crawl_default_review_limit",
+    "crawl_completeness_tolerance",
     "apify_actor_id",
     "apify_run_timeout_seconds",
     "apify_poll_interval_seconds",
@@ -115,7 +117,9 @@ class Settings(BaseModel):
     fetch_limit_per_location: int = 50
     fetch_timeout_seconds: int = 30
     fetch_max_retry: int = 3
-    crawl_max_target_reviews: int = 300
+    crawl_max_target_reviews: int = 100_000
+    crawl_default_review_limit: int = 5_000
+    crawl_completeness_tolerance: float = 0.98
     apify_api_tokens: Annotated[list[str], NoDecode] = []
     apify_actor_id: str = "web_wanderer/google-reviews-scraper"
     apify_run_timeout_seconds: int = 300

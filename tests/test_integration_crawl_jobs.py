@@ -212,17 +212,152 @@ def test_new_window_payload_normalizes_options(session_factory):
     assert response.status_code == 202
     data = response.json()["data"]
     job = data["jobs"][0]
-    assert job["target_review_count"] == 5
-    assert job["max_reviews_to_collect"] == 5
+    assert job["target_review_count"] == 100_000
+    assert job["max_reviews_to_collect"] == 100_000
     assert job["scan_limit"] == 40
     assert job["crawl_mode"] == "custom_range"
-    assert data["limits"] == {"max_reviews_to_collect": 5, "scan_limit": 40}
+    assert data["limits"] == {"max_reviews_to_collect": 100_000, "scan_limit": 40}
 
     with session_factory() as session:
         stored = session.scalar(select(CrawlJob))
-        assert stored.target_review_count == 5
+        assert stored.target_review_count == 100_000
+        assert stored.result_json["request"]["coverage"] == "date_window"
+        assert stored.result_json["request"]["budget"] is None
+        assert stored.result_json["request"]["max_reviews_to_collect"] is None
         assert stored.result_json["request"]["crawl_mode"] == "custom_range"
         assert stored.result_json["request"]["scan_limit"] == 40
+
+
+def test_budget_contract_bounds(session_factory):
+    client = make_client(session_factory, principal(1, 1))
+
+    accepted = client.post(
+        "/api/integration/v1/crawl-jobs",
+        headers={"Idempotency-Key": "169:2026-09-17:budget-5000"},
+        json={
+            "targets": [
+                {
+                    "onebox_location_id": 101,
+                    "coverage": "delta",
+                    "budget": 5000,
+                }
+            ]
+        },
+    )
+    rejected = client.post(
+        "/api/integration/v1/crawl-jobs",
+        headers={"Idempotency-Key": "169:2026-09-17:budget-100001"},
+        json={
+            "targets": [
+                {
+                    "onebox_location_id": 102,
+                    "coverage": "delta",
+                    "budget": 100001,
+                }
+            ]
+        },
+    )
+
+    assert accepted.status_code == 202
+    assert rejected.status_code == 400
+    with session_factory() as session:
+        job = session.scalar(select(CrawlJob))
+        assert job.target_review_count == 5000
+        assert job.result_json["request"]["coverage"] == "delta"
+        assert job.result_json["request"]["budget"] == 5000
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        {
+            "onebox_location_id": 101,
+            "coverage": "full_backfill",
+            "date_from": "2026-09-01T00:00:00Z",
+        },
+        {
+            "onebox_location_id": 101,
+            "coverage": "date_window",
+            "date_from": "2026-09-01T00:00:00Z",
+            "budget": 5000,
+        },
+    ],
+)
+def test_invalid_coverage_combinations_are_rejected(session_factory, target):
+    client = make_client(session_factory, principal(1, 1))
+    response = client.post(
+        "/api/integration/v1/crawl-jobs",
+        headers={"Idempotency-Key": "169:2026-09-17:invalid-combination"},
+        json={"targets": [target]},
+    )
+
+    assert response.status_code == 400
+
+
+def test_date_window_requires_target_or_batch_dates(session_factory):
+    client = make_client(session_factory, principal(1, 1))
+    response = client.post(
+        "/api/integration/v1/crawl-jobs",
+        headers={"Idempotency-Key": "169:2026-09-17:missing-window"},
+        json={
+            "targets": [
+                {"onebox_location_id": 101, "coverage": "date_window"}
+            ]
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "INVALID_PARAMETER"
+
+
+def test_legacy_delta_maps_target_count_to_budget(session_factory):
+    client = make_client(session_factory, principal(1, 1))
+    response = client.post(
+        "/api/integration/v1/crawl-jobs",
+        headers={"Idempotency-Key": "169:2026-09-17:legacy-delta"},
+        json={
+            "targets": [
+                {
+                    "onebox_location_id": 101,
+                    "crawl_mode": "regular_delta",
+                    "target_review_count": 300,
+                }
+            ]
+        },
+    )
+
+    assert response.status_code == 202
+    with session_factory() as session:
+        request = session.scalar(select(CrawlJob)).result_json["request"]
+        assert request["coverage"] == "delta"
+        assert request["budget"] == 300
+        assert request["crawl_mode"] == "regular_delta"
+
+
+def test_legacy_custom_range_drops_target_count(session_factory):
+    client = make_client(session_factory, principal(1, 1))
+    response = client.post(
+        "/api/integration/v1/crawl-jobs",
+        headers={"Idempotency-Key": "169:2026-09-17:legacy-window"},
+        json={
+            "targets": [
+                {
+                    "onebox_location_id": 101,
+                    "crawl_mode": "custom_range",
+                    "target_review_count": 300,
+                    "date_from": "2026-09-01T00:00:00Z",
+                }
+            ]
+        },
+    )
+
+    assert response.status_code == 202
+    with session_factory() as session:
+        job = session.scalar(select(CrawlJob))
+        request = job.result_json["request"]
+        assert job.target_review_count == 100_000
+        assert request["coverage"] == "date_window"
+        assert request["budget"] is None
 
 
 def test_same_target_window_returns_active_batch(session_factory):
@@ -264,6 +399,8 @@ def test_worker_claims_and_completes_job(session_factory):
             self,
             location_id,
             target,
+            coverage=None,
+            budget=None,
             date_from=None,
             date_to=None,
             on_progress=None,
@@ -350,6 +487,8 @@ def test_worker_marks_partial_success_without_failed_retry(session_factory):
             self,
             location_id,
             target,
+            coverage=None,
+            budget=None,
             date_from=None,
             date_to=None,
             on_progress=None,
@@ -409,6 +548,8 @@ def test_worker_does_not_retry_permanent_source_failure(session_factory):
             self,
             location_id,
             target,
+            coverage=None,
+            budget=None,
             date_from=None,
             date_to=None,
             on_progress=None,

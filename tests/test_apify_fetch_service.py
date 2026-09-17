@@ -80,6 +80,8 @@ class FakeApifyReviewClient:
             "sort_applied": True,
             "place_rating": 4.3,
             "place_review_count": 9422,
+            "expected_review_count": 9422,
+            "collected_unique": 2,
             "rating_snapshot_at": scraped_at,
             "rating_snapshot": {
                 "source": "google_maps",
@@ -116,6 +118,50 @@ class FakeApifyReviewClient:
         ][:limit]
 
 
+class CountedFakeApifyReviewClient(FakeApifyReviewClient):
+    def __init__(self, count: int, expected: int | None):
+        super().__init__()
+        self.count = count
+        self.expected = expected
+
+    def fetch_reviews(
+        self, crawl_target, limit, sort_by="newest", date_from=None, date_to=None
+    ):
+        templates = super().fetch_reviews(
+            crawl_target, 2, sort_by=sort_by, date_from=date_from, date_to=date_to
+        )
+        reviews = [
+            {
+                **templates[index % len(templates)],
+                "external_review_id": f"counted-review-{index}",
+            }
+            for index in range(self.count)
+        ] if templates else []
+        self.last_metadata["reviews_scanned"] = self.count
+        self.last_metadata["matched_review_cards"] = self.count
+        self.last_metadata["collected_unique"] = self.count
+        if self.expected is None:
+            self.last_metadata.pop("expected_review_count", None)
+            self.last_metadata.pop("place_review_count", None)
+        else:
+            self.last_metadata["expected_review_count"] = self.expected
+            self.last_metadata["place_review_count"] = self.expected
+        return reviews
+
+
+def make_counted_service(session_factory, company_id, count, expected):
+    return ApifyFetchService(
+        company_id=company_id,
+        session_factory=session_factory,
+        settings=Settings(
+            database_url="sqlite+pysqlite:///:memory:",
+            review_source_mode="apify",
+            crawl_max_target_reviews=100_000,
+        ),
+        client=CountedFakeApifyReviewClient(count, expected),
+    )
+
+
 def make_service(session_factory, company_id):
     return ApifyFetchService(
         company_id=company_id,
@@ -144,7 +190,9 @@ def test_apify_fetch_stores_metadata_deduplicates_and_keeps_result_shape():
     )
     second = service.fetch_location(location.id, target=2)
 
-    assert first["status"] == "success"
+    assert first["status"] == "partial_success"
+    assert first["metadata"]["completeness"] == "partial"
+    assert first["metadata"]["stop_reason"] == "budget_exhausted"
     assert first["total_inserted"] == 2
     assert second["total_duplicate"] == 2
     assert progress == [(0, 2, 0), (2, 2, 2)]
@@ -175,7 +223,7 @@ def test_apify_competitor_fetch_stores_reviews_without_fetch_log():
     first = service.fetch_competitor(competitor.id, target=2)
     second = service.fetch_competitor(competitor.id, target=2)
 
-    assert first["status"] == "success"
+    assert first["status"] == "partial_success"
     assert first["total_inserted"] == 2
     assert second["total_duplicate"] == 2
     with session_factory() as session:
@@ -195,6 +243,65 @@ def test_apify_competitor_result_uses_competitor_keys():
     assert result["competitor_name"] == competitor.name
     assert "location_id" not in result
     assert "location_name" not in result
+
+
+def test_full_backfill_uses_place_count_for_complete_small_place():
+    session_factory = make_session_factory()
+    company_id, location, _ = seed_targets(session_factory)
+    with session_factory() as session:
+        session.get(Company, company_id).total_enable_review = 1000
+        session.commit()
+    service = make_counted_service(session_factory, company_id, 270, 270)
+
+    result = service.fetch_location(
+        location.id, coverage="full_backfill", budget=300
+    )
+
+    assert result["status"] == "success"
+    assert result["metadata"]["completeness"] == "complete"
+    assert result["metadata"]["completeness_ratio"] == 1.0
+    assert result["metadata"]["stop_reason"] == "coverage_complete"
+
+
+def test_full_backfill_reports_real_partial():
+    session_factory = make_session_factory()
+    company_id, location, _ = seed_targets(session_factory)
+    service = make_counted_service(session_factory, company_id, 100, 5000)
+
+    result = service.fetch_location(
+        location.id, coverage="full_backfill", budget=300
+    )
+
+    assert result["status"] == "partial_success"
+    assert result["metadata"]["completeness"] == "partial"
+    assert result["metadata"]["completeness_ratio"] == 0.02
+
+
+def test_full_backfill_without_place_count_is_unknown():
+    session_factory = make_session_factory()
+    company_id, location, _ = seed_targets(session_factory)
+    service = make_counted_service(session_factory, company_id, 100, None)
+
+    result = service.fetch_location(
+        location.id, coverage="full_backfill", budget=300
+    )
+
+    assert result["status"] == "success"
+    assert result["metadata"]["completeness"] == "unknown"
+    assert result["metadata"]["completeness_ratio"] is None
+
+
+def test_delta_with_no_new_rows_uses_stable_stop_reason():
+    session_factory = make_session_factory()
+    company_id, location, _ = seed_targets(session_factory)
+    service = make_service(session_factory, company_id)
+
+    service.fetch_location(location.id, coverage="delta", budget=10)
+    result = service.fetch_location(location.id, coverage="delta", budget=10)
+
+    assert result["status"] == "success"
+    assert result["total_inserted"] == 0
+    assert result["metadata"]["stop_reason"] == "no_new_reviews"
 
 
 class ExhaustingApifyClient:
@@ -247,7 +354,8 @@ def test_both_accounts_exhausted_keeps_partial_reviews_and_checkpoint():
 
     assert result["status"] == "partial_success"
     assert result["total_inserted"] == 2
-    assert result["metadata"]["stop_reason"] == "apify_accounts_exhausted"
+    assert result["metadata"]["stopped_reason"] == "apify_accounts_exhausted"
+    assert result["metadata"]["stop_reason"] == "source_quota_exhausted"
     checkpoint = store.load(
         CrawlTarget.from_location(service.location_service.get_location(location.id))
     )
@@ -289,6 +397,60 @@ class IncompleteRunApifyClient:
         yield from self.items
 
 
+class SuccessfulApifyClient:
+    def __init__(self, items):
+        self.items = items
+        self.actor_inputs = []
+
+    def start_run(self, actor_id, input, *, token):
+        self.actor_inputs.append(dict(input))
+        return "run-1", "dataset-1"
+
+    def get_run_status(self, run_id, *, token):
+        return "SUCCEEDED"
+
+    def iter_dataset_items(self, dataset_id, *, token):
+        yield from self.items
+
+
+def test_date_window_ignores_entitlement_and_uses_actor_maximum():
+    session_factory = make_session_factory()
+    company_id, location, _ = seed_targets(session_factory)
+    fixture = json.loads(
+        (
+            Path(__file__).parent / "fixtures" / "apify_google_maps_reviews_sample.json"
+        ).read_text()
+    )
+    low_level = SuccessfulApifyClient([fixture[0]])
+    settings = Settings(
+        database_url="sqlite+pysqlite:///:memory:",
+        review_source_mode="apify",
+        crawl_max_target_reviews=100_000,
+        apify_api_tokens=["token-a"],
+    )
+    service = ApifyFetchService(
+        company_id=company_id,
+        session_factory=session_factory,
+        settings=settings,
+        client=ApifyReviewClient(
+            settings,
+            ApifyTokenPool(settings.apify_api_tokens),
+            ApifyCheckpointStore(session_factory),
+            apify_client=low_level,
+        ),
+    )
+
+    result = service.fetch_location(
+        location.id,
+        coverage="date_window",
+        date_from=datetime(2020, 1, 1, tzinfo=timezone.utc),
+    )
+
+    assert low_level.actor_inputs[0]["limit"] == 100_000
+    assert result["metadata"]["budget"] is None
+    assert result["metadata"]["completeness"] == "complete"
+
+
 def test_incomplete_run_stores_reviews_but_stays_retriable_not_finished():
     session_factory = make_session_factory()
     company_id, location, _ = seed_targets(session_factory)
@@ -326,6 +488,7 @@ def test_incomplete_run_stores_reviews_but_stays_retriable_not_finished():
     assert result["status"] == "failed"
     assert result["metadata"]["retriable"] is True
     assert result["metadata"]["failure_code"] == "APIFY_RUN_POLL_TIMEOUT"
+    assert result["metadata"]["stop_reason"] == "source_not_confirmed"
     assert result["total_inserted"] == 2
     checkpoint = store.load(
         CrawlTarget.from_location(service.location_service.get_location(location.id))

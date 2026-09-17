@@ -34,8 +34,8 @@ class CrawlTargetRequest(BaseModel):
     # max_reviews_to_collect to make the semantics clearer: this is a maximum
     # number of matching reviews to collect, not a promise that many new rows
     # will be inserted.
-    target_review_count: int | None = Field(default=None, ge=1, le=300)
-    max_reviews_to_collect: int | None = Field(default=None, ge=1, le=300)
+    target_review_count: int | None = Field(default=None, ge=1, le=100_000)
+    max_reviews_to_collect: int | None = Field(default=None, ge=1, le=100_000)
     # Safety limit for unique review cards scanned while trying to satisfy a
     # date window. It lets crawler pass duplicates/out-of-range rows without
     # holding the worker indefinitely.
@@ -43,6 +43,8 @@ class CrawlTargetRequest(BaseModel):
     crawl_mode: Literal["initial_backfill", "regular_delta", "custom_range"] | None = (
         Field(default=None)
     )
+    coverage: Literal["full_backfill", "date_window", "delta"] | None = None
+    budget: int | None = Field(default=None, ge=1, le=100_000)
 
     # Opsional dan backward-compatible: tidak dikirim = ambil semua tanggal.
     date_from: datetime | None = Field(default=None)
@@ -67,6 +69,15 @@ class CrawlTargetRequest(BaseModel):
                 "target_review_count and max_reviews_to_collect must match "
                 "when both are supplied."
             )
+        # Hanya memeriksa yang dikirim eksplisit. Coverage turunan (dari
+        # crawl_mode / date_range tingkat batch) baru bisa ditentukan router,
+        # yang melihat seluruh batch.
+        if self.coverage == "date_window" and self.budget is not None:
+            raise ValueError("budget is not allowed for date_window coverage.")
+        if self.coverage == "full_backfill" and (
+            self.date_from is not None or self.date_to is not None
+        ):
+            raise ValueError("full_backfill coverage does not accept date bounds.")
         if self.kind == "location":
             if self.onebox_location_id is None:
                 raise ValueError(
@@ -90,7 +101,7 @@ class CrawlBatchCreateRequest(BaseModel):
     crawl_mode: Literal["initial_backfill", "regular_delta", "custom_range"] | None = (
         Field(default=None)
     )
-    max_reviews_to_collect: int | None = Field(default=None, ge=1, le=300)
+    max_reviews_to_collect: int | None = Field(default=None, ge=1, le=100_000)
     scan_limit: int | None = Field(default=None, ge=1, le=5000)
     date_range: CrawlDateRangeRequest | None = None
     dry_run: bool = False

@@ -173,6 +173,7 @@ class ApifyReviewClient(ReviewSourceClient):
                 self._save_checkpoint(crawl_target, effective_sort, last_review)
                 self.last_metadata["matched_review_cards"] = len(reviews)
                 self.last_metadata["scraped_review_cards"] = len(reviews)
+                self.last_metadata["collected_unique"] = len(seen_review_ids)
                 raise ApifyRunIncompleteError(
                     f"Apify actor run ended with status {status}.",
                     reviews=reviews,
@@ -200,6 +201,7 @@ class ApifyReviewClient(ReviewSourceClient):
             self._save_checkpoint(crawl_target, effective_sort, last_review)
         self.last_metadata["matched_review_cards"] = len(reviews)
         self.last_metadata["scraped_review_cards"] = len(reviews)
+        self.last_metadata["collected_unique"] = len(seen_review_ids)
         return reviews
 
     def _save_checkpoint(
@@ -227,6 +229,9 @@ class ApifyReviewClient(ReviewSourceClient):
         if "place_rating" not in self.last_metadata:
             self.last_metadata["place_rating"] = item.get("place_rating")
             self.last_metadata["place_review_count"] = item.get("place_reviews_count")
+            self.last_metadata["expected_review_count"] = item.get(
+                "place_reviews_count"
+            )
             self.last_metadata["rating_snapshot_at"] = item.get("scraped_at")
             self.last_metadata["rating_snapshot"] = {
                 "source": "google_maps",

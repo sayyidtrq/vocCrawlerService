@@ -37,6 +37,8 @@ class ClaimedCrawlJob:
     max_reviews_to_collect: int | None = None
     scan_limit: int | None = None
     dry_run: bool = False
+    coverage: str = "delta"
+    budget: int | None = None
 
 
 class CrawlWorker:
@@ -126,6 +128,7 @@ class CrawlWorker:
                 batch.status = "running"
                 batch.started_at = batch.started_at or now
             request_options = dict((job.result_json or {}).get("request") or {})
+            crawl_mode = request_options.get("crawl_mode") or "regular_delta"
             session.commit()
             return ClaimedCrawlJob(
                 id=job.id,
@@ -138,7 +141,14 @@ class CrawlWorker:
                 date_from=job.date_from,
                 date_to=job.date_to,
                 sort_by=job.sort_by or request_options.get("sort_by") or "newest",
-                crawl_mode=request_options.get("crawl_mode") or "regular_delta",
+                crawl_mode=crawl_mode,
+                coverage=request_options.get("coverage")
+                or {
+                    "initial_backfill": "full_backfill",
+                    "custom_range": "date_window",
+                    "regular_delta": "delta",
+                }.get(crawl_mode, "delta"),
+                budget=request_options.get("budget"),
                 max_reviews_to_collect=(
                     request_options.get("max_reviews_to_collect")
                     or job.target_review_count
@@ -173,7 +183,10 @@ class CrawlWorker:
                 return self._finish(
                     claimed,
                     status="skipped",
-                    result={"reason": "target_disabled_or_removed"},
+                    result={
+                        "reason": "target_disabled_or_removed",
+                        "metadata": {"stop_reason": "target_disabled"},
+                    },
                     error_code="TARGET_DISABLED",
                     error_message="Target is no longer eligible for crawling.",
                 )
@@ -182,6 +195,8 @@ class CrawlWorker:
             result = fetch_service.fetch_location(
                 claimed.location_id,
                 target=claimed.max_reviews_to_collect or claimed.target_review_count,
+                coverage=claimed.coverage,
+                budget=claimed.budget,
                 date_from=claimed.date_from,
                 date_to=claimed.date_to,
                 sort_by=claimed.sort_by or "newest",
@@ -250,7 +265,10 @@ class CrawlWorker:
             return self._finish(
                 claimed,
                 status="skipped",
-                result={"reason": "target_disabled_or_removed"},
+                result={
+                    "reason": "target_disabled_or_removed",
+                    "metadata": {"stop_reason": "target_disabled"},
+                },
                 error_code="TARGET_DISABLED",
                 error_message="Target is no longer eligible for crawling.",
             )
@@ -259,6 +277,8 @@ class CrawlWorker:
         result = fetch_service.fetch_competitor(
             claimed.competitor_id,
             target=claimed.max_reviews_to_collect or claimed.target_review_count,
+            coverage=claimed.coverage,
+            budget=claimed.budget,
             date_from=claimed.date_from,
             date_to=claimed.date_to,
             sort_by=claimed.sort_by or "newest",
@@ -355,6 +375,8 @@ class CrawlWorker:
                 enriched_result["request"] = previous_request
                 metadata = dict(enriched_result.get("metadata") or {})
                 metadata.setdefault("crawl_mode", previous_request.get("crawl_mode"))
+                metadata.setdefault("coverage", previous_request.get("coverage"))
+                metadata.setdefault("budget", previous_request.get("budget"))
                 metadata.setdefault(
                     "max_reviews_to_collect",
                     previous_request.get("max_reviews_to_collect"),

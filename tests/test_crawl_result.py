@@ -11,9 +11,11 @@ from app.services.crawl_result import (
 @pytest.mark.parametrize(
     ("internal", "public"),
     [
-        ("out_of_range", "older_than_window"),
-        ("time_limit", "timeout"),
-        ("no_new_review_cards", "no_more_reviews"),
+        ("apify_accounts_exhausted", "source_quota_exhausted"),
+        ("out_of_range", "coverage_complete"),
+        ("target_reached", "coverage_complete"),
+        ("time_limit", "deadline_exceeded"),
+        ("no_new_review_cards", "no_new_reviews"),
     ],
 )
 def test_stop_reason_maps_internal_reasons(internal, public):
@@ -21,13 +23,15 @@ def test_stop_reason_maps_internal_reasons(internal, public):
 
 
 def test_stop_reason_passes_through_unmapped_value():
-    assert stop_reason({"metadata": {"stop_reason": "target_reached"}}) == (
-        "target_reached"
+    assert stop_reason({"metadata": {"stop_reason": "sort_unavailable"}}) == (
+        "sort_unavailable"
     )
 
 
 def test_stop_reason_falls_back_to_stopped_reason():
-    assert stop_reason({"metadata": {"stopped_reason": "time_limit"}}) == "timeout"
+    assert stop_reason({"metadata": {"stopped_reason": "time_limit"}}) == (
+        "deadline_exceeded"
+    )
 
 
 def test_stop_reason_returns_none_without_metadata():

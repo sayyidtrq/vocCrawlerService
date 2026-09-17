@@ -20,7 +20,7 @@ router = APIRouter(prefix="/fetch-jobs", tags=["fetch jobs"])
 class FetchJobRequest(BaseModel):
     location_id: int
     source: str | None = None
-    target_review_count: int | None = Field(default=None, ge=1, le=300)
+    target_review_count: int | None = Field(default=None, ge=1, le=100_000)
     dry_run: bool = False
     date_preset: str | None = None
     date_from: datetime | None = None

@@ -23,7 +23,7 @@ class LocationPipelineRequest(BaseModel):
     analyze: bool = True
     export_csv: bool = False
     dry_run: bool = False
-    target_review_count: int | None = Field(default=None, ge=1, le=300)
+    target_review_count: int | None = Field(default=None, ge=1, le=100_000)
     source: str | None = None
 
 

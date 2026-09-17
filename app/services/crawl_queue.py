@@ -18,6 +18,13 @@ from app.services.crawl_result import CrawlRequestSnapshot
 
 logger = logging.getLogger(__name__)
 
+_COVERAGE_TO_CRAWL_MODE = {
+    "full_backfill": "initial_backfill",
+    "date_window": "custom_range",
+    "delta": "regular_delta",
+}
+_CRAWL_MODE_TO_COVERAGE = {value: key for key, value in _COVERAGE_TO_CRAWL_MODE.items()}
+
 
 def _iso(value):
     return value.isoformat() if hasattr(value, "isoformat") else value
@@ -70,6 +77,9 @@ class CrawlQueue:
                     "date_to": _iso(competitor_targets[place_id].get("date_to")),
                     "sort_by": competitor_targets[place_id].get("sort_by")
                     or "newest",
+                    "coverage": competitor_targets[place_id].get("coverage"),
+                    "budget": competitor_targets[place_id].get("budget"),
+                    "crawl_mode": competitor_targets[place_id].get("crawl_mode"),
                 }
                 for place_id in sorted(competitor_targets)
             }
@@ -280,19 +290,25 @@ class CrawlQueue:
                 options = dict(
                     target_crawl_options.get(location.onebox_location_id) or {}
                 )
-                target_count = target_review_counts.get(
-                    location.onebox_location_id,
-                    location.target_review_count,
-                )
                 date_from, date_to = target_date_ranges.get(
                     location.onebox_location_id, (None, None)
                 )
-                crawl_mode = self._normalize_crawl_mode(
-                    options.get("crawl_mode"), date_from, date_to
+                coverage = self._normalize_coverage(
+                    options.get("coverage"),
+                    options.get("crawl_mode"),
+                    date_from,
+                    date_to,
                 )
-                scan_limit = self._normalize_scan_limit(
-                    options.get("scan_limit"), target_count, crawl_mode
+                legacy_budget = target_review_counts.get(location.onebox_location_id)
+                budget = options.get("budget", legacy_budget)
+                budget = self._validate_coverage(
+                    coverage, budget, date_from, date_to, legacy_budget is not None
                 )
+                target_count = budget or self._default_target_count(
+                    coverage, location.target_review_count
+                )
+                crawl_mode = options.get("crawl_mode") or _COVERAGE_TO_CRAWL_MODE[coverage]
+                scan_limit = self._normalize_scan_limit(options.get("scan_limit"))
                 session.add(
                     CrawlJob(
                         batch_id=batch.id,
@@ -308,8 +324,10 @@ class CrawlQueue:
                         ),
                         target_review_count=target_count,
                         result_json=self._initial_job_result(
+                            coverage=coverage,
+                            budget=budget,
                             crawl_mode=crawl_mode,
-                            max_reviews_to_collect=target_count,
+                            max_reviews_to_collect=budget,
                             scan_limit=scan_limit,
                             dry_run=bool(options.get("dry_run", False)),
                             date_from=date_from,
@@ -323,18 +341,21 @@ class CrawlQueue:
                 )
             for competitor in competitors:
                 spec = competitor_specs[competitor.external_place_id]
-                target_count = (
-                    spec.get("target_review_count")
-                    or competitor.target_review_count
-                )
                 date_from = spec.get("date_from")
                 date_to = spec.get("date_to")
-                crawl_mode = self._normalize_crawl_mode(
-                    spec.get("crawl_mode"), date_from, date_to
+                coverage = self._normalize_coverage(
+                    spec.get("coverage"), spec.get("crawl_mode"), date_from, date_to
                 )
-                scan_limit = self._normalize_scan_limit(
-                    spec.get("scan_limit"), target_count, crawl_mode
+                legacy_budget = spec.get("target_review_count")
+                budget = self._validate_coverage(
+                    coverage, spec.get("budget", legacy_budget), date_from, date_to,
+                    legacy_budget is not None,
                 )
+                target_count = budget or self._default_target_count(
+                    coverage, competitor.target_review_count
+                )
+                crawl_mode = spec.get("crawl_mode") or _COVERAGE_TO_CRAWL_MODE[coverage]
+                scan_limit = self._normalize_scan_limit(spec.get("scan_limit"))
                 session.add(
                     CrawlJob(
                         batch_id=batch.id,
@@ -349,8 +370,10 @@ class CrawlQueue:
                         sort_by=spec.get("sort_by") or "newest",
                         target_review_count=target_count,
                         result_json=self._initial_job_result(
+                            coverage=coverage,
+                            budget=budget,
                             crawl_mode=crawl_mode,
-                            max_reviews_to_collect=target_count,
+                            max_reviews_to_collect=budget,
                             scan_limit=scan_limit,
                             dry_run=bool(spec.get("dry_run", False)),
                             date_from=date_from,
@@ -397,33 +420,82 @@ class CrawlQueue:
         return "regular_delta"
 
     @staticmethod
+    def _normalize_coverage(
+        coverage: str | None,
+        crawl_mode: str | None,
+        date_from: datetime | None,
+        date_to: datetime | None,
+    ) -> str:
+        if coverage in _COVERAGE_TO_CRAWL_MODE:
+            return coverage
+        return _CRAWL_MODE_TO_COVERAGE.get(
+            crawl_mode, "date_window" if date_from or date_to else "delta"
+        )
+
+    def _default_target_count(self, coverage: str, target_review_count: int | None) -> int:
+        # date_window dan full_backfill tidak dibatasi target per cabang;
+        # delta memakai target cabang (batas yang diatur di OneBox), lalu default.
+        if coverage in {"date_window", "full_backfill"}:
+            return self.settings.crawl_max_target_reviews
+        return target_review_count or self.settings.crawl_default_review_limit
+
+    @staticmethod
+    def _validate_coverage(
+        coverage: str,
+        budget: int | None,
+        date_from: datetime | None,
+        date_to: datetime | None,
+        legacy_budget: bool,
+    ) -> int | None:
+        if coverage == "date_window":
+            if date_from is None and date_to is None:
+                raise CrawlQueueError(
+                    400,
+                    "INVALID_PARAMETER",
+                    "date_window coverage requires date_from or date_to.",
+                )
+            if budget is not None and not legacy_budget:
+                raise CrawlQueueError(
+                    400,
+                    "INVALID_PARAMETER",
+                    "budget is not allowed for date_window coverage.",
+                )
+            if budget is not None:
+                logger.info("Ignoring legacy review limit for date_window coverage.")
+            return None
+        if coverage == "full_backfill" and (date_from is not None or date_to is not None):
+            raise CrawlQueueError(
+                400,
+                "INVALID_PARAMETER",
+                "full_backfill coverage does not accept date bounds.",
+            )
+        return budget
+
+    @staticmethod
     def _normalize_scan_limit(
         scan_limit: object,
-        max_reviews_to_collect: int,
-        crawl_mode: str,
-    ) -> int:
-        default_multiplier = 5 if crawl_mode == "custom_range" else 1
-        if crawl_mode == "initial_backfill":
-            default_multiplier = 10
-        default_limit = max(max_reviews_to_collect, max_reviews_to_collect * default_multiplier)
+    ) -> int | None:
         try:
-            value = int(scan_limit) if scan_limit is not None else default_limit
+            return int(scan_limit) if scan_limit is not None else None
         except (TypeError, ValueError):
-            value = default_limit
-        return max(max_reviews_to_collect, min(value, 5000))
+            return None
 
     @staticmethod
     def _initial_job_result(
         *,
+        coverage: str,
+        budget: int | None,
         crawl_mode: str,
-        max_reviews_to_collect: int,
-        scan_limit: int,
+        max_reviews_to_collect: int | None,
+        scan_limit: int | None,
         dry_run: bool,
         date_from: datetime | None,
         date_to: datetime | None,
         sort_by: str,
     ) -> dict:
         request: CrawlRequestSnapshot = {
+            "coverage": coverage,
+            "budget": budget,
             "crawl_mode": crawl_mode,
             "max_reviews_to_collect": max_reviews_to_collect,
             "scan_limit": scan_limit,
@@ -555,4 +627,3 @@ class CrawlQueue:
                 serialize_batch(session, batch, include_jobs=False)
                 for batch in batches
             ]
-

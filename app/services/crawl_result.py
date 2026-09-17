@@ -11,6 +11,8 @@ class RatingSnapshot(TypedDict):
 
 
 class CrawlRequestSnapshot(TypedDict):
+    coverage: str
+    budget: int | None
     crawl_mode: str
     apify_run_id: str
     apify_dataset_id: str
@@ -24,6 +26,12 @@ class CrawlRequestSnapshot(TypedDict):
 
 
 class CrawlResultMetadata(TypedDict, total=False):
+    coverage: str
+    budget: int | None
+    expected_review_count: int | None
+    collected_unique: int
+    completeness: str
+    completeness_ratio: float | None
     target_review_count: int
     max_reviews_to_collect: int
     scan_limit: int
@@ -78,9 +86,11 @@ def stop_reason(result: dict) -> str | None:
     metadata = result.get("metadata") or {}
     reason = metadata.get("stop_reason") or metadata.get("stopped_reason")
     mapping = {
-        "out_of_range": "older_than_window",
-        "time_limit": "timeout",
-        "no_new_review_cards": "no_more_reviews",
+        "apify_accounts_exhausted": "source_quota_exhausted",
+        "time_limit": "deadline_exceeded",
+        "no_new_review_cards": "no_new_reviews",
+        "out_of_range": "coverage_complete",
+        "target_reached": "coverage_complete",
     }
     return mapping.get(reason, reason)
 

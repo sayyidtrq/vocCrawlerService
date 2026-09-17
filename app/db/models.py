@@ -275,7 +275,8 @@ class Location(Base):
     google_maps_url: Mapped[str | None] = mapped_column(Text)
     google_reviews_url: Mapped[str | None] = mapped_column(Text)
     target_review_count: Mapped[int] = mapped_column(
-        Integer, default=100, nullable=False
+        # Keep in sync with settings.crawl_default_review_limit.
+        Integer, default=5000, nullable=False
     )
     apify_resume_checkpoint: Mapped[dict | None] = mapped_column(JsonType)
     onebox_connection_id: Mapped[int | None] = mapped_column(Integer)
@@ -504,7 +505,8 @@ class Competitor(Base):
     google_maps_url: Mapped[str | None] = mapped_column(Text)
     google_reviews_url: Mapped[str | None] = mapped_column(Text)
     target_review_count: Mapped[int] = mapped_column(
-        Integer, default=100, nullable=False
+        # Keep in sync with settings.crawl_default_review_limit.
+        Integer, default=5000, nullable=False
     )
     apify_resume_checkpoint: Mapped[dict | None] = mapped_column(JsonType)
     onebox_connection_id: Mapped[int | None] = mapped_column(Integer)
