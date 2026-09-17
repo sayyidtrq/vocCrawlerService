@@ -51,6 +51,8 @@ _BLANK_USES_DEFAULT_FIELDS = (
     "crawl_completeness_tolerance",
     "crawl_watermark_margin_days",
     "crawl_safety_sweep_days",
+    "crawl_source_poll_seconds",
+    "apify_backfill_deadline_seconds",
     "apify_actor_id",
     "apify_run_timeout_seconds",
     "apify_poll_interval_seconds",
@@ -124,6 +126,10 @@ class Settings(BaseModel):
     crawl_completeness_tolerance: float = 0.98
     crawl_watermark_margin_days: int = 1
     crawl_safety_sweep_days: int = 30
+    # Run Apify diparkir (spec CS-3): worker tidak menunggu run selesai.
+    crawl_async_source_runs: bool = True
+    crawl_source_poll_seconds: int = 30
+    apify_backfill_deadline_seconds: int = 7200
     apify_api_tokens: Annotated[list[str], NoDecode] = []
     apify_actor_id: str = "web_wanderer/google-reviews-scraper"
     apify_run_timeout_seconds: int = 300

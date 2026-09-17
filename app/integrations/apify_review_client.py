@@ -59,6 +59,7 @@ class ApifyReviewClient(ReviewSourceClient):
         self.checkpoint_store = checkpoint_store
         self.apify_client = apify_client or ApifyClient(settings)
         self.last_metadata: dict = {}
+        self._last_drained: dict | None = None
 
     def fetch_reviews(
         self,
@@ -69,32 +70,9 @@ class ApifyReviewClient(ReviewSourceClient):
         date_to: datetime | None = None,
     ) -> list[dict]:
         del date_to  # Apify has no actor-side upper bound.
-        if sort_by not in SORT_BY_MAP:
-            raise ReviewSourceError(
-                f"Unsupported review sort: {sort_by}.",
-                code="APIFY_INVALID_SORT",
-            )
-        place_id = (crawl_target.external_place_id or "").strip()
-        if not place_id:
-            raise ReviewSourceError(
-                "External Place ID is required for Apify.",
-                code="APIFY_PLACE_ID_REQUIRED",
-            )
-
-        effective_sort, lower_bound = (
-            self.checkpoint_store.resolve_effective_lower_bound(
-                crawl_target, sort_by, date_from
-            )
+        place_id, effective_sort, lower_bound = self._prepare(
+            crawl_target, limit, sort_by, date_from
         )
-        self.last_metadata = {
-            "target_review_count": limit,
-            "max_reviews_to_collect": limit,
-            "sort_by": effective_sort,
-            "sort_applied": True,
-            "reviews_scanned": 0,
-            "matched_review_cards": 0,
-            "failed_review_cards": 0,
-        }
         reviews: list[dict] = []
         seen_review_ids: set[str] = set()
         last_review: dict | None = None
@@ -103,28 +81,9 @@ class ApifyReviewClient(ReviewSourceClient):
         while len(reviews) < limit:
             try:
                 token = self.token_pool.current()
-                actor_input = {
-                    "place_ids": [place_id],
-                    "limit": limit,
-                    "order": SORT_BY_MAP[effective_sort],
-                    # Defaults to false on the actor, which returns every
-                    # review with reviewer_name/reviewer_id/reviewer_url
-                    # nulled out - verified across 2920 real records from
-                    # three places, all of them anonymous. The parser maps
-                    # four reviewer fields (apify_review_parser.py) and every
-                    # one of them was landing as NULL, so a VoC ticket raised
-                    # from a complaint had no customer on it.
-                    "include_personal": True,
-                    # Confirmed against a real 400 error from the actor:
-                    # valid values are "all", "google", "tripadvisor",
-                    # "trip_com", "priceline", "zenhotels" - lowercase
-                    # "google", not "Googles" as an earlier docs-page
-                    # summary had it.
-                    "source": "google",
-                }
-                if lower_bound is not None:
-                    # anyDate wants YYYY-MM-DD, not a full ISO timestamp.
-                    actor_input["anyDate"] = lower_bound.date().isoformat()
+                actor_input = self._actor_input(
+                    place_id, limit, effective_sort, lower_bound
+                )
 
                 run_id, dataset_id = self.apify_client.start_run(
                     self.settings.apify_actor_id, actor_input, token=token
@@ -138,21 +97,12 @@ class ApifyReviewClient(ReviewSourceClient):
                 )
                 status = self.apify_client.get_run_status(run_id, token=token)
 
-                for item in self.apify_client.iter_dataset_items(
-                    dataset_id, token=token
-                ):
-                    parsed = ApifyReviewParser.parse_review(item)
-                    last_review = parsed
-                    self._capture_place_metadata(item)
-                    self.last_metadata["reviews_scanned"] += 1
-                    review_id = str(parsed.get("external_review_id") or "")
-                    if review_id and review_id in seen_review_ids:
-                        continue
-                    if review_id:
-                        seen_review_ids.add(review_id)
-                    reviews.append(parsed)
-                    if len(reviews) >= limit:
-                        break
+                self._last_drained = last_review
+                try:
+                    self._drain(dataset_id, token, limit, reviews, seen_review_ids)
+                finally:
+                    # Tetap terbaca walau akun habis di tengah dataset.
+                    last_review = self._last_drained
 
                 if status == "SUCCEEDED":
                     self.checkpoint_store.clear(crawl_target)
@@ -203,6 +153,173 @@ class ApifyReviewClient(ReviewSourceClient):
         self.last_metadata["scraped_review_cards"] = len(reviews)
         self.last_metadata["collected_unique"] = len(seen_review_ids)
         return reviews
+
+    def _prepare(self, crawl_target, limit: int, sort_by: str, date_from):
+        if sort_by not in SORT_BY_MAP:
+            raise ReviewSourceError(
+                f"Unsupported review sort: {sort_by}.",
+                code="APIFY_INVALID_SORT",
+            )
+        place_id = (crawl_target.external_place_id or "").strip()
+        if not place_id:
+            raise ReviewSourceError(
+                "External Place ID is required for Apify.",
+                code="APIFY_PLACE_ID_REQUIRED",
+            )
+        effective_sort, lower_bound = (
+            self.checkpoint_store.resolve_effective_lower_bound(
+                crawl_target, sort_by, date_from
+            )
+        )
+        self.last_metadata = {
+            "target_review_count": limit,
+            "max_reviews_to_collect": limit,
+            "sort_by": effective_sort,
+            "sort_applied": True,
+            "reviews_scanned": 0,
+            "matched_review_cards": 0,
+            "failed_review_cards": 0,
+        }
+        return place_id, effective_sort, lower_bound
+
+    @staticmethod
+    def _actor_input(place_id: str, limit: int, effective_sort: str, lower_bound) -> dict:
+        actor_input = {
+            "place_ids": [place_id],
+            "limit": limit,
+            "order": SORT_BY_MAP[effective_sort],
+            # Defaults to false on the actor, which returns every review with
+            # reviewer_name/reviewer_id/reviewer_url nulled out - verified
+            # across 2920 real records from three places, all of them
+            # anonymous, so a VoC ticket raised from a complaint had no
+            # customer on it.
+            "include_personal": True,
+            # Confirmed against a real 400 error from the actor: valid values
+            # are "all", "google", "tripadvisor", "trip_com", "priceline",
+            # "zenhotels" - lowercase "google", not "Googles" as an earlier
+            # docs-page summary had it.
+            "source": "google",
+        }
+        if lower_bound is not None:
+            # anyDate wants YYYY-MM-DD, not a full ISO timestamp.
+            actor_input["anyDate"] = lower_bound.date().isoformat()
+        return actor_input
+
+    def _drain(
+        self,
+        dataset_id: str,
+        token: str,
+        limit: int,
+        reviews: list[dict],
+        seen_review_ids: set[str],
+    ) -> None:
+        """Baca dataset ke `reviews`, lewati id ganda.
+
+        Item terakhir yang terbaca disimpan di self._last_drained, bukan
+        dikembalikan, supaya tetap ada ketika iterasi dihentikan exception.
+        """
+        for item in self.apify_client.iter_dataset_items(dataset_id, token=token):
+            parsed = ApifyReviewParser.parse_review(item)
+            self._last_drained = parsed
+            self._capture_place_metadata(item)
+            self.last_metadata["reviews_scanned"] += 1
+            review_id = str(parsed.get("external_review_id") or "")
+            if review_id and review_id in seen_review_ids:
+                continue
+            if review_id:
+                seen_review_ids.add(review_id)
+            reviews.append(parsed)
+            if len(reviews) >= limit:
+                break
+
+    # --- run yang diparkir (spec CS-3) -------------------------------------
+
+    def start_fetch(
+        self, crawl_target, limit: int, sort_by: str = "newest", date_from=None
+    ) -> dict:
+        """Mulai run Apify tanpa menunggunya. Kembalikan handle yang JSON-aman.
+
+        Akun yang habis dirotasi di sini; bila semua habis, error-nya naik ke
+        pemanggil (ApifyAllAccountsExhaustedError).
+        """
+        place_id, effective_sort, lower_bound = self._prepare(
+            crawl_target, limit, sort_by, date_from
+        )
+        actor_input = self._actor_input(place_id, limit, effective_sort, lower_bound)
+        while True:
+            token = self.token_pool.current()
+            try:
+                run_id, dataset_id = self.apify_client.start_run(
+                    self.settings.apify_actor_id, actor_input, token=token
+                )
+            except ApifyAccountExhaustedError:
+                if self.token_pool.rotate() is None:
+                    raise ApifyAllAccountsExhaustedError(
+                        "All configured Apify accounts are exhausted."
+                    ) from None
+                continue
+            return {
+                "run_id": run_id,
+                "dataset_id": dataset_id,
+                "token_index": self.token_pool.current_index,
+                "effective_sort": effective_sort,
+                "limit": limit,
+                "started_at": datetime.now(timezone.utc).isoformat(),
+            }
+
+    def poll_fetch(self, handle: dict) -> tuple[str, int | None]:
+        """(status, jumlah item dataset sejauh ini) tanpa menunggu."""
+        token = self.token_pool.token_at(int(handle["token_index"]))
+        status = self.apify_client.get_run_status_once(handle["run_id"], token=token)
+        try:
+            count = self.apify_client.dataset_item_count(
+                handle["dataset_id"], token=token
+            )
+        except ReviewSourceError:
+            count = None  # kemajuan bersifat kosmetik
+        return status, count
+
+    def abort_fetch(self, handle: dict) -> None:
+        token = self.token_pool.token_at(int(handle["token_index"]))
+        self.apify_client.abort_run(handle["run_id"], token=token)
+
+    def finish_fetch(self, crawl_target, handle: dict, status: str) -> list[dict]:
+        """Kuras dataset run yang sudah berhenti; sama dengan jalur sinkron."""
+        limit = int(handle["limit"])
+        effective_sort = handle["effective_sort"]
+        self.last_metadata = {
+            "target_review_count": limit,
+            "max_reviews_to_collect": limit,
+            "sort_by": effective_sort,
+            "sort_applied": True,
+            "reviews_scanned": 0,
+            "matched_review_cards": 0,
+            "failed_review_cards": 0,
+            "apify_run_id": handle["run_id"],
+            "apify_dataset_id": handle["dataset_id"],
+            "apify_account_index_used": handle["token_index"],
+        }
+        token = self.token_pool.token_at(int(handle["token_index"]))
+        reviews: list[dict] = []
+        seen_review_ids: set[str] = set()
+        self._last_drained = None
+        try:
+            self._drain(handle["dataset_id"], token, limit, reviews, seen_review_ids)
+        except ApifyAccountExhaustedError:
+            self.last_metadata["stopped_reason"] = "apify_accounts_exhausted"
+        last_review = self._last_drained
+        self.last_metadata["matched_review_cards"] = len(reviews)
+        self.last_metadata["scraped_review_cards"] = len(reviews)
+        self.last_metadata["collected_unique"] = len(seen_review_ids)
+        if status == "SUCCEEDED":
+            self.checkpoint_store.clear(crawl_target)
+            return reviews
+        self._save_checkpoint(crawl_target, effective_sort, last_review)
+        raise ApifyRunIncompleteError(
+            f"Apify actor run ended with status {status}.",
+            reviews=reviews,
+            code=f"APIFY_RUN_{status.replace('-', '_')}",
+        )
 
     def _save_checkpoint(
         self, crawl_target, effective_sort: str, last_review: dict | None

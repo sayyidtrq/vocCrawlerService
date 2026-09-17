@@ -14,7 +14,10 @@ from app.integrations.apify_review_client import (
     ApifyReviewClient,
     ApifyRunIncompleteError,
 )
-from app.integrations.apify_token_pool import ApifyTokenPool
+from app.integrations.apify_token_pool import (
+    ApifyAllAccountsExhaustedError,
+    ApifyTokenPool,
+)
 from app.integrations.review_source_client import ReviewSourceError
 from app.services.apify_checkpoint_store import ApifyCheckpointStore
 from app.services.competitor_review_service import CompetitorReviewService
@@ -30,8 +33,14 @@ from app.utils.date_parser import is_within_date_range_approx
 
 logger = logging.getLogger(__name__)
 
+DEADLINE_CODE = "APIFY_RUN_DEADLINE_EXCEEDED"
+_SOURCE_TERMINAL = {"SUCCEEDED", "FAILED", "ABORTED", "TIMED-OUT"}
+
 
 class ApifyFetchService:
+    # CrawlWorker hanya memarkir run untuk layanan yang mendukungnya.
+    supports_parking = True
+
     def __init__(
         self,
         company_id: int | None = None,
@@ -82,12 +91,16 @@ class ApifyFetchService:
         on_progress=None,
         sort_by: str = "newest",
         review_quota_remaining: int | None = None,
+        park: bool = False,
+        source_run: dict | None = None,
     ) -> CrawlFetchResult:
         location = self.location_service.get_location(location_id)
         if location is None:
             raise ValueError("Location not found.")
-        return self._run_fetch(
+        return self._dispatch(
             CrawlTarget.from_location(location),
+            park=park,
+            source_run=source_run,
             target=target,
             coverage=coverage or "delta",
             budget=budget,
@@ -113,6 +126,8 @@ class ApifyFetchService:
         on_progress=None,
         sort_by: str = "newest",
         review_quota_remaining: int | None = None,
+        park: bool = False,
+        source_run: dict | None = None,
     ) -> CrawlFetchResult:
         """Store competitor reviews without writing a location fetch log."""
         with self.session_factory() as session:
@@ -124,8 +139,10 @@ class ApifyFetchService:
                 raise ValueError("Competitor not found.")
             competitor_id_value = competitor.id
             crawl_target = CrawlTarget.from_competitor(competitor)
-        return self._run_fetch(
+        return self._dispatch(
             crawl_target,
+            park=park,
+            source_run=source_run,
             target=target,
             coverage=coverage or "delta",
             budget=budget,
@@ -144,6 +161,22 @@ class ApifyFetchService:
             enable_fetch_log=False,
         )
 
+    def _dispatch(self, crawl_target: CrawlTarget, *, park: bool,
+                  source_run: dict | None, **run_kwargs):
+        """Sinkron seperti dulu, atau lewat run yang diparkir (CS-3).
+
+        Hasil parkir berbentuk {"parked": handle}; pemanggil (CrawlWorker)
+        menyimpan handle itu dan mengklaim job lagi nanti.
+        """
+        if not park and source_run is None:
+            return self._run_fetch(crawl_target, **run_kwargs)
+        return self._parked_fetch(
+            crawl_target,
+            run_kwargs,
+            source_run=source_run,
+            on_progress=run_kwargs.get("on_progress"),
+        )
+
     def _run_fetch(
         self,
         crawl_target: CrawlTarget,
@@ -160,13 +193,15 @@ class ApifyFetchService:
         enable_fetch_log: bool,
         review_exists=None,
         review_quota_remaining: int | None = None,
+        fetch_raw=None,
     ) -> CrawlFetchResult:
-        requested_target = self._resolve_actor_limit(
+        requested_target, effective_from, swept = self._plan(
             crawl_target,
             target=target,
             coverage=coverage,
             budget=budget,
             new_contract=new_contract,
+            date_from=date_from,
         )
         effective_budget = None if coverage == "date_window" else requested_target
         result: CrawlFetchResult = {
@@ -191,15 +226,6 @@ class ApifyFetchService:
             },
         }
         now = datetime.now(timezone.utc)
-        effective_from, swept = date_from, False
-        if new_contract and coverage == "delta":
-            effective_from, swept = self.coverage_store.delta_lower_bound(
-                crawl_target,
-                date_from,
-                margin=timedelta(days=self.settings.crawl_watermark_margin_days),
-                sweep_margin=timedelta(days=self.settings.crawl_safety_sweep_days),
-                now=now,
-            )
         result["metadata"]["effective_date_from"] = (
             effective_from.isoformat() if effective_from else None
         )
@@ -218,13 +244,16 @@ class ApifyFetchService:
         try:
             if on_progress is not None:
                 on_progress(0, requested_target, 0)
-            raw_reviews = self.client.fetch_reviews(
-                crawl_target,
-                limit=requested_target,
-                sort_by=sort_by,
-                date_from=effective_from,
-                date_to=date_to,
-            )
+            if fetch_raw is None:
+                raw_reviews = self.client.fetch_reviews(
+                    crawl_target,
+                    limit=requested_target,
+                    sort_by=sort_by,
+                    date_from=effective_from,
+                    date_to=date_to,
+                )
+            else:
+                raw_reviews = fetch_raw()
             if on_progress is not None:
                 on_progress(len(raw_reviews), requested_target, len(raw_reviews))
             result["metadata"] = dict(self.client.last_metadata)
@@ -336,10 +365,16 @@ class ApifyFetchService:
                     "date_from": date_from.isoformat() if date_from else None,
                     "date_to": date_to.isoformat() if date_to else None,
                     "failure_code": exc.code,
-                    "retriable": True,
+                    # Run yang melewati tenggat akan melewatinya lagi; jangan
+                    # dibayar ulang otomatis.
+                    "retriable": exc.code != DEADLINE_CODE,
                     "coverage": coverage,
                     "budget": effective_budget,
-                    "stop_reason": "source_not_confirmed",
+                    "stop_reason": (
+                        "deadline_exceeded"
+                        if exc.code == DEADLINE_CODE
+                        else "source_not_confirmed"
+                    ),
                 }
             )
             result["total_fetched"] = len(exc.reviews)
@@ -396,6 +431,95 @@ class ApifyFetchService:
             if enable_fetch_log:
                 self.fetch_log_service.finish_log(log_id, result)
         return result
+
+    def _plan(
+        self,
+        crawl_target: CrawlTarget,
+        *,
+        target: int | None,
+        coverage: str,
+        budget: int | None,
+        new_contract: bool,
+        date_from: datetime | None,
+    ) -> tuple[int, datetime | None, bool]:
+        requested_target = self._resolve_actor_limit(
+            crawl_target,
+            target=target,
+            coverage=coverage,
+            budget=budget,
+            new_contract=new_contract,
+        )
+        effective_from, swept = date_from, False
+        if new_contract and coverage == "delta":
+            effective_from, swept = self.coverage_store.delta_lower_bound(
+                crawl_target,
+                date_from,
+                margin=timedelta(days=self.settings.crawl_watermark_margin_days),
+                sweep_margin=timedelta(days=self.settings.crawl_safety_sweep_days),
+                now=datetime.now(timezone.utc),
+            )
+        return requested_target, effective_from, swept
+
+    def _parked_fetch(self, crawl_target: CrawlTarget, run_kwargs: dict, *,
+                      source_run: dict | None, on_progress):
+        """Jalur run yang diparkir (spec CS-3).
+
+        Tanpa source_run: mulai run lalu kembalikan {"parked": handle}.
+        Dengan source_run: cek sekali; masih jalan -> parkir lagi; sudah
+        berhenti atau lewat tenggat -> selesaikan lewat _run_fetch biasa.
+        """
+        client = self.client
+        if source_run is None:
+            limit, effective_from, _ = self._plan(
+                crawl_target,
+                target=run_kwargs["target"],
+                coverage=run_kwargs["coverage"],
+                budget=run_kwargs["budget"],
+                new_contract=run_kwargs["new_contract"],
+                date_from=run_kwargs["date_from"],
+            )
+            try:
+                handle = client.start_fetch(
+                    crawl_target,
+                    limit,
+                    sort_by=run_kwargs["sort_by"],
+                    date_from=effective_from,
+                )
+            except ApifyAllAccountsExhaustedError:
+                def exhausted():
+                    client.last_metadata["stopped_reason"] = "apify_accounts_exhausted"
+                    client.last_metadata["collected_unique"] = 0
+                    return []
+
+                return self._run_fetch(crawl_target, fetch_raw=exhausted, **run_kwargs)
+            except ReviewSourceError as exc:
+                def rejected(error=exc):
+                    raise error
+
+                return self._run_fetch(crawl_target, fetch_raw=rejected, **run_kwargs)
+            if on_progress is not None:
+                on_progress(0, limit, 0)
+            return {"parked": handle}
+
+        status, count = client.poll_fetch(source_run)
+        if status not in _SOURCE_TERMINAL:
+            started = datetime.fromisoformat(source_run["started_at"])
+            elapsed = (datetime.now(timezone.utc) - started).total_seconds()
+            if elapsed < self.settings.apify_backfill_deadline_seconds:
+                if on_progress is not None and count is not None:
+                    on_progress(count, int(source_run["limit"]), count)
+                return {"parked": source_run}
+            try:
+                client.abort_fetch(source_run)
+            except ReviewSourceError:
+                logger.warning("Could not abort Apify run %s", source_run["run_id"])
+            status = DEADLINE_CODE.removeprefix("APIFY_RUN_")
+
+        return self._run_fetch(
+            crawl_target,
+            fetch_raw=lambda: client.finish_fetch(crawl_target, source_run, status),
+            **run_kwargs,
+        )
 
     def _record_coverage(
         self,

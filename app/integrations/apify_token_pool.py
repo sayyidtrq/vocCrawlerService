@@ -21,6 +21,15 @@ class ApifyTokenPool:
             )
         return self._tokens[self._index]
 
+    def token_at(self, index: int) -> str:
+        """Token akun tertentu - run yang diparkir harus dilanjutkan dengan akun
+        yang memulainya."""
+        if not 0 <= index < len(self._tokens):
+            raise ApifyAllAccountsExhaustedError(
+                f"Apify account #{index} is not configured."
+            )
+        return self._tokens[index]
+
     def rotate(self) -> str | None:
         self._index += 1
         return self._tokens[self._index] if self._index < len(self._tokens) else None

@@ -69,6 +69,32 @@ class ApifyClient:
                 return "POLL_TIMEOUT"
             time.sleep(self.settings.apify_poll_interval_seconds)
 
+    def get_run_status_once(self, run_id: str, *, token: str) -> str:
+        """Satu kali cek status, tanpa menunggu - untuk run yang diparkir."""
+        response = self._request(
+            "get",
+            f"{self.base_url}/actor-runs/{quote(run_id, safe='')}",
+            token=token,
+        )
+        return str(self._json_data(response).get("status") or "").upper()
+
+    def dataset_item_count(self, dataset_id: str, *, token: str) -> int | None:
+        response = self._request(
+            "get",
+            f"{self.base_url}/datasets/{quote(dataset_id, safe='')}",
+            token=token,
+        )
+        count = self._json_data(response).get("itemCount")
+        return int(count) if count is not None else None
+
+    def abort_run(self, run_id: str, *, token: str) -> None:
+        # Menghentikan tagihan untuk run yang melewati tenggat.
+        self._request(
+            "post",
+            f"{self.base_url}/actor-runs/{quote(run_id, safe='')}/abort",
+            token=token,
+        )
+
     def iter_dataset_items(self, dataset_id: str, *, token: str) -> Iterator[dict]:
         offset = 0
         page_size = 1000

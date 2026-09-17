@@ -40,6 +40,7 @@ class ClaimedCrawlJob:
     coverage: str = "delta"
     budget: int | None = None
     review_quota_remaining: int | None = None
+    source_run: dict | None = None
 
 
 class CrawlWorker:
@@ -99,7 +100,7 @@ class CrawlWorker:
         with self.session_factory() as session:
             due = or_(
                 and_(
-                    CrawlJob.status.in_(["queued", "retry_wait"]),
+                    CrawlJob.status.in_(["queued", "retry_wait", "awaiting_source"]),
                     CrawlJob.available_at <= now,
                 ),
                 and_(
@@ -117,8 +118,15 @@ class CrawlWorker:
             if job is None:
                 return None
             batch = session.get(CrawlBatch, job.batch_id)
+            # Handle run yang diparkir selalu dibawa, termasuk saat lease habis
+            # karena worker mati di tengah pengecekan - membuangnya berarti
+            # memulai run Apify kedua untuk cabang yang sama. _finish menulis
+            # hasil baru tanpa handle, jadi retry tetap memulai run baru.
+            source_run = (job.result_json or {}).get("source_run")
+            # Mengecek run yang diparkir bukan percobaan baru.
+            if job.status != "awaiting_source":
+                job.attempts += 1
             job.status = "running"
-            job.attempts += 1
             job.locked_by = worker_id
             job.locked_at = now
             job.lease_expires_at = now + timedelta(
@@ -154,6 +162,7 @@ class CrawlWorker:
                 }.get(crawl_mode, "delta"),
                 budget=request_options.get("budget"),
                 review_quota_remaining=quota_remaining,
+                source_run=source_run,
                 max_reviews_to_collect=(
                     request_options.get("max_reviews_to_collect")
                     or job.target_review_count
@@ -221,7 +230,8 @@ class CrawlWorker:
 
             fetch_service = self.fetch_service_factory(claimed.company_id)
             result = fetch_service.fetch_location(
-                claimed.location_id,
+                **self._parking_kwargs(fetch_service, claimed),
+                location_id=claimed.location_id,
                 target=claimed.max_reviews_to_collect or claimed.target_review_count,
                 coverage=claimed.coverage,
                 budget=claimed.budget,
@@ -233,6 +243,8 @@ class CrawlWorker:
                     claimed.id, n, seen
                 ),
             )
+            if "parked" in result:
+                return self._park(claimed, result["parked"])
             if result.get("status") == "success":
                 return self._finish(claimed, status="succeeded", result=result)
             if result.get("status") == "partial_success":
@@ -304,7 +316,8 @@ class CrawlWorker:
 
         fetch_service = self.fetch_service_factory(claimed.company_id)
         result = fetch_service.fetch_competitor(
-            claimed.competitor_id,
+            **self._parking_kwargs(fetch_service, claimed),
+            competitor_id=claimed.competitor_id,
             target=claimed.max_reviews_to_collect or claimed.target_review_count,
             coverage=claimed.coverage,
             budget=claimed.budget,
@@ -316,6 +329,8 @@ class CrawlWorker:
                 claimed.id, n, seen
             ),
         )
+        if "parked" in result:
+            return self._park(claimed, result["parked"])
         if result.get("status") in {"success", "partial_success"}:
             return self._finish(claimed, status="succeeded", result=result)
         failure_metadata = result.get("metadata") or {}
@@ -329,6 +344,35 @@ class CrawlWorker:
             ),
             result=result,
         )
+
+    def _parking_kwargs(self, fetch_service, claimed: ClaimedCrawlJob) -> dict:
+        if not (
+            self.settings.crawl_async_source_runs
+            and getattr(fetch_service, "supports_parking", False)
+        ):
+            return {}
+        return {"park": True, "source_run": claimed.source_run}
+
+    def _park(self, claimed: ClaimedCrawlJob, source_run: dict) -> dict:
+        """Lepas worker; run Apify tetap jalan dan dicek lagi nanti (CS-3)."""
+        now = datetime.now(timezone.utc)
+        with self.session_factory() as session:
+            job = session.get(CrawlJob, claimed.id)
+            if job is None:
+                raise RuntimeError("Claimed crawl job disappeared.")
+            current = dict(job.result_json or {})
+            current["source_run"] = source_run
+            job.result_json = current
+            job.status = "awaiting_source"
+            job.available_at = now + timedelta(
+                seconds=self.settings.crawl_source_poll_seconds
+            )
+            job.locked_by = None
+            job.locked_at = None
+            job.lease_expires_at = None
+            session.commit()
+            batch = session.get(CrawlBatch, claimed.batch_id)
+            return serialize_batch(session, batch)
 
     def _retry_or_fail(
         self,

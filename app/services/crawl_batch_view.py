@@ -10,6 +10,12 @@ from app.services.crawl_result import (
 )
 
 
+
+def _public_status(status: str) -> str:
+    # Run Apify yang diparkir tetap "running" bagi OneBox; status internal ini
+    # tidak termasuk kontrak.
+    return "running" if status == "awaiting_source" else status
+
 def serialize_batch(
     session: Session, batch: CrawlBatch, include_jobs: bool = True
 ) -> dict:
@@ -45,7 +51,8 @@ def serialize_batch(
         "failed": 0,
     }
     for job in jobs:
-        counts[job.status] = counts.get(job.status, 0) + 1
+        public_status = _public_status(job.status)
+        counts[public_status] = counts.get(public_status, 0) + 1
         review_counts["target"] += job.target_review_count
         result = job.result_json or {}
         # Job yang masih berjalan belum punya total_fetched; yang ada baru
@@ -133,7 +140,7 @@ def serialize_batch(
                 ),
                 "stop_reason": stop_reason(job.result_json or {}),
                 "rating_snapshot": rating_snapshot(job.result_json or {}),
-                "status": job.status,
+                "status": _public_status(job.status),
                 "attempts": job.attempts,
                 "max_attempts": job.max_attempts,
                 "result": job.result_json,
