@@ -8,7 +8,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.config import Settings, get_settings
+from app.config import DEFAULT_REVIEW_LIMIT, MAX_REVIEW_LIMIT, Settings, get_settings
 from app.db.models import Company, Competitor, Location, WorklistSyncState
 from app.db.session import get_session_factory
 from app.integrations.onebox_worklist_client import (
@@ -107,16 +107,19 @@ def _optional_int(value: Any, field: str) -> int | None:
 
 def _target(value: Any) -> int:
     if value is None or value == "":
-        return 100
+        return DEFAULT_REVIEW_LIMIT
     try:
         target = int(value)
     except (TypeError, ValueError) as exc:
         raise WorklistSyncError(
             "Worklist field target_review_count must be an integer."
         ) from exc
-    if not 1 <= target <= 300:
+    # Batas lama 300 akan menolak cabang yang disimpan OneBox dengan batas
+    # bawaan baru (5.000) dan menggagalkan seluruh sinkronisasi worklist.
+    if not 1 <= target <= MAX_REVIEW_LIMIT:
         raise WorklistSyncError(
-            "Worklist field target_review_count must be between 1 and 300."
+            "Worklist field target_review_count must be between 1 and "
+            f"{MAX_REVIEW_LIMIT}."
         )
     return target
 

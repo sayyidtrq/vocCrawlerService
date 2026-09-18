@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.config import DEFAULT_REVIEW_LIMIT, MAX_REVIEW_LIMIT
 from app.db.models import Location
 from app.db.session import get_session_factory
 from app.services.location_repository import LocationRepository
@@ -81,7 +82,7 @@ class LocationService:
                 str(data.get("google_reviews_url") or "").strip() or None
             ),
             target_review_count=self._validate_target_count(
-                data.get("target_review_count", 100)
+                data.get("target_review_count", DEFAULT_REVIEW_LIMIT)
             ),
             is_active=bool(data.get("is_active", True)),
             company_id=self.company_id,
@@ -186,9 +187,11 @@ class LocationService:
     @staticmethod
     def _validate_target_count(value: object) -> int:
         try:
-            target = int(value or 100)
+            target = int(value or DEFAULT_REVIEW_LIMIT)
         except (TypeError, ValueError) as exc:
             raise ValueError("Target review count must be numeric.") from exc
-        if not 1 <= target <= 300:
-            raise ValueError("Target review count must be between 1 and 300.")
+        if not 1 <= target <= MAX_REVIEW_LIMIT:
+            raise ValueError(
+                f"Target review count must be between 1 and {MAX_REVIEW_LIMIT}."
+            )
         return target

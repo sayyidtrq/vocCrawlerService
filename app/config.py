@@ -36,6 +36,11 @@ REVIEW_SOURCE_MODES = {
 # default). Fields using plain os.getenv(name, default) with no such guard
 # (app_name, log_level, review_source_mode, etc.) are deliberately NOT in
 # this list - a blank value there stays blank, exactly like before.
+# Batas ulasan per penarikan (spec D11). Dipakai juga validator target
+# cabang/kompetitor/worklist, yang berjalan tanpa objek Settings.
+DEFAULT_REVIEW_LIMIT = 5_000
+MAX_REVIEW_LIMIT = 100_000
+
 _BLANK_USES_DEFAULT_FIELDS = (
     "export_dir",
     "google_maps_api_key",
@@ -121,8 +126,8 @@ class Settings(BaseModel):
     fetch_limit_per_location: int = 50
     fetch_timeout_seconds: int = 30
     fetch_max_retry: int = 3
-    crawl_max_target_reviews: int = 100_000
-    crawl_default_review_limit: int = 5_000
+    crawl_max_target_reviews: int = MAX_REVIEW_LIMIT
+    crawl_default_review_limit: int = DEFAULT_REVIEW_LIMIT
     crawl_completeness_tolerance: float = 0.98
     crawl_watermark_margin_days: int = 1
     crawl_safety_sweep_days: int = 30
