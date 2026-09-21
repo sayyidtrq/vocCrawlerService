@@ -48,6 +48,8 @@ _BLANK_USES_DEFAULT_FIELDS = (
     "gemini_api_key",
     "openai_api_key",
     "openai_model",
+    "absa_confidence_threshold",
+    "absa_timeout_seconds",
     "onebox_base_url",
     "onebox_service_email",
     "onebox_service_password",
@@ -95,6 +97,7 @@ _INT_FLOORS = {
     "crawl_worker_retry_base_seconds": 1,
     "analysis_llm_max_retries": 0,
     "analysis_circuit_breaker_threshold": 0,
+    "absa_timeout_seconds": 1,
 }
 
 
@@ -127,6 +130,11 @@ class Settings(BaseModel):
     local_llm_api_key: str | None = "ollama"
     local_llm_model: str = "qwen2.5:7b"
     analysis_provider: AnalysisProvider = "absa"
+    absa_base_url: str = "http://host.docker.internal:9090/api"
+    absa_engine_version: str = "v14"
+    absa_profile: str = "maps_high_recall"
+    absa_confidence_threshold: float = 0.1
+    absa_timeout_seconds: int = 300
     openai_base_url: str = "https://api.openai.com/v1"
     openai_api_key: str | None = None
     openai_model: str | None = None
@@ -258,6 +266,9 @@ class _EnvSettings(Settings, BaseSettings):
         "google_places_region_code",
         "local_llm_base_url",
         "local_llm_model",
+        "absa_base_url",
+        "absa_engine_version",
+        "absa_profile",
         "openai_base_url",
         "apify_actor_id",
         "prompt_version",
@@ -310,6 +321,11 @@ class _EnvSettings(Settings, BaseSettings):
     @classmethod
     def _floor_backoff_seconds(cls, value: float) -> float:
         return max(0.0, value)
+
+    @field_validator("absa_confidence_threshold", mode="after")
+    @classmethod
+    def _clamp_absa_confidence_threshold(cls, value: float) -> float:
+        return min(1.0, max(0.0, value))
 
     @field_validator("analysis_llm_concurrency", mode="after")
     @classmethod

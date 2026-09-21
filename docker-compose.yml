@@ -14,6 +14,8 @@ services:
       - .env
     ports:
       - "8000:8000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./exports:/app/exports
     healthcheck:
@@ -32,6 +34,8 @@ services:
       - .env
     environment:
       SKIP_MIGRATIONS: "true"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     command: ["/app/scripts/run_crawl_worker.sh"]
     depends_on:
       api:

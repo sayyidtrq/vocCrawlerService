@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 from app.config import AnalysisProvider, Settings
+from app.integrations.absa_client import AbsaClient
+from app.integrations.gemini_client import GeminiClientBase
 from app.integrations.local_llm_client import LocalLLMClient
 
 
 def create_analysis_client(
     settings: Settings, provider: AnalysisProvider | None = None
-) -> LocalLLMClient:
+) -> GeminiClientBase:
     selected = provider or settings.analysis_provider
     if selected == "absa":
-        return LocalLLMClient(settings)
+        return AbsaClient(settings)
     if selected == "openai":
         if not settings.openai_api_key or not settings.openai_model:
             raise RuntimeError(
