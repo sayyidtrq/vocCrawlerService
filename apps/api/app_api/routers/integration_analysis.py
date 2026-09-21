@@ -10,10 +10,10 @@ from fastapi import APIRouter, Depends, Header, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
-from app.config import get_settings
+from app.config import AnalysisProvider, get_settings
 from app.db.models import Location
 from app.db.session import get_session_factory
-from app.integrations.local_llm_client import LocalLLMClient
+from app.integrations.analysis_client import create_analysis_client
 from app.services.analysis_service import AnalysisService
 from app.services.entitlement_service import EntitlementError, EntitlementService
 from app.services.integration_review_service import IntegrationRequestError
@@ -30,6 +30,7 @@ REQUIRED_SCOPE = "analysis:write"
 class IntegrationAnalyzeRequest(BaseModel):
     location_id: int | None = Field(default=None, ge=1)
     rating: int | None = Field(default=None, ge=1, le=5)
+    provider: AnalysisProvider | None = None
 
 
 class IntegrationRollbackRequest(BaseModel):
@@ -121,6 +122,7 @@ def available_models(
     request: Request,
     principal: ServicePrincipalDependency,
     session_factory: SessionFactoryDependency,
+    provider: AnalysisProvider | None = None,
     x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
 ) -> dict:
     _authorize(principal)
@@ -128,7 +130,8 @@ def available_models(
     _require_entitlement(principal.company_id, session_factory)
     settings = get_settings()
     try:
-        models = LocalLLMClient(settings).list_models()
+        client = create_analysis_client(settings, provider)
+        models = client.list_models()
     except Exception as exc:  # noqa: BLE001 - provider SDKs expose varied errors
         raise IntegrationRequestError(
             502,
@@ -136,7 +139,11 @@ def available_models(
             "The configured AI provider did not return its model list.",
         ) from exc
     return _response(
-        {"models": models, "default_model": settings.local_llm_model},
+        {
+            "provider": provider or settings.analysis_provider,
+            "models": models,
+            "default_model": client.model_name,
+        },
         request_id,
     )
 
@@ -163,7 +170,9 @@ def analyze_pending(
     if payload.location_id is not None:
         _require_location(principal.company_id, payload.location_id, session_factory)
     result = AnalysisService(
-        company_id=principal.company_id, session_factory=session_factory
+        company_id=principal.company_id,
+        session_factory=session_factory,
+        provider=payload.provider,
     ).analyze_pending(location_id=payload.location_id, rating=payload.rating)
     return _response(result, request_id)
 
@@ -182,6 +191,7 @@ def rerun_review(
     request: Request,
     principal: ServicePrincipalDependency,
     session_factory: SessionFactoryDependency,
+    provider: AnalysisProvider | None = None,
     x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
 ) -> dict:
     _authorize(principal)
@@ -189,7 +199,9 @@ def rerun_review(
     _require_entitlement(principal.company_id, session_factory)
     try:
         result = AnalysisService(
-            company_id=principal.company_id, session_factory=session_factory
+            company_id=principal.company_id,
+            session_factory=session_factory,
+            provider=provider,
         ).rerun_review(review_id)
     except ValueError as exc:
         raise IntegrationRequestError(

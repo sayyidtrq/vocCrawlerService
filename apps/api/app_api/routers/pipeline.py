@@ -4,9 +4,9 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from app.config import get_settings
-from app.services.apify_fetch_service import ApifyFetchService
+from app.config import AnalysisProvider, get_settings
 from app.services.analysis_service import AnalysisService
+from app.services.apify_fetch_service import ApifyFetchService
 from app.services.export_service import ExportService
 from app.services.fetch_service import FetchService
 from app.services.location_service import LocationService
@@ -25,6 +25,7 @@ class LocationPipelineRequest(BaseModel):
     dry_run: bool = False
     target_review_count: int | None = Field(default=None, ge=1, le=100_000)
     source: str | None = None
+    provider: AnalysisProvider | None = None
 
 
 @router.post(
@@ -105,7 +106,7 @@ def run_location_pipeline(
 
     if payload.analyze and not payload.dry_run:
         result["steps"]["analysis"] = AnalysisService(
-            company_id=principal.company_id
+            company_id=principal.company_id, provider=payload.provider
         ).analyze_pending(
             location_id=payload.location_id
         )

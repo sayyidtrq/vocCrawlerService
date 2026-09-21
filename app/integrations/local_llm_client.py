@@ -84,14 +84,22 @@ def _build_example_from_schema(schema: dict) -> dict:
 
 
 class LocalLLMClient(GeminiClientBase):
-    def __init__(self, settings: Settings, sdk_client: OpenAI | None = None):
+    def __init__(
+        self,
+        settings: Settings,
+        sdk_client: OpenAI | None = None,
+        *,
+        base_url: str | None = None,
+        api_key: str | None = None,
+        model_name: str | None = None,
+    ):
         self.settings = settings
-        self.model_name = settings.local_llm_model
+        self.model_name = model_name or settings.local_llm_model
         self.last_usage: dict[str, int] = {}
 
         self.client = sdk_client or OpenAI(
-            base_url=self.settings.local_llm_base_url,
-            api_key=self.settings.local_llm_api_key or "ollama",
+            base_url=base_url or self.settings.local_llm_base_url,
+            api_key=api_key or self.settings.local_llm_api_key or "ollama",
         )
 
         prompt_path = (

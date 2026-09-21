@@ -7,7 +7,6 @@ from app.services.settings_service import SettingsService
 from apps.api.app_api.serializers import to_jsonable
 from apps.api.app_api.service_auth import ServicePrincipal, require_service_principal
 
-
 router = APIRouter(tags=["settings"])
 
 
@@ -32,6 +31,9 @@ def get_public_settings(principal: ServicePrincipal = Depends(require_service_pr
             "google_places_language_code": settings.google_places_language_code,
             "google_places_region_code": settings.google_places_region_code,
             "local_llm_model": settings.local_llm_model,
+            "analysis_provider": settings.analysis_provider,
+            "available_analysis_providers": ["absa", "openai"],
+            "openai_model": settings.openai_model,
             "fetch_limit_per_location": settings.fetch_limit_per_location,
             "fetch_timeout_seconds": settings.fetch_timeout_seconds,
             "fetch_max_retry": settings.fetch_max_retry,
@@ -47,6 +49,7 @@ def get_public_settings(principal: ServicePrincipal = Depends(require_service_pr
             "local_llm_api_key": local_llm_key["masked"],
             "google_maps_api_key_configured": review_source_key["found"],
             "local_llm_api_key_configured": local_llm_key["found"],
+            "openai_api_key_configured": bool(settings.openai_api_key),
         }
     )
 

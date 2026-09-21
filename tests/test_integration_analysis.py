@@ -7,6 +7,8 @@ from sqlalchemy.pool import StaticPool
 
 from app.db.base import Base
 from app.db.models import Company, Location, Review, ReviewAnalysis
+from app.integrations.mock_gemini_client import MockGeminiClient
+from app.services import analysis_service as analysis_service_module
 from app.services.analysis_service import RATING_FALLBACK_MODEL
 from apps.api.app_api.routers import integration_analysis as integration_analysis_router
 from apps.api.app_api.routers.integration_analysis import (
@@ -117,6 +119,28 @@ def test_service_token_runs_analysis_only_for_its_tenant():
     assert status_by_company == {1: "completed", 2: "pending"}
 
 
+def test_service_token_selects_provider_per_request(monkeypatch):
+    factory = make_database()
+    client = make_client(factory, principal(1))
+    selected = []
+
+    def create_client(settings, provider=None):
+        selected.append(provider)
+        return MockGeminiClient()
+
+    monkeypatch.setattr(
+        analysis_service_module, "create_analysis_client", create_client
+    )
+
+    response = client.post(
+        "/api/integration/v1/analysis/pending",
+        json={"provider": "openai"},
+    )
+
+    assert response.status_code == 200
+    assert selected == ["openai"]
+
+
 def test_service_token_cannot_rerun_another_tenants_review():
     factory = make_database()
     client = make_client(factory, principal(1))
@@ -151,15 +175,24 @@ def test_failed_single_review_rerun_is_not_reported_as_http_success(monkeypatch)
 def test_service_token_lists_models_from_the_active_provider(monkeypatch):
     factory = make_database()
     client = make_client(factory, principal(1))
+    provider = type(
+        "Provider",
+        (),
+        {
+            "model_name": "model-a",
+            "list_models": lambda self: ["model-a", "model-b:latest"],
+        },
+    )()
     monkeypatch.setattr(
-        integration_analysis_router.LocalLLMClient,
-        "list_models",
-        lambda self: ["model-a", "model-b:latest"],
+        integration_analysis_router,
+        "create_analysis_client",
+        lambda settings, selected=None: provider,
     )
 
     response = client.get("/api/integration/v1/analysis/models")
 
     assert response.status_code == 200
+    assert response.json()["data"]["provider"] == "absa"
     assert response.json()["data"]["models"] == ["model-a", "model-b:latest"]
     assert response.json()["data"]["default_model"]
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from dotenv import load_dotenv
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -30,6 +30,7 @@ REVIEW_SOURCE_MODES = {
     "third_party",
     "apify",
 }
+AnalysisProvider = Literal["absa", "openai"]
 
 # Fields that go through the old _as_int/_as_bool/_as_float/_as_optional_int/
 # _as_list helpers, all of which treat a blank env value as absent (use the
@@ -45,6 +46,8 @@ _BLANK_USES_DEFAULT_FIELDS = (
     "export_dir",
     "google_maps_api_key",
     "gemini_api_key",
+    "openai_api_key",
+    "openai_model",
     "onebox_base_url",
     "onebox_service_email",
     "onebox_service_password",
@@ -123,6 +126,10 @@ class Settings(BaseModel):
     local_llm_base_url: str = "http://192.168.1.115:11434/v1/"
     local_llm_api_key: str | None = "ollama"
     local_llm_model: str = "qwen2.5:7b"
+    analysis_provider: AnalysisProvider = "absa"
+    openai_base_url: str = "https://api.openai.com/v1"
+    openai_api_key: str | None = None
+    openai_model: str | None = None
     fetch_limit_per_location: int = 50
     fetch_timeout_seconds: int = 30
     fetch_max_retry: int = 3
@@ -251,6 +258,7 @@ class _EnvSettings(Settings, BaseSettings):
         "google_places_region_code",
         "local_llm_base_url",
         "local_llm_model",
+        "openai_base_url",
         "apify_actor_id",
         "prompt_version",
         mode="after",
@@ -268,6 +276,14 @@ class _EnvSettings(Settings, BaseSettings):
     @classmethod
     def _normalize_gemini_mode(cls, value: str) -> str:
         return value.strip().lower()
+
+    @field_validator("analysis_provider", mode="after")
+    @classmethod
+    def _validate_analysis_provider(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in {"absa", "openai"}:
+            raise ValueError("ANALYSIS_PROVIDER must be absa or openai.")
+        return normalized
 
     @field_validator("gemini_model", mode="after")
     @classmethod

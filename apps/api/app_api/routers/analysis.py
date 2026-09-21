@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from app.config import get_settings
-from app.integrations.local_llm_client import LocalLLMClient
+from app.config import AnalysisProvider, get_settings
+from app.integrations.analysis_client import create_analysis_client
 from app.services.analysis_service import AnalysisService
 from app.services.entitlement_service import EntitlementError, EntitlementService
 from apps.api.app_api.schemas import AnalysisPendingResponse
@@ -19,6 +19,7 @@ router = APIRouter(prefix="/analysis", tags=["analysis"])
 class AnalyzePendingRequest(BaseModel):
     location_id: int | None = None
     rating: int | None = Field(default=None, ge=1, le=5)
+    provider: AnalysisProvider | None = None
 
 
 class RollbackAnalysesRequest(BaseModel):
@@ -40,17 +41,25 @@ def _require_ai_enabled(company_id: int) -> None:
     "/models",
     summary="Daftar model AI yang tersedia pada deployment Crawler ini",
 )
-def available_models(principal: ServicePrincipal = Depends(require_service_principal)) -> dict:
+def available_models(
+    provider: AnalysisProvider | None = Query(default=None),
+    principal: ServicePrincipal = Depends(require_service_principal),
+) -> dict:
     _require_ai_enabled(principal.company_id)
     settings = get_settings()
     try:
-        models = LocalLLMClient(settings).list_models()
+        client = create_analysis_client(settings, provider)
+        models = client.list_models()
     except Exception as exc:  # noqa: BLE001 - provider SDKs expose varied errors
         raise HTTPException(
             status_code=502,
             detail="AI provider tidak dapat mengembalikan daftar model.",
         ) from exc
-    return {"models": models, "default_model": settings.local_llm_model}
+    return {
+        "provider": provider or settings.analysis_provider,
+        "models": models,
+        "default_model": client.model_name,
+    }
 
 
 @router.post(
@@ -62,7 +71,9 @@ def available_models(principal: ServicePrincipal = Depends(require_service_princ
 )
 def analyze_pending(payload: AnalyzePendingRequest, principal: ServicePrincipal = Depends(require_service_principal)) -> dict:
     _require_ai_enabled(principal.company_id)
-    result = AnalysisService(company_id=principal.company_id).analyze_pending(
+    result = AnalysisService(
+        company_id=principal.company_id, provider=payload.provider
+    ).analyze_pending(
         location_id=payload.location_id, rating=payload.rating,
     )
     return to_jsonable(result)
@@ -77,9 +88,17 @@ def analyze_pending(payload: AnalyzePendingRequest, principal: ServicePrincipal 
         403: {"description": "AI belum diaktifkan untuk company ini"},
     },
 )
-def rerun_location(location_id: int, principal: ServicePrincipal = Depends(require_service_principal)) -> dict:
+def rerun_location(
+    location_id: int,
+    provider: AnalysisProvider | None = Query(default=None),
+    principal: ServicePrincipal = Depends(require_service_principal),
+) -> dict:
     _require_ai_enabled(principal.company_id)
-    return to_jsonable(AnalysisService(company_id=principal.company_id).rerun_location(location_id))
+    return to_jsonable(
+        AnalysisService(
+            company_id=principal.company_id, provider=provider
+        ).rerun_location(location_id)
+    )
 
 
 @router.post(
@@ -91,9 +110,15 @@ def rerun_location(location_id: int, principal: ServicePrincipal = Depends(requi
         403: {"description": "AI belum diaktifkan untuk company ini"},
     },
 )
-def rerun_review(review_id: int, principal: ServicePrincipal = Depends(require_service_principal)) -> dict:
+def rerun_review(
+    review_id: int,
+    provider: AnalysisProvider | None = Query(default=None),
+    principal: ServicePrincipal = Depends(require_service_principal),
+) -> dict:
     _require_ai_enabled(principal.company_id)
-    result = AnalysisService(company_id=principal.company_id).rerun_review(review_id)
+    result = AnalysisService(
+        company_id=principal.company_id, provider=provider
+    ).rerun_review(review_id)
     if int(result.get("failed") or 0) > 0:
         raise HTTPException(
             status_code=502,

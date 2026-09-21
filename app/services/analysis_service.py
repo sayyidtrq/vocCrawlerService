@@ -9,11 +9,11 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import exists, func, select
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.config import Settings, get_settings
+from app.config import AnalysisProvider, Settings, get_settings
 from app.db.models import Location, Review, ReviewAnalysis
 from app.db.session import get_session_factory
+from app.integrations.analysis_client import create_analysis_client
 from app.integrations.gemini_client import GeminiClientBase
-from app.integrations.local_llm_client import LocalLLMClient
 
 logger = logging.getLogger(__name__)
 RATING_FALLBACK_MODEL = "rating-fallback-v1"
@@ -69,17 +69,19 @@ class AnalysisService:
         settings: Settings | None = None,
         client: GeminiClientBase | None = None,
         client_factory=None,
+        provider: AnalysisProvider | None = None,
     ):
         self.company_id = company_id
         self.session_factory = session_factory or get_session_factory()
         self.settings = settings or get_settings()
+        self.provider = provider or self.settings.analysis_provider
         if client:
             self.client = client
             self._client_factory = client_factory
         else:
-            self.client = LocalLLMClient(self.settings)
+            self.client = create_analysis_client(self.settings, self.provider)
             self._client_factory = client_factory or (
-                lambda: LocalLLMClient(self.settings)
+                lambda: create_analysis_client(self.settings, self.provider)
             )
         self._worker_local = threading.local()
 
