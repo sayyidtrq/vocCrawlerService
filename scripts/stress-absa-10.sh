@@ -59,7 +59,8 @@ SINCE="$(date -u -d '5 minutes ago' '+%Y-%m-%dT%H:%M:%SZ')"
 
 echo
 echo "=== Start 10 concurrent ABSA inferences ==="
-echo "review_id,http_status,duration_ms,result" > "$TMP_DIR/metrics.csv"
+echo "review_id,http_status,total_ms,inference_ms,overhead_ms,result" \
+  > "$TMP_DIR/metrics.csv"
 
 for REVIEW_ID in "${REVIEW_IDS[@]}"; do
   (
@@ -78,7 +79,15 @@ for REVIEW_ID in "${REVIEW_IDS[@]}"; do
     )"
 
     END_MS="$(date +%s%3N)"
-    DURATION_MS="$((END_MS - START_MS))"
+    TOTAL_MS="$((END_MS - START_MS))"
+    INFERENCE_MS="$(
+      jq -r '.data.llm_call_ms_total // 0' \
+        "$TMP_DIR/response-${REVIEW_ID}.json"
+    )"
+    OVERHEAD_MS="$(
+      awk -v total="$TOTAL_MS" -v inference="$INFERENCE_MS" \
+        'BEGIN {printf "%.1f", total - inference}'
+    )"
 
     if jq -e \
       '.data.success == 1 and .data.failed == 0' \
@@ -88,7 +97,7 @@ for REVIEW_ID in "${REVIEW_IDS[@]}"; do
       RESULT="failed"
     fi
 
-    echo "${REVIEW_ID},${HTTP_STATUS},${DURATION_MS},${RESULT}" \
+    echo "${REVIEW_ID},${HTTP_STATUS},${TOTAL_MS},${INFERENCE_MS},${OVERHEAD_MS},${RESULT}" \
       >> "$TMP_DIR/metrics.csv"
   ) &
 done
@@ -101,26 +110,33 @@ sort -t, -k1,1n "$TMP_DIR/metrics.csv" |
   column -s, -t
 
 SUCCESS="$(
-  awk -F, '$4 == "success" {count++} END {print count+0}' \
+  awk -F, '$6 == "success" {count++} END {print count+0}' \
     "$TMP_DIR/metrics.csv"
 )"
 FAILED="$((CONCURRENCY - SUCCESS))"
-MAX_MS="$(
-  awk -F, 'NR > 1 && $3 > max {max=$3} END {print max+0}' \
-    "$TMP_DIR/metrics.csv"
-)"
-AVG_MS="$(
+AVG_TOTAL_MS="$(
   awk -F, '
     NR > 1 {sum += $3; count++}
-    END {printf "%.0f", count ? sum/count : 0}
+    END {printf "%.1f", count ? sum/count : 0}
   ' "$TMP_DIR/metrics.csv"
+)"
+AVG_INFERENCE_MS="$(
+  awk -F, '
+    NR > 1 {sum += $4; count++}
+    END {printf "%.1f", count ? sum/count : 0}
+  ' "$TMP_DIR/metrics.csv"
+)"
+MAX_INFERENCE_MS="$(
+  awk -F, 'NR > 1 && $4 > max {max=$4} END {printf "%.1f", max}' \
+    "$TMP_DIR/metrics.csv"
 )"
 
 echo
 echo "success=${SUCCESS}"
 echo "failed=${FAILED}"
-echo "average_duration_ms=${AVG_MS}"
-echo "maximum_duration_ms=${MAX_MS}"
+echo "average_total_ms=${AVG_TOTAL_MS}"
+echo "average_inference_ms=${AVG_INFERENCE_MS}"
+echo "maximum_inference_ms=${MAX_INFERENCE_MS}"
 
 echo
 echo "=== Pull sentiments returned to OneBox ==="
