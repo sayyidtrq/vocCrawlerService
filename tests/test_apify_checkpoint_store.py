@@ -79,6 +79,31 @@ def test_different_sort_discards_checkpoint_and_uses_requested_date(caplog):
     assert "newest" in caplog.text and "most_relevant" in caplog.text
 
 
+def test_account_switch_marker_can_be_saved_before_any_review_is_returned():
+    _, store, target = seeded_store()
+    marker = {
+        "from_account_index": 0,
+        "to_account_index": 1,
+        "request": {"path": "/runs"},
+        "response": {"status_code": 402},
+    }
+    store.save(
+        target,
+        ApifyCheckpoint(
+            sort_by="newest",
+            recorded_at=datetime(2026, 9, 15, tzinfo=timezone.utc),
+            account_switch=marker,
+        ),
+    )
+
+    saved = store.load(target)
+
+    assert saved is not None
+    assert saved.review_id is None
+    assert saved.review_time is None
+    assert saved.account_switch == marker
+
+
 class CompletedApifyClient:
     def start_run(self, actor_id, input, *, token):
         return "run-1", "dataset-1"

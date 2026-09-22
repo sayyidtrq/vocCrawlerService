@@ -66,6 +66,8 @@ _BLANK_USES_DEFAULT_FIELDS = (
     "apify_actor_id",
     "apify_run_timeout_seconds",
     "apify_poll_interval_seconds",
+    "redis_url",
+    "apify_account_exhausted_ttl_seconds",
     "analysis_batch_size",
     "page_size",
     "show_raw_payload",
@@ -98,6 +100,7 @@ _INT_FLOORS = {
     "analysis_llm_max_retries": 0,
     "analysis_circuit_breaker_threshold": 0,
     "absa_timeout_seconds": 1,
+    "apify_account_exhausted_ttl_seconds": 60,
 }
 
 
@@ -154,6 +157,8 @@ class Settings(BaseModel):
     apify_actor_id: str = "web_wanderer/google-reviews-scraper"
     apify_run_timeout_seconds: int = 300
     apify_poll_interval_seconds: int = 5
+    redis_url: str | None = None
+    apify_account_exhausted_ttl_seconds: int = 86400
     analysis_batch_size: int = 20
     prompt_version: str = "v1"
     page_size: int = 20

@@ -39,8 +39,15 @@ class ApifyRunIncompleteError(ReviewSourceError):
     (spec B13); reviews already stored are skipped as duplicates.
     """
 
-    def __init__(self, message: str, *, reviews: list[dict], code: str):
-        super().__init__(message, retriable=True, code=code)
+    def __init__(
+        self,
+        message: str,
+        *,
+        reviews: list[dict],
+        code: str,
+        retriable: bool = True,
+    ):
+        super().__init__(message, retriable=retriable, code=code)
         self.reviews = reviews
 
 
@@ -128,14 +135,16 @@ class ApifyReviewClient(ReviewSourceClient):
                     reviews=reviews,
                     code=f"APIFY_RUN_{status.replace('-', '_')}",
                 )
-            except ApifyAccountExhaustedError:
+            except ApifyAccountExhaustedError as exc:
                 # Batas bawah sengaja TIDAK dimajukan ke review terakhir (spec
                 # B13): itu review tertua yang terbaca, jadi memajukannya akan
                 # melompati review yang belum terbaca. Akun berikutnya mengulang
                 # jendela yang sama; review yang sudah ada dilewati lewat
                 # seen_review_ids.
                 try:
-                    if self.token_pool.rotate() is None:
+                    if self._rotate_account(
+                        crawl_target, effective_sort, last_review, exc
+                    ) is None:
                         raise ApifyAllAccountsExhaustedError(
                             "All configured Apify accounts are exhausted."
                         )
@@ -246,26 +255,34 @@ class ApifyReviewClient(ReviewSourceClient):
             crawl_target, limit, sort_by, date_from
         )
         actor_input = self._actor_input(place_id, limit, effective_sort, lower_bound)
+        account_switch = None
         while True:
             token = self.token_pool.current()
             try:
                 run_id, dataset_id = self.apify_client.start_run(
                     self.settings.apify_actor_id, actor_input, token=token
                 )
-            except ApifyAccountExhaustedError:
-                if self.token_pool.rotate() is None:
+            except ApifyAccountExhaustedError as exc:
+                if self._rotate_account(
+                    crawl_target, effective_sort, None, exc
+                ) is None:
                     raise ApifyAllAccountsExhaustedError(
                         "All configured Apify accounts are exhausted."
                     ) from None
+                account_switch = self.token_pool.last_switch
                 continue
-            return {
+            handle = {
                 "run_id": run_id,
                 "dataset_id": dataset_id,
                 "token_index": self.token_pool.current_index,
                 "effective_sort": effective_sort,
                 "limit": limit,
                 "started_at": datetime.now(timezone.utc).isoformat(),
+                "actor_input": actor_input,
             }
+            if account_switch is not None:
+                handle["account_switch"] = account_switch
+            return handle
 
     def poll_fetch(self, handle: dict) -> tuple[str, int | None]:
         """(status, jumlah item dataset sejauh ini) tanpa menunggu."""
@@ -278,6 +295,39 @@ class ApifyReviewClient(ReviewSourceClient):
         except ReviewSourceError:
             count = None  # kemajuan bersifat kosmetik
         return status, count
+
+    def restart_fetch_after_exhaustion(
+        self,
+        crawl_target,
+        handle: dict,
+        error: ApifyAccountExhaustedError,
+    ) -> dict:
+        """Repeat the exact actor input with the next available account."""
+        effective_sort = str(handle["effective_sort"])
+        actor_input = dict(handle["actor_input"])
+        while True:
+            if self._rotate_account(
+                crawl_target, effective_sort, None, error
+            ) is None:
+                raise ApifyAllAccountsExhaustedError(
+                    "All configured Apify accounts are exhausted."
+                ) from error
+            token = self.token_pool.current()
+            try:
+                run_id, dataset_id = self.apify_client.start_run(
+                    self.settings.apify_actor_id, actor_input, token=token
+                )
+            except ApifyAccountExhaustedError as next_error:
+                error = next_error
+                continue
+            return {
+                **handle,
+                "run_id": run_id,
+                "dataset_id": dataset_id,
+                "token_index": self.token_pool.current_index,
+                "started_at": datetime.now(timezone.utc).isoformat(),
+                "account_switch": self.token_pool.last_switch,
+            }
 
     def abort_fetch(self, handle: dict) -> None:
         token = self.token_pool.token_at(int(handle["token_index"]))
@@ -299,20 +349,35 @@ class ApifyReviewClient(ReviewSourceClient):
             "apify_dataset_id": handle["dataset_id"],
             "apify_account_index_used": handle["token_index"],
         }
+        if isinstance(handle.get("account_switch"), dict):
+            self.last_metadata["apify_account_switch"] = handle["account_switch"]
         token = self.token_pool.token_at(int(handle["token_index"]))
         reviews: list[dict] = []
         seen_review_ids: set[str] = set()
         self._last_drained = None
         try:
             self._drain(handle["dataset_id"], token, limit, reviews, seen_review_ids)
-        except ApifyAccountExhaustedError:
-            self.last_metadata["stopped_reason"] = "apify_accounts_exhausted"
+        except ApifyAccountExhaustedError as exc:
+            next_token = self._rotate_account(
+                crawl_target, effective_sort, self._last_drained, exc
+            )
+            if next_token is None:
+                self.last_metadata["stopped_reason"] = "apify_accounts_exhausted"
+            else:
+                raise ApifyRunIncompleteError(
+                    "Apify account ran out of credits while reading its dataset.",
+                    reviews=reviews,
+                    code="APIFY_ACCOUNT_SWITCHED",
+                ) from exc
         last_review = self._last_drained
         self.last_metadata["matched_review_cards"] = len(reviews)
         self.last_metadata["scraped_review_cards"] = len(reviews)
         self.last_metadata["collected_unique"] = len(seen_review_ids)
         if status == "SUCCEEDED":
-            self.checkpoint_store.clear(crawl_target)
+            if self.last_metadata.get("stopped_reason") != (
+                "apify_accounts_exhausted"
+            ):
+                self.checkpoint_store.clear(crawl_target)
             return reviews
         self._save_checkpoint(crawl_target, effective_sort, last_review)
         raise ApifyRunIncompleteError(
@@ -321,14 +386,50 @@ class ApifyReviewClient(ReviewSourceClient):
             code=f"APIFY_RUN_{status.replace('-', '_')}",
         )
 
+    def _rotate_account(
+        self,
+        crawl_target,
+        effective_sort: str,
+        last_review: dict | None,
+        error: ApifyAccountExhaustedError,
+    ) -> str | None:
+        marker = {
+            "target_kind": crawl_target.kind,
+            "target_id": crawl_target.id,
+            "request": error.request,
+            "response": error.response,
+        }
+        next_token = self.token_pool.rotate(marker)
+        switch = self.token_pool.last_switch
+        if switch is not None:
+            self.last_metadata["apify_account_switch"] = switch
+        self._save_checkpoint(
+            crawl_target,
+            effective_sort,
+            last_review,
+            account_switch=switch,
+        )
+        return next_token
+
     def _save_checkpoint(
-        self, crawl_target, effective_sort: str, last_review: dict | None
+        self,
+        crawl_target,
+        effective_sort: str,
+        last_review: dict | None,
+        *,
+        account_switch: dict | None = None,
     ) -> None:
-        if last_review is None:
-            return
-        review_time = parse_datetime(last_review.get("review_time"))
-        review_id = last_review.get("external_review_id")
+        review_time = (
+            parse_datetime(last_review.get("review_time")) if last_review else None
+        )
+        review_id = last_review.get("external_review_id") if last_review else None
+        previous = self.checkpoint_store.load(crawl_target)
         if review_time is None or not review_id:
+            review_time = previous.review_time if previous else None
+            review_id = previous.review_id if previous else None
+        if account_switch is None and previous is not None:
+            account_switch = previous.account_switch
+        if review_time is None and account_switch is None:
             return
         from app.services.apify_checkpoint_store import ApifyCheckpoint
 
@@ -336,9 +437,10 @@ class ApifyReviewClient(ReviewSourceClient):
             crawl_target,
             ApifyCheckpoint(
                 sort_by=effective_sort,
-                review_time=review_time,
-                review_id=str(review_id),
                 recorded_at=datetime.now(timezone.utc),
+                review_time=review_time,
+                review_id=str(review_id) if review_id else None,
+                account_switch=account_switch,
             ),
         )
 

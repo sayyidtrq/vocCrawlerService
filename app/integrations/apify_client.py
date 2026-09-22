@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Iterator
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 import requests
 
@@ -12,6 +12,12 @@ from app.integrations.review_source_client import ReviewSourceError
 
 class ApifyAccountExhaustedError(RuntimeError):
     """Signals that the current Apify account cannot spend more credits."""
+
+    def __init__(self, message: str, *, request: dict | None = None,
+                 response: dict | None = None):
+        super().__init__(message)
+        self.request = request or {}
+        self.response = response or {}
 
 
 class ApifyClient:
@@ -157,7 +163,19 @@ class ApifyClient:
                     code="APIFY_RATE_LIMITED",
                 )
             if response.status_code == 402 or self._is_credit_exhaustion(response):
-                raise ApifyAccountExhaustedError(self._error_message(response))
+                raise ApifyAccountExhaustedError(
+                    self._error_message(response),
+                    request={
+                        "method": method.upper(),
+                        "path": urlsplit(url).path,
+                        "params": kwargs.get("params"),
+                        "json": kwargs.get("json"),
+                    },
+                    response={
+                        "status_code": response.status_code,
+                        "error": self._error_payload(response),
+                    },
+                )
             if not response.ok:
                 raise ReviewSourceError(
                     self._error_message(response),
@@ -211,3 +229,18 @@ class ApifyClient:
         if isinstance(error, dict):
             return str(error.get("message") or error.get("type") or default)
         return default
+
+    @staticmethod
+    def _error_payload(response) -> dict:
+        try:
+            payload = response.json()
+        except ValueError:
+            return {}
+        error = payload.get("error") if isinstance(payload, dict) else None
+        if not isinstance(error, dict):
+            return {}
+        return {
+            key: error[key]
+            for key in ("type", "code", "message")
+            if error.get(key) is not None
+        }

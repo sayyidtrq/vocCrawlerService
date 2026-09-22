@@ -13,6 +13,7 @@ from sqlalchemy.pool import StaticPool
 from app.config import Settings
 from app.db.base import Base
 from app.db.models import ApiClient, Company, CrawlJob, Location, Review
+from app.integrations.apify_client import ApifyAccountExhaustedError
 from app.integrations.apify_review_client import ApifyReviewClient
 from app.integrations.apify_token_pool import ApifyTokenPool
 from app.services.apify_checkpoint_store import ApifyCheckpointStore
@@ -31,9 +32,11 @@ class FakeApify:
         self.started = 0
         self.aborted = 0
         self.polls = 0
+        self.start_tokens = []
 
     def start_run(self, actor_id, input, *, token):
         self.started += 1
+        self.start_tokens.append(token)
         return f"run-{self.started}", f"dataset-{self.started}"
 
     def get_run_status_once(self, run_id, *, token):
@@ -86,9 +89,10 @@ def setup(statuses, **settings_overrides):
         session.add_all([api_client, location])
         session.commit()
         company_id, client_id = company.id, api_client.id
+    tokens = settings_overrides.pop("apify_api_tokens", ["token-a"])
     settings = Settings(
         database_url="sqlite+pysqlite:///:memory:",
-        apify_api_tokens=["token-a"],
+        apify_api_tokens=tokens,
         crawl_source_poll_seconds=0,
         **settings_overrides,
     )
@@ -202,3 +206,33 @@ def test_sync_path_is_kept_when_parking_is_disabled():
 
     assert job(factory).status == "succeeded"
     assert fake.polls == 0
+
+
+def test_poll_quota_exhaustion_restarts_same_request_with_next_account():
+    factory, worker, fake = setup(
+        ["SUCCEEDED"], apify_api_tokens=["token-a", "token-b"]
+    )
+    exhausted_once = False
+
+    def poll(run_id, *, token):
+        nonlocal exhausted_once
+        if not exhausted_once:
+            exhausted_once = True
+            raise ApifyAccountExhaustedError(
+                "credits exhausted",
+                request={"method": "GET", "path": f"/actor-runs/{run_id}"},
+                response={"status_code": 402},
+            )
+        return "SUCCEEDED"
+
+    fake.get_run_status_once = poll
+
+    worker.execute_next(worker_id="w")  # starts with account 0
+    worker.execute_next(worker_id="w")  # switches and starts with account 1
+    switched = job(factory)
+    assert switched.status == "awaiting_source"
+    assert switched.result_json["source_run"]["token_index"] == 1
+    worker.execute_next(worker_id="w")  # finishes account 1 run
+
+    assert fake.start_tokens == ["token-a", "token-b"]
+    assert job(factory).status == "succeeded"

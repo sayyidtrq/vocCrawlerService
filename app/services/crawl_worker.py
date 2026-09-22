@@ -55,7 +55,13 @@ class CrawlWorker:
         if fetch_service_factory is not None:
             self.fetch_service_factory = fetch_service_factory
         else:
-            token_pool = ApifyTokenPool(self.settings.apify_api_tokens)
+            token_pool = ApifyTokenPool(
+                self.settings.apify_api_tokens,
+                redis_url=self.settings.redis_url,
+                exhausted_ttl_seconds=(
+                    self.settings.apify_account_exhausted_ttl_seconds
+                ),
+            )
             self.fetch_service_factory = lambda company_id: ApifyFetchService(
                 company_id=company_id,
                 session_factory=self.session_factory,

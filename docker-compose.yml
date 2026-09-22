@@ -25,6 +25,8 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+    environment:
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
     ports:
       - "8000:8000"
     extra_hosts:
@@ -37,6 +39,9 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
+    depends_on:
+      redis:
+        condition: service_healthy
 
 
   crawl-worker:
@@ -47,10 +52,13 @@ services:
       - .env
     environment:
       SKIP_MIGRATIONS: "true"
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     command: ["/app/scripts/run_crawl_worker.sh"]
     depends_on:
+      redis:
+        condition: service_healthy
       api:
         condition: service_healthy
 

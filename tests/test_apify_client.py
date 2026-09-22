@@ -62,8 +62,22 @@ def test_402_raises_account_exhaustion_signal():
         ]
     )
 
-    with pytest.raises(ApifyAccountExhaustedError):
+    with pytest.raises(ApifyAccountExhaustedError) as caught:
         ApifyClient(settings(), session).start_run("actor/name", {}, token="token")
+    assert caught.value.request == {
+        "method": "POST",
+        "path": "/v2/actors/actor%2Fname/runs",
+        "params": None,
+        "json": {},
+    }
+    assert caught.value.response == {
+        "status_code": 402,
+        "error": {
+            "type": "insufficient-credits",
+            "message": "credits exhausted",
+        },
+    }
+    assert "token" not in str(caught.value.request)
 
 
 def test_429_never_becomes_account_exhaustion():

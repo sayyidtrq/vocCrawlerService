@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.config import Settings, get_settings
 from app.db.models import Competitor
 from app.db.session import get_session_factory
+from app.integrations.apify_client import ApifyAccountExhaustedError
 from app.integrations.apify_review_client import (
     ApifyReviewClient,
     ApifyRunIncompleteError,
@@ -65,7 +66,13 @@ class ApifyFetchService:
             company_id=company_id, session_factory=self.session_factory
         )
         if client is None:
-            pool = token_pool or ApifyTokenPool(self.settings.apify_api_tokens)
+            pool = token_pool or ApifyTokenPool(
+                self.settings.apify_api_tokens,
+                redis_url=self.settings.redis_url,
+                exhausted_ttl_seconds=(
+                    self.settings.apify_account_exhausted_ttl_seconds
+                ),
+            )
             client = ApifyReviewClient(
                 self.settings,
                 pool,
@@ -366,7 +373,7 @@ class ApifyFetchService:
                     "failure_code": exc.code,
                     # Run yang melewati tenggat akan melewatinya lagi; jangan
                     # dibayar ulang otomatis.
-                    "retriable": exc.code != DEADLINE_CODE,
+                    "retriable": exc.retriable and exc.code != DEADLINE_CODE,
                     "coverage": coverage,
                     "budget": effective_budget,
                     "stop_reason": (
@@ -500,7 +507,26 @@ class ApifyFetchService:
                 on_progress(0, limit, 0)
             return {"parked": handle}
 
-        status, count = client.poll_fetch(source_run)
+        try:
+            status, count = client.poll_fetch(source_run)
+        except ApifyAccountExhaustedError as exc:
+            try:
+                return {
+                    "parked": client.restart_fetch_after_exhaustion(
+                        crawl_target, source_run, exc
+                    )
+                }
+            except ApifyAllAccountsExhaustedError:
+                def exhausted():
+                    client.last_metadata["stopped_reason"] = (
+                        "apify_accounts_exhausted"
+                    )
+                    client.last_metadata["collected_unique"] = 0
+                    return []
+
+                return self._run_fetch(
+                    crawl_target, fetch_raw=exhausted, **run_kwargs
+                )
         if status not in _SOURCE_TERMINAL:
             started = datetime.fromisoformat(source_run["started_at"])
             elapsed = (datetime.now(timezone.utc) - started).total_seconds()

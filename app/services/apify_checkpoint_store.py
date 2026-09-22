@@ -17,9 +17,10 @@ logger = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class ApifyCheckpoint:
     sort_by: str
-    review_time: datetime
-    review_id: str
     recorded_at: datetime
+    review_time: datetime | None = None
+    review_id: str | None = None
+    account_switch: dict | None = None
 
 
 class ApifyCheckpointStore:
@@ -38,21 +39,27 @@ class ApifyCheckpointStore:
         review_id = payload.get("review_id")
         if (
             sort_by not in SORT_BY_MAP
-            or review_time is None
             or recorded_at is None
-            or not review_id
+            or bool(review_time) != bool(review_id)
         ):
             return None
         return ApifyCheckpoint(
             sort_by=str(sort_by),
             review_time=review_time,
-            review_id=str(review_id),
+            review_id=str(review_id) if review_id else None,
             recorded_at=recorded_at,
+            account_switch=(
+                payload.get("account_switch")
+                if isinstance(payload.get("account_switch"), dict)
+                else None
+            ),
         )
 
     def save(self, crawl_target, checkpoint: ApifyCheckpoint) -> None:
         payload = asdict(checkpoint)
-        payload["review_time"] = self._iso(checkpoint.review_time)
+        payload["review_time"] = (
+            self._iso(checkpoint.review_time) if checkpoint.review_time else None
+        )
         payload["recorded_at"] = self._iso(checkpoint.recorded_at)
         with self.session_factory() as session:
             target = session.get(self._model(crawl_target), crawl_target.id)
