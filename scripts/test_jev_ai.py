@@ -4,8 +4,9 @@ from pprint import pprint
 
 # Force environment to local
 os.environ["APP_ENV"] = "local"
-# Set JEV base URL to whatever the user has or keep default
-os.environ["JEV_BASE_URL"] = os.getenv("JEV_BASE_URL", "http://localhost:9091/api")
+# Ensure we hit typesafe if not specified
+if "JEV_BASE_URL" not in os.environ:
+    os.environ["JEV_BASE_URL"] = "https://api.typesafe.ai/v1/systemone"
 
 from app.config import get_settings
 from app.integrations.jev_client import JevAiClient
@@ -15,6 +16,8 @@ def main():
     client = JevAiClient(settings)
 
     print(f"Testing JevAiClient against: {client._http.base_url}")
+    if not settings.jev_api_key:
+        print("WARNING: JEV_API_KEY is not set. The request will likely fail with a 401 Unauthorized.")
     
     review = {
         "review_text": "Pertama kalinya harus dirawat di RS pakai BPJS, cukup kaget karena pelayanan di sini memuaskan, cepat, dan gak ribet utk BPJS.",
@@ -25,12 +28,10 @@ def main():
     pprint(review)
 
     try:
-        # Check models available
         models = client.list_models()
         print("\nAvailable models:", models)
     except Exception as e:
-        print("\nCould not fetch models (server might not be running locally or /inference/engines is not implemented):", e)
-        print("Will try to call analyze_review directly.")
+        print("\nCould not fetch models:", e)
 
     try:
         print("\nCalling analyze_review...")
@@ -39,7 +40,6 @@ def main():
         print(json.dumps(result, indent=2))
     except Exception as e:
         print("\nError calling analyze_review:", e)
-        print("Please ensure your JEV AI server is running locally.")
 
 if __name__ == "__main__":
     main()

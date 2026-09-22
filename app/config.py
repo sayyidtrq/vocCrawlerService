@@ -141,8 +141,9 @@ class Settings(BaseModel):
     absa_profile: str = "maps_high_recall"
     absa_confidence_threshold: float = 0.1
     absa_timeout_seconds: int = 300
-    jev_base_url: str = "http://host.docker.internal:9091/api"
-    jev_engine_version: str = "v1"
+    jev_base_url: str = "https://api.typesafe.ai/v1/systemone"
+    jev_api_key: str | None = None
+    jev_engine_version: str = "jev-latest"
     jev_profile: str = "maps_high_recall"
     jev_confidence_threshold: float = 0.1
     jev_timeout_seconds: int = 300
