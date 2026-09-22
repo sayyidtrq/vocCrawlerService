@@ -358,6 +358,8 @@ class _GoogleReviewColumns:
     reviewer_name: Mapped[str | None] = mapped_column(String(255))
     reviewer_profile_url: Mapped[str | None] = mapped_column(Text)
     reviewer_photo_url: Mapped[str | None] = mapped_column(Text)
+    review_url: Mapped[str | None] = mapped_column(Text)
+    review_photo_urls: Mapped[list] = mapped_column(JsonType, default=list, nullable=False)
     reviewer_local_guide_level: Mapped[str | None] = mapped_column(String(100))
     reviewer_total_reviews: Mapped[int | None] = mapped_column(Integer)
     rating: Mapped[int | None] = mapped_column(Integer)

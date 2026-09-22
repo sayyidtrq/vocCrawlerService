@@ -311,6 +311,8 @@ class IntegrationReviewService:
             "review_hash": review.review_hash,
             "reviewer_name": review.reviewer_name,
             "reviewer_profile_url": review.reviewer_profile_url,
+            "review_url": review.review_url,
+            "review_photo_urls": review.review_photo_urls or [],
             "rating": review.rating,
             "review_text": review.review_text,
             "review_time": _as_utc(review.review_time),

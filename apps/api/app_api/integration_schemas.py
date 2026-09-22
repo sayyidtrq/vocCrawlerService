@@ -71,6 +71,8 @@ class IntegrationReviewItem(_Base):
     review_hash: str
     reviewer_name: str | None = None
     reviewer_profile_url: str | None = None
+    review_url: str | None = None
+    review_photo_urls: list[str] = []
     rating: int | None = None
     review_text: str
     review_time: datetime | None = None
