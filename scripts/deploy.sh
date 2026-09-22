@@ -10,7 +10,7 @@ git fetch origin
 git checkout main
 git pull --ff-only origin main
 
-docker compose build api crawl-worker
+docker compose build --no-cache api crawl-worker
 docker compose up -d --force-recreate api crawl-worker
 docker compose ps
 

@@ -83,7 +83,7 @@ echo "[deploy] fast-forwarding ${TARGET_BRANCH}"
 git pull --ff-only origin "${TARGET_BRANCH}"
 
 echo "[deploy] building api and crawl-worker"
-${COMPOSE} build api crawl-worker
+${COMPOSE} build --no-cache api crawl-worker
 
 echo "[deploy] recreating api and crawl-worker"
 ${COMPOSE} up -d --force-recreate api crawl-worker

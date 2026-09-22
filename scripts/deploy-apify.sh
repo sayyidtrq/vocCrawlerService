@@ -19,7 +19,7 @@ if ! grep -qE '^APIFY_API_TOKENS=.+' ../.env 2>/dev/null; then
   echo "fail immediately with every Apify account reported as exhausted." >&2
 fi
 
-docker compose build api crawl-worker
+docker compose build --no-cache api crawl-worker
 docker compose up -d --force-recreate redis api crawl-worker
 docker compose ps
 
