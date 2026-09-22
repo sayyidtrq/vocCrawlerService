@@ -1,4 +1,17 @@
 services:
+  redis:
+    image: redis:7-alpine
+    container_name: hermina-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
   api:
     # image: lets the deploy server do `docker compose pull` against the
     # image CI built and pushed, without needing the Dockerfile/build
@@ -40,3 +53,6 @@ services:
     depends_on:
       api:
         condition: service_healthy
+
+volumes:
+  redis-data:

@@ -20,7 +20,7 @@ if ! grep -qE '^APIFY_API_TOKENS=.+' ../.env 2>/dev/null; then
 fi
 
 docker compose build api crawl-worker
-docker compose up -d --force-recreate api crawl-worker
+docker compose up -d --force-recreate redis api crawl-worker
 docker compose ps
 
 curl --fail-with-body -i http://127.0.0.1:8000/api/health
