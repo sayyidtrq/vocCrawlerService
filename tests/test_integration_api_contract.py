@@ -55,6 +55,8 @@ EXPECTED_ITEM_FIELDS = {
     "review_hash",
     "reviewer_name",
     "reviewer_profile_url",
+    "review_url",
+    "review_photo_urls",
     "rating",
     "review_text",
     "review_time",
@@ -302,6 +304,35 @@ def test_success_response_validates_against_contract(client):
     assert payload["page"]["checkpoint_cursor"]
     assert payload["meta"]["api_version"] == "v1"
     assert payload["meta"]["request_id"]
+
+
+def test_response_standardization_is_visible_in_terminal(client):
+    headers = {"X-Request-ID": "response-standardization-test"}
+    success = client.get(
+        "/api/integration/v1/reviews", params={"limit": 1}, headers=headers
+    )
+    error = client.get(
+        "/api/integration/v1/reviews", params={"limit": 0}, headers=headers
+    )
+
+    success_payload = success.json()
+    error_payload = error.json()
+
+    assert success.status_code == 200
+    assert set(success_payload) == {"data", "page", "meta"}
+    assert success_payload["meta"] == {
+        "api_version": "v1",
+        "request_id": "response-standardization-test",
+    }
+    assert error.status_code == 400
+    assert set(error_payload) == {"error"}
+    assert set(error_payload["error"]) == {"code", "message", "request_id"}
+    assert error_payload["error"]["request_id"] == "response-standardization-test"
+
+    print("\n=== STANDARDIZED SUCCESS RESPONSE (200) ===")
+    print(json.dumps(success_payload, indent=2))
+    print("\n=== STANDARDIZED ERROR RESPONSE (400) ===")
+    print(json.dumps(error_payload, indent=2))
 
 
 def test_item_exposes_exactly_the_contract_fields(client):
