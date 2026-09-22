@@ -140,11 +140,11 @@ class JevAiClient(GeminiClientBase):
             
         # Extract safety and viral risk
         safety_ans = answers.get("is_safety_issue", {})
-        safety_prob = float(safety_ans.get("probability", 0.0))
+        safety_prob = float(safety_ans.get("noul", safety_ans.get("probability", 0.0)))
         safety = safety_prob > 0.5
         
         viral_ans = answers.get("is_viral_risk", {})
-        viral_prob = float(viral_ans.get("probability", 0.0))
+        viral_prob = float(viral_ans.get("noul", viral_ans.get("probability", 0.0)))
         viral = viral_prob > 0.5
         
         rating = review.get("rating")

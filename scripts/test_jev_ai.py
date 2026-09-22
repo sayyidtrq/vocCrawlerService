@@ -8,7 +8,7 @@ os.environ["APP_ENV"] = "local"
 if "JEV_BASE_URL" not in os.environ:
     os.environ["JEV_BASE_URL"] = "https://openrouter.ai/api"
 if "JEV_ENGINE_VERSION" not in os.environ:
-    os.environ["JEV_ENGINE_VERSION"] = "typesafe/jev-latest"
+    os.environ["JEV_ENGINE_VERSION"] = "~typesafe/jev-latest"
 
 from app.config import get_settings
 from app.integrations.jev_client import JevAiClient

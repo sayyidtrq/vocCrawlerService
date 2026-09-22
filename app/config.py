@@ -143,7 +143,7 @@ class Settings(BaseModel):
     absa_timeout_seconds: int = 300
     jev_base_url: str = "https://openrouter.ai/api"
     jev_api_key: str | None = None
-    jev_engine_version: str = "typesafe/jev-latest"
+    jev_engine_version: str = "~typesafe/jev-latest"
     jev_profile: str = "maps_high_recall"
     jev_confidence_threshold: float = 0.1
     jev_timeout_seconds: int = 300
