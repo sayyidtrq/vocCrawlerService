@@ -79,3 +79,9 @@ def test_openai_uses_its_own_credentials_and_model():
 def test_openai_requires_key_and_model():
     with pytest.raises(RuntimeError, match="OPENAI_API_KEY and OPENAI_MODEL"):
         create_analysis_client(settings(analysis_provider="openai"))
+
+def test_jev_provider():
+    with patch("app.integrations.analysis_client.JevAiClient") as client:
+        create_analysis_client(settings(), "jev")
+
+    client.assert_called_once_with(settings())
