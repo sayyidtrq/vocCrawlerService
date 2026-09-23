@@ -46,6 +46,9 @@ services:
 
   crawl-worker:
     image: ghcr.io/sayyidtrq/herminacrawler:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: hermina-crawl-worker
     restart: unless-stopped
     env_file:

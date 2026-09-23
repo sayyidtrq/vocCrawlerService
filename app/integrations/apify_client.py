@@ -28,7 +28,7 @@ class ApifyClient:
         settings: Settings,
         http_session: requests.Session | None = None,
         *,
-        max_rate_limit_retries: int = 4,
+        max_rate_limit_retries: int = 10,
     ):
         self.settings = settings
         self.http_session = http_session or requests.Session()
@@ -155,7 +155,7 @@ class ApifyClient:
                 ) from exc
             if self._is_concurrency_or_rate_limit(response):
                 if attempt < self.max_rate_limit_retries:
-                    time.sleep(0.5 * (2**attempt))
+                    time.sleep(min(3.0, 0.5 * (2**attempt)))
                     continue
                 raise ReviewSourceError(
                     self._error_message(response),

@@ -45,44 +45,28 @@ class ApifyTokenPool:
 
     def current(self) -> str:
         self._sync()
-        if self._index >= len(self._tokens):
+        if not self._tokens:
             raise ApifyAllAccountsExhaustedError(
-                "All configured Apify accounts are exhausted."
+                "No Apify accounts configured."
             )
-        return self._tokens[self._index]
+        return self._tokens[self._index % len(self._tokens)]
 
     def token_at(self, index: int) -> str:
-        """Token akun tertentu - run yang diparkir harus dilanjutkan dengan akun
-        yang memulainya."""
-        if not 0 <= index < len(self._tokens):
+        if not self._tokens:
             raise ApifyAllAccountsExhaustedError(
-                f"Apify account #{index} is not configured."
+                "No Apify accounts configured."
             )
-        return self._tokens[index]
+        return self._tokens[index % len(self._tokens)]
 
     def rotate(self, marker: dict | None = None) -> str | None:
         self._sync()
-        previous = self._index
-        if self._redis is None:
-            self._index += 1
-            next_index = self._index if self._index < len(self._tokens) else None
-        else:
-            marked = self._redis_call(
-                "set",
-                f"{self._key}:exhausted:{previous}",
-                "1",
-                ex=self._exhausted_ttl_seconds,
-            )
-            next_index = (
-                self._next_available(previous)
-                if marked is not _REDIS_ERROR
-                else previous + 1
-            )
-            if next_index is not None and next_index >= len(self._tokens):
-                next_index = None
-            self._index = next_index if next_index is not None else len(self._tokens)
-            if next_index is not None:
-                self._redis_call("set", f"{self._key}:current", next_index)
+        if not self._tokens:
+            return None
+        previous = self._index % len(self._tokens)
+        next_index = (previous + 1) % len(self._tokens)
+        self._index = next_index
+        if self._redis is not None:
+            self._redis_call("set", f"{self._key}:current", next_index)
 
         event = {
             "switched_at": datetime.now(timezone.utc).isoformat(),
@@ -93,36 +77,23 @@ class ApifyTokenPool:
         self.last_switch = event
         if self._redis is not None:
             self._redis_call("set", f"{self._key}:last_switch", json.dumps(event))
-        return self._tokens[next_index] if next_index is not None else None
+        return self._tokens[next_index]
 
     def _sync(self) -> None:
         if self._redis is None or not self._tokens:
             return
         value = self._redis_call("get", f"{self._key}:current")
-        if value is _REDIS_ERROR:
+        if value is _REDIS_ERROR or value is None:
             return
         try:
-            index = int(value)
+            self._index = int(value) % len(self._tokens)
         except (TypeError, ValueError):
-            index = self._index
-        candidate = self._next_available(index - 1)
-        if candidate is not None:
-            self._index = candidate
-            self._redis_call("set", f"{self._key}:current", candidate)
-        elif self._redis is not None:
-            self._index = len(self._tokens)
+            pass
 
     def _next_available(self, previous: int) -> int | None:
-        for step in range(1, len(self._tokens) + 1):
-            candidate = (previous + step) % len(self._tokens)
-            exhausted = self._redis_call(
-                "exists", f"{self._key}:exhausted:{candidate}"
-            )
-            if exhausted is _REDIS_ERROR:
-                return candidate
-            if not exhausted:
-                return candidate
-        return None
+        if not self._tokens:
+            return None
+        return (previous + 1) % len(self._tokens)
 
     def _redis_call(self, method: str, *args, **kwargs):
         try:

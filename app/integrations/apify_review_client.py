@@ -84,6 +84,8 @@ class ApifyReviewClient(ReviewSourceClient):
         seen_review_ids: set[str] = set()
         last_review: dict | None = None
         exhausted = False
+        rotations = 0
+        max_rotations = len(self.token_pool._tokens) if self.token_pool._tokens else 1
 
         while len(reviews) < limit:
             try:
@@ -141,10 +143,12 @@ class ApifyReviewClient(ReviewSourceClient):
                 # melompati review yang belum terbaca. Akun berikutnya mengulang
                 # jendela yang sama; review yang sudah ada dilewati lewat
                 # seen_review_ids.
+                rotations += 1
                 try:
-                    if self._rotate_account(
+                    self._rotate_account(
                         crawl_target, effective_sort, last_review, exc
-                    ) is None:
+                    )
+                    if rotations >= max_rotations:
                         raise ApifyAllAccountsExhaustedError(
                             "All configured Apify accounts are exhausted."
                         )
@@ -256,33 +260,40 @@ class ApifyReviewClient(ReviewSourceClient):
         )
         actor_input = self._actor_input(place_id, limit, effective_sort, lower_bound)
         account_switch = None
-        while True:
+        last_exc = None
+        for attempt in range(10):
             token = self.token_pool.current()
             try:
                 run_id, dataset_id = self.apify_client.start_run(
                     self.settings.apify_actor_id, actor_input, token=token
                 )
-            except ApifyAccountExhaustedError as exc:
-                if self._rotate_account(
-                    crawl_target, effective_sort, None, exc
-                ) is None:
-                    raise ApifyAllAccountsExhaustedError(
-                        "All configured Apify accounts are exhausted."
-                    ) from None
+                handle = {
+                    "run_id": run_id,
+                    "dataset_id": dataset_id,
+                    "token_index": self.token_pool.current_index,
+                    "effective_sort": effective_sort,
+                    "limit": limit,
+                    "started_at": datetime.now(timezone.utc).isoformat(),
+                    "actor_input": actor_input,
+                }
+                if account_switch is not None:
+                    handle["account_switch"] = account_switch
+                return handle
+            except Exception as exc:
+                last_exc = exc
+                logger.warning(
+                    "Apify start_run attempt %d/10 failed for %s: %s; rotating token and retrying",
+                    attempt + 1,
+                    crawl_target.branch_name,
+                    exc,
+                )
+                time.sleep(min(3.0, 0.5 * (attempt + 1)))
+                self._rotate_account(crawl_target, effective_sort, None, exc if isinstance(exc, ApifyAccountExhaustedError) else None)
                 account_switch = self.token_pool.last_switch
-                continue
-            handle = {
-                "run_id": run_id,
-                "dataset_id": dataset_id,
-                "token_index": self.token_pool.current_index,
-                "effective_sort": effective_sort,
-                "limit": limit,
-                "started_at": datetime.now(timezone.utc).isoformat(),
-                "actor_input": actor_input,
-            }
-            if account_switch is not None:
-                handle["account_switch"] = account_switch
-            return handle
+
+        if isinstance(last_exc, ApifyAccountExhaustedError):
+            raise ApifyAllAccountsExhaustedError("All configured Apify accounts are exhausted.") from last_exc
+        raise last_exc
 
     def poll_fetch(self, handle: dict) -> tuple[str, int | None]:
         """(status, jumlah item dataset sejauh ini) tanpa menunggu."""
@@ -305,13 +316,15 @@ class ApifyReviewClient(ReviewSourceClient):
         """Repeat the exact actor input with the next available account."""
         effective_sort = str(handle["effective_sort"])
         actor_input = dict(handle["actor_input"])
+        rotations = 0
+        max_rotations = len(self.token_pool._tokens) if self.token_pool._tokens else 1
         while True:
-            if self._rotate_account(
-                crawl_target, effective_sort, None, error
-            ) is None:
+            rotations += 1
+            if rotations > max_rotations:
                 raise ApifyAllAccountsExhaustedError(
                     "All configured Apify accounts are exhausted."
                 ) from error
+            self._rotate_account(crawl_target, effective_sort, None, error)
             token = self.token_pool.current()
             try:
                 run_id, dataset_id = self.apify_client.start_run(
@@ -391,13 +404,13 @@ class ApifyReviewClient(ReviewSourceClient):
         crawl_target,
         effective_sort: str,
         last_review: dict | None,
-        error: ApifyAccountExhaustedError,
+        error: ApifyAccountExhaustedError | None = None,
     ) -> str | None:
         marker = {
             "target_kind": crawl_target.kind,
             "target_id": crawl_target.id,
-            "request": error.request,
-            "response": error.response,
+            "request": getattr(error, "request", None),
+            "response": getattr(error, "response", None),
         }
         next_token = self.token_pool.rotate(marker)
         switch = self.token_pool.last_switch

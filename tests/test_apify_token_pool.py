@@ -9,21 +9,21 @@ from app.integrations.apify_token_pool import (
 )
 
 
-def test_single_token_is_current_until_exhausted():
+def test_single_token_is_current_and_cycles():
     pool = ApifyTokenPool(["token-a"])
 
     assert pool.current() == "token-a"
-    assert pool.rotate() is None
-    with pytest.raises(ApifyAllAccountsExhaustedError):
-        pool.current()
+    assert pool.rotate() == "token-a"
+    assert pool.current() == "token-a"
 
 
-def test_two_tokens_rotate_once_then_exhaust():
+def test_two_tokens_rotate_continuously():
     pool = ApifyTokenPool(["token-a", "token-b"])
 
     assert pool.rotate() == "token-b"
     assert pool.current() == "token-b"
-    assert pool.rotate() is None
+    assert pool.rotate() == "token-a"
+    assert pool.current() == "token-a"
 
 
 def test_empty_pool_reports_no_remaining_token():
@@ -83,13 +83,12 @@ def test_redis_keeps_rotation_across_pool_recreation_without_storing_tokens():
     assert "token-b" not in json.dumps(redis.values)
 
 
-def test_redis_keeps_all_accounts_exhausted_across_pool_recreation():
+def test_redis_keeps_continuous_rotation_across_pool_recreation():
     redis = FakeRedis()
     first = ApifyTokenPool(["token-a", "token-b"], redis_client=redis)
     assert first.rotate() == "token-b"
-    assert first.rotate() is None
+    assert first.rotate() == "token-a"
 
     restarted = ApifyTokenPool(["token-a", "token-b"], redis_client=redis)
-
-    with pytest.raises(ApifyAllAccountsExhaustedError):
-        restarted.current()
+    assert restarted.current() == "token-a"
+    assert restarted.rotate() == "token-b"
