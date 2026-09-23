@@ -34,11 +34,11 @@ services:
     volumes:
       - ./exports:/app/exports
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8000/api/health"]
       interval: 15s
-      timeout: 5s
+      timeout: 10s
       retries: 5
-      start_period: 20s
+      start_period: 30s
     depends_on:
       redis:
         condition: service_healthy
