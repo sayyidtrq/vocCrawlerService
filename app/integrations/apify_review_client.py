@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import logging
+import time
 
 from app.config import Settings
 from app.integrations.apify_client import ApifyAccountExhaustedError, ApifyClient
@@ -11,6 +13,8 @@ from app.integrations.apify_token_pool import (
 )
 from app.integrations.review_source_client import ReviewSourceClient, ReviewSourceError
 from app.utils.date_parser import parse_datetime
+
+logger = logging.getLogger(__name__)
 
 # web_wanderer/google-reviews-scraper's `order` input, confirmed against its
 # published input schema for the first three values. "lowest_rating" is not
@@ -255,6 +259,7 @@ class ApifyReviewClient(ReviewSourceClient):
         Akun yang habis dirotasi di sini; bila semua habis, error-nya naik ke
         pemanggil (ApifyAllAccountsExhaustedError).
         """
+        self.last_metadata = {}
         place_id, effective_sort, lower_bound = self._prepare(
             crawl_target, limit, sort_by, date_from
         )

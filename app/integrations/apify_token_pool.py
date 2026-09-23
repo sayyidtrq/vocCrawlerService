@@ -76,7 +76,7 @@ class ApifyTokenPool:
         }
         self.last_switch = event
         if self._redis is not None:
-            self._redis_call("set", f"{self._key}:last_switch", json.dumps(event))
+            self._redis_call("set", f"{self._key}:last_switch", json.dumps(event, default=str))
         return self._tokens[next_index]
 
     def _sync(self) -> None:

@@ -31,7 +31,7 @@ def main() -> int:
     while True:
         result = service.execute_next(worker_id=worker_id)
         if result is not None:
-            print(json.dumps(result, default=str, ensure_ascii=False))
+            print(json.dumps(result, default=str, ensure_ascii=False), flush=True)
         if args.once:
             return 0
         if result is None:
