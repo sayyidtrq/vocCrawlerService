@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import httpx
 import logging
+
+import httpx
 
 from app.config import Settings
 from app.integrations.gemini_client import GeminiClientBase
@@ -32,6 +33,7 @@ TAXONOMY_CATEGORIES = {
     "food quality": "food",
 }
 
+
 class JevAiClient(GeminiClientBase):
     def __init__(
         self, settings: Settings, *, http_client: httpx.Client | None = None
@@ -45,7 +47,7 @@ class JevAiClient(GeminiClientBase):
         self._http = http_client or httpx.Client(
             base_url=settings.jev_base_url.rstrip("/"),
             timeout=settings.jev_timeout_seconds,
-            headers=headers
+            headers=headers,
         )
 
     def list_models(self) -> list[str]:
@@ -55,7 +57,7 @@ class JevAiClient(GeminiClientBase):
 
     def analyze_review(self, review: dict) -> dict:
         text = review.get("review_text") or ""
-        
+
         # We form the questions for TypeSafe System One API
         payload = {
             "state": text,
@@ -68,8 +70,8 @@ class JevAiClient(GeminiClientBase):
                         "positive": "The patient is happy or satisfied with the service.",
                         "negative": "The patient is unhappy, complaining, or angry.",
                         "neutral": "The review is objective or lacks strong emotion.",
-                        "mixed": "The review contains both positive and negative points."
-                    }
+                        "mixed": "The review contains both positive and negative points.",
+                    },
                 },
                 "category": {
                     "type": "choice",
@@ -90,20 +92,20 @@ class JevAiClient(GeminiClientBase):
                         "digital service": "Booking system, mobile JKN, app",
                         "staff attitude": "Staff attitude, professionalism, friendliness",
                         "security": "Security guards (Satpam)",
-                        "food quality": "Food quality"
-                    }
+                        "food quality": "Food quality",
+                    },
                 },
                 "is_safety_issue": {
                     "type": "noul",
-                    "instructions": "Does this review mention a patient safety issue, such as wrong medication, malpractice, infection, or a life-threatening emergency?"
+                    "instructions": "Does this review mention a patient safety issue, such as wrong medication, malpractice, infection, or a life-threatening emergency?",
                 },
                 "is_viral_risk": {
                     "type": "noul",
-                    "instructions": "Does the reviewer threaten to make the issue viral, share it on social media, or report it to the media?"
-                }
-            }
+                    "instructions": "Does the reviewer threaten to make the issue viral, share it on social media, or report it to the media?",
+                },
+            },
         }
-        
+
         # Note: we use "" empty path because the base_url usually includes /v1/systemone
         # If the base url is just https://api.typesafe.ai, we might need the path.
         # Let's check if the base URL ends with systemone.
@@ -116,8 +118,10 @@ class JevAiClient(GeminiClientBase):
             json=payload,
         )
         if response.status_code >= 400:
-            raise RuntimeError(f"Jev AI returned HTTP {response.status_code}: {response.text}")
-            
+            raise RuntimeError(
+                f"Jev AI returned HTTP {response.status_code}: {response.text}"
+            )
+
         result_payload = response.json()
         return self._to_analysis(result_payload, review)
 
@@ -125,28 +129,28 @@ class JevAiClient(GeminiClientBase):
     def _to_analysis(payload: dict, review: dict) -> dict:
         # payload structure: {"answers": {"sentiment": {"choice": "positive", "confidence": 0.9...}, ...}}
         answers = payload.get("answers", {})
-        
+
         # Extract sentiment
         sentiment_ans = answers.get("sentiment", {})
         sentiment = str(sentiment_ans.get("choice", "unknown")).lower()
         sentiment_score = float(sentiment_ans.get("confidence", 0.0))
-        
+
         # Extract category
         category_ans = answers.get("category", {})
         raw_category = str(category_ans.get("choice", "other")).lower()
         category = TAXONOMY_CATEGORIES.get(raw_category, "other")
         if sentiment == "positive" and category == "other":
             category = "general_praise"
-            
+
         # Extract safety and viral risk
         safety_ans = answers.get("is_safety_issue", {})
         safety_prob = float(safety_ans.get("noul", safety_ans.get("probability", 0.0)))
         safety = safety_prob > 0.5
-        
+
         viral_ans = answers.get("is_viral_risk", {})
         viral_prob = float(viral_ans.get("noul", viral_ans.get("probability", 0.0)))
         viral = viral_prob > 0.5
-        
+
         rating = review.get("rating")
         urgency = (
             "critical"
@@ -157,13 +161,13 @@ class JevAiClient(GeminiClientBase):
             if sentiment in {"negative", "mixed"}
             else "low"
         )
-        
+
         summaries = {
             "negative": "Pasien menyampaikan keluhan yang memerlukan tindak lanjut.",
             "mixed": "Pasien memberi apresiasi sekaligus menyampaikan kendala.",
             "positive": "Pasien menyampaikan pengalaman pelayanan yang positif.",
         }
-        
+
         return {
             "sentiment": sentiment,
             "sentiment_score": sentiment_score,
@@ -175,7 +179,7 @@ class JevAiClient(GeminiClientBase):
             "recommended_action": (
                 "Tinjau aspek layanan yang terdeteksi dan tindak lanjuti pola serupa."
             ),
-            "keywords": [], # Jev is a decision model, it doesn't extract freeform keywords easily
+            "keywords": [],  # Jev is a decision model, it doesn't extract freeform keywords easily
             "is_potential_viral": viral,
             "is_patient_safety_issue": safety,
             "jev": payload,

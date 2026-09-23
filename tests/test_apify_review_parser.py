@@ -22,6 +22,8 @@ def test_real_apify_sample_maps_every_review_column():
             "external_review_id": item.get("review_id"),
             "reviewer_name": item.get("reviewer_name"),
             "reviewer_profile_url": item.get("reviewer_url"),
+            "review_url": item.get("review_url"),
+            "review_photo_urls": item.get("review_photos_urls") or [],
             "reviewer_photo_url": item.get("reviewer_photo_url")
             or item.get("reviewer_photo"),
             "reviewer_local_guide_level": "Local Guide"
