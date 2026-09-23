@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from openai import OpenAI
+from openai import APIError, OpenAI
 
 from app.config import Settings
 from app.integrations.gemini_client import GeminiClientBase, ReviewAnalysisResult
@@ -33,6 +33,10 @@ ISSUE_CATEGORY_ALIASES = {
     "staff_service": "staff_communication",
     "patient_experience": "other",
 }
+
+
+class LLMProviderError(RuntimeError):
+    """An analysis provider request failed before producing a response."""
 
 
 def _coerce_model_bool(value) -> bool:
@@ -152,15 +156,18 @@ class LocalLLMClient(GeminiClientBase):
             f"Teks review:\n{review.get('review_text') or ''}"
         )
 
-        response = self.client.chat.completions.create(
-            model=self.model_name,
-            messages=[
-                {"role": "system", "content": self.system_instruction},
-                {"role": "user", "content": prompt},
-            ],
-            temperature=0.1,
-            response_format={"type": "json_object"},
-        )
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model_name,
+                messages=[
+                    {"role": "system", "content": self.system_instruction},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.1,
+                response_format={"type": "json_object"},
+            )
+        except APIError as exc:
+            raise LLMProviderError(f"OpenAI API request failed: {exc}") from exc
 
         usage = getattr(response, "usage", None)
         self.last_usage = {

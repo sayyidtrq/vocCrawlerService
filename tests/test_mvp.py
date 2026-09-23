@@ -321,6 +321,34 @@ def test_local_llm_normalizes_invalid_category_and_boolean(settings):
     assert result["is_patient_safety_issue"] is False
 
 
+def test_local_llm_wraps_openai_api_errors(settings):
+    import httpx
+    import openai
+
+    from app.integrations.local_llm_client import LLMProviderError
+
+    response = httpx.Response(
+        429,
+        request=httpx.Request("POST", "https://api.openai.com/v1/chat/completions"),
+    )
+
+    def fail(**_):
+        raise openai.RateLimitError(
+            "No credits remaining.",
+            response=response,
+            body={"code": "credit_balance_exhausted"},
+        )
+
+    sdk = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=fail))
+    )
+
+    with pytest.raises(LLMProviderError, match="OpenAI API request failed"):
+        LocalLLMClient(settings, sdk_client=sdk).analyze_review(
+            {"rating": 3, "review_text": "Antrean lama."}
+        )
+
+
 def test_summary_and_exports(session_factory, settings, company_id):
     location = add_location(session_factory, company_id)
     FetchService(

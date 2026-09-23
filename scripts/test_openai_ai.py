@@ -8,6 +8,7 @@ import os
 
 from app.config import get_settings
 from app.integrations.analysis_client import create_analysis_client
+from app.integrations.local_llm_client import LLMProviderError
 
 
 def main() -> int:
@@ -31,13 +32,17 @@ def main() -> int:
         ),
         "openai",
     )
-    result = client.analyze_review(
-        {
-            "review_text": args.review,
-            "rating": args.rating,
-            "reviewer_name": "OpenAI smoke test",
-        }
-    )
+    try:
+        result = client.analyze_review(
+            {
+                "review_text": args.review,
+                "rating": args.rating,
+                "reviewer_name": "OpenAI smoke test",
+            }
+        )
+    except LLMProviderError as exc:
+        print(f"ERROR: {exc}")
+        return 1
 
     print("=== OpenAI analysis response ===")
     print(
