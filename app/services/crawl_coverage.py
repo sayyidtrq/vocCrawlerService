@@ -36,8 +36,10 @@ class CrawlCoverageStore:
         self.session_factory = session_factory
 
     @staticmethod
-    def _model(crawl_target: CrawlTarget):
-        return Location if crawl_target.kind == "location" else Competitor
+    def _model(crawl_target):
+        if isinstance(crawl_target, Location) or getattr(crawl_target, "kind", None) == "location":
+            return Location
+        return Competitor
 
     def load(self, crawl_target: CrawlTarget) -> dict | None:
         with self.session_factory() as session:

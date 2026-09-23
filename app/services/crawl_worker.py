@@ -251,10 +251,37 @@ class CrawlWorker:
             )
             if "parked" in result:
                 return self._park(claimed, result["parked"])
-            if result.get("status") == "success":
-                return self._finish(claimed, status="succeeded", result=result)
-            if result.get("status") == "partial_success":
-                return self._finish(claimed, status="partial_success", result=result)
+            if result.get("status") in {"success", "partial_success"}:
+                if (
+                    getattr(self.settings, "auto_analyze_on_crawl", True)
+                    and claimed.location_id is not None
+                ):
+                    try:
+                        from app.services.analysis_service import AnalysisService
+
+                        analysis_service = AnalysisService(
+                            company_id=claimed.company_id,
+                            session_factory=self.session_factory,
+                        )
+                        analysis_res = analysis_service.analyze_pending(
+                            location_id=claimed.location_id
+                        )
+                        logger.info(
+                            "crawl_worker.auto_analysis_complete: location_id=%s, result=%s",
+                            claimed.location_id,
+                            analysis_res,
+                        )
+                    except Exception:
+                        logger.exception(
+                            "crawl_worker.auto_analysis_failed: location_id=%s",
+                            claimed.location_id,
+                        )
+                status = (
+                    "succeeded"
+                    if result.get("status") == "success"
+                    else "partial_success"
+                )
+                return self._finish(claimed, status=status, result=result)
             failure_metadata = result.get("metadata") or {}
             if self._is_permanent_source_failure(failure_metadata):
                 return self._finish_permanent_source_failure(claimed, result)

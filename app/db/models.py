@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
+from typing import ClassVar
 
 from sqlalchemy import (
     Boolean,
@@ -273,6 +274,7 @@ class _CrawlCoverageColumns:
 
 
 class Location(_CrawlCoverageColumns, Base):
+    kind: ClassVar[str] = "location"
     __tablename__ = "locations"
     __table_args__ = (
         UniqueConstraint(
@@ -509,6 +511,7 @@ class FetchLog(Base):
 
 
 class Competitor(_CrawlCoverageColumns, Base):
+    kind: ClassVar[str] = "competitor"
     __tablename__ = "competitors"
     __table_args__ = (
         UniqueConstraint(

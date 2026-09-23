@@ -24,6 +24,7 @@ class ApifyTokenPool:
     ):
         self._tokens = [token.strip() for token in tokens if token.strip()]
         self._index = 0
+        self._exhausted: set[int] = set()
         self._redis = redis_client
         self._redis_errors: tuple[type[BaseException], ...] = ()
         self._exhausted_ttl_seconds = exhausted_ttl_seconds
@@ -43,27 +44,97 @@ class ApifyTokenPool:
     def current_index(self) -> int:
         return self._index
 
+    def is_exhausted(self, index: int) -> bool:
+        if not self._tokens:
+            return True
+        idx = index % len(self._tokens)
+        if idx in self._exhausted:
+            return True
+        if self._redis is not None:
+            token_sig = hashlib.sha256(self._tokens[idx].encode()).hexdigest()[:16]
+            val = self._redis_call("get", f"{self._key}:exhausted:{token_sig}")
+            if val is not None and val is not _REDIS_ERROR:
+                self._exhausted.add(idx)
+                return True
+        return False
+
+    def mark_exhausted(self, index_or_token: int | str) -> None:
+        if not self._tokens:
+            return
+        if isinstance(index_or_token, int):
+            idx = index_or_token % len(self._tokens)
+        else:
+            try:
+                idx = self._tokens.index(index_or_token.strip())
+            except ValueError:
+                return
+        self._exhausted.add(idx)
+        if self._redis is not None:
+            token_sig = hashlib.sha256(self._tokens[idx].encode()).hexdigest()[:16]
+            self._redis_call(
+                "set",
+                f"{self._key}:exhausted:{token_sig}",
+                "1",
+                ex=self._exhausted_ttl_seconds,
+            )
+
     def current(self) -> str:
         self._sync()
         if not self._tokens:
             raise ApifyAllAccountsExhaustedError(
                 "No Apify accounts configured."
             )
+        if self.is_exhausted(self._index):
+            available = self._find_first_available()
+            if available is None:
+                raise ApifyAllAccountsExhaustedError(
+                    "All configured Apify accounts are exhausted."
+                )
+            self._index = available
+            if self._redis is not None:
+                self._redis_call("set", f"{self._key}:current", self._index)
         return self._tokens[self._index % len(self._tokens)]
+
+    def _find_first_available(self) -> int | None:
+        for i in range(len(self._tokens)):
+            candidate = (self._index + i) % len(self._tokens)
+            if not self.is_exhausted(candidate):
+                return candidate
+        return None
 
     def token_at(self, index: int) -> str:
         if not self._tokens:
             raise ApifyAllAccountsExhaustedError(
                 "No Apify accounts configured."
             )
-        return self._tokens[index % len(self._tokens)]
+        idx = index % len(self._tokens)
+        if self.is_exhausted(idx):
+            try:
+                return self.current()
+            except ApifyAllAccountsExhaustedError:
+                return self._tokens[idx]
+        return self._tokens[idx]
 
     def rotate(self, marker: dict | None = None) -> str | None:
         self._sync()
         if not self._tokens:
             return None
         previous = self._index % len(self._tokens)
-        next_index = (previous + 1) % len(self._tokens)
+
+        next_index = None
+        for i in range(1, len(self._tokens) + 1):
+            candidate = (previous + i) % len(self._tokens)
+            if not self.is_exhausted(candidate):
+                next_index = candidate
+                break
+
+        if next_index is None:
+            # If all are exhausted or only 1 token and it is exhausted:
+            if not self.is_exhausted(previous):
+                next_index = previous
+            else:
+                return None
+
         self._index = next_index
         if self._redis is not None:
             self._redis_call("set", f"{self._key}:current", next_index)

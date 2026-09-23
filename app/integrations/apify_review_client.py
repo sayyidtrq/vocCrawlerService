@@ -267,7 +267,12 @@ class ApifyReviewClient(ReviewSourceClient):
         account_switch = None
         last_exc = None
         for attempt in range(10):
-            token = self.token_pool.current()
+            try:
+                token = self.token_pool.current()
+            except ApifyAllAccountsExhaustedError as exc:
+                raise ApifyAllAccountsExhaustedError(
+                    "All configured Apify accounts are exhausted."
+                ) from exc
             try:
                 run_id, dataset_id = self.apify_client.start_run(
                     self.settings.apify_actor_id, actor_input, token=token
@@ -286,14 +291,24 @@ class ApifyReviewClient(ReviewSourceClient):
                 return handle
             except Exception as exc:
                 last_exc = exc
+                if isinstance(exc, ApifyAccountExhaustedError):
+                    self.token_pool.mark_exhausted(self.token_pool.current_index)
                 logger.warning(
                     "Apify start_run attempt %d/10 failed for %s: %s; rotating token and retrying",
                     attempt + 1,
-                    crawl_target.branch_name,
+                    getattr(crawl_target, "branch_name", str(crawl_target)),
                     exc,
                 )
                 time.sleep(min(3.0, 0.5 * (attempt + 1)))
-                self._rotate_account(crawl_target, effective_sort, None, exc if isinstance(exc, ApifyAccountExhaustedError) else None)
+                try:
+                    self._rotate_account(
+                        crawl_target,
+                        effective_sort,
+                        None,
+                        exc if isinstance(exc, ApifyAccountExhaustedError) else None,
+                    )
+                except ApifyAllAccountsExhaustedError:
+                    break
                 account_switch = self.token_pool.last_switch
 
         if isinstance(last_exc, ApifyAccountExhaustedError):
@@ -319,6 +334,7 @@ class ApifyReviewClient(ReviewSourceClient):
         error: ApifyAccountExhaustedError,
     ) -> dict:
         """Repeat the exact actor input with the next available account."""
+        self.token_pool.mark_exhausted(int(handle.get("token_index", self.token_pool.current_index)))
         effective_sort = str(handle["effective_sort"])
         actor_input = dict(handle["actor_input"])
         rotations = 0
@@ -329,14 +345,21 @@ class ApifyReviewClient(ReviewSourceClient):
                 raise ApifyAllAccountsExhaustedError(
                     "All configured Apify accounts are exhausted."
                 ) from error
-            self._rotate_account(crawl_target, effective_sort, None, error)
-            token = self.token_pool.current()
+            try:
+                self._rotate_account(crawl_target, effective_sort, None, error)
+            except ApifyAllAccountsExhaustedError:
+                raise
+            try:
+                token = self.token_pool.current()
+            except ApifyAllAccountsExhaustedError:
+                raise
             try:
                 run_id, dataset_id = self.apify_client.start_run(
                     self.settings.apify_actor_id, actor_input, token=token
                 )
             except ApifyAccountExhaustedError as next_error:
                 error = next_error
+                self.token_pool.mark_exhausted(self.token_pool.current_index)
                 continue
             return {
                 **handle,
@@ -376,6 +399,7 @@ class ApifyReviewClient(ReviewSourceClient):
         try:
             self._drain(handle["dataset_id"], token, limit, reviews, seen_review_ids)
         except ApifyAccountExhaustedError as exc:
+            self.token_pool.mark_exhausted(int(handle.get("token_index", self.token_pool.current_index)))
             next_token = self._rotate_account(
                 crawl_target, effective_sort, self._last_drained, exc
             )
@@ -411,8 +435,10 @@ class ApifyReviewClient(ReviewSourceClient):
         last_review: dict | None,
         error: ApifyAccountExhaustedError | None = None,
     ) -> str | None:
+        if error is not None:
+            self.token_pool.mark_exhausted(self.token_pool.current_index)
         marker = {
-            "target_kind": crawl_target.kind,
+            "target_kind": getattr(crawl_target, "kind", "location"),
             "target_id": crawl_target.id,
             "request": getattr(error, "request", None),
             "response": getattr(error, "response", None),

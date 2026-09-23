@@ -92,3 +92,20 @@ def test_redis_keeps_continuous_rotation_across_pool_recreation():
     restarted = ApifyTokenPool(["token-a", "token-b"], redis_client=redis)
     assert restarted.current() == "token-a"
     assert restarted.rotate() == "token-b"
+
+
+def test_exhausted_token_is_skipped():
+    pool = ApifyTokenPool(["token-a", "token-b"])
+    assert pool.current() == "token-a"
+    pool.mark_exhausted(0)
+    # Now token-a is exhausted, current should return token-b
+    assert pool.current() == "token-b"
+    # Rotate should stay on token-b as only token-b is valid
+    assert pool.rotate() == "token-b"
+
+    # When token-b is also exhausted, current raises ApifyAllAccountsExhaustedError
+    pool.mark_exhausted(1)
+    with pytest.raises(ApifyAllAccountsExhaustedError):
+        pool.current()
+    assert pool.rotate() is None
+

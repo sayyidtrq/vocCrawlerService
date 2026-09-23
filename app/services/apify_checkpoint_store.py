@@ -108,7 +108,9 @@ class ApifyCheckpointStore:
 
     @staticmethod
     def _model(crawl_target):
-        return Location if crawl_target.kind == "location" else Competitor
+        if isinstance(crawl_target, Location) or getattr(crawl_target, "kind", None) == "location":
+            return Location
+        return Competitor
 
     @staticmethod
     def _aware(value: datetime) -> datetime:

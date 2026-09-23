@@ -136,6 +136,7 @@ class Settings(BaseModel):
     local_llm_api_key: str | None = "ollama"
     local_llm_model: str = "qwen2.5:7b"
     analysis_provider: AnalysisProvider = "absa"
+    auto_analyze_on_crawl: bool = True
     absa_base_url: str = "http://host.docker.internal:9090/api"
     absa_engine_version: str = "v14"
     absa_profile: str = "maps_high_recall"
