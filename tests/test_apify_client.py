@@ -93,6 +93,70 @@ def test_429_never_becomes_account_exhaustion():
     assert caught.value.retriable is True
 
 
+def test_concurrent_runs_quota_treated_as_rate_limit_not_exhaustion():
+    session = FakeSession(
+        [
+            FakeResponse(
+                400,
+                {
+                    "error": {
+                        "type": "actor-run-quota-exceeded",
+                        "message": "You have reached the maximum number of concurrent Actor runs for your plan.",
+                    }
+                },
+            )
+        ]
+    )
+
+    with pytest.raises(ReviewSourceError) as caught:
+        ApifyClient(
+            settings(), session, max_rate_limit_retries=0
+        ).start_run("actor/name", {}, token="token")
+    assert caught.value.code == "APIFY_RATE_LIMITED"
+    assert caught.value.retriable is True
+
+
+def test_concurrent_runs_error_retries_and_succeeds(monkeypatch):
+    session = FakeSession(
+        [
+            FakeResponse(
+                400,
+                {
+                    "error": {
+                        "type": "run-cannot-be-started",
+                        "message": "You have exceeded the maximum concurrent Actor runs quota.",
+                    }
+                },
+            ),
+            FakeResponse(201, {"data": {"id": "run-1", "defaultDatasetId": "data-1"}}),
+        ]
+    )
+    monkeypatch.setattr("app.integrations.apify_client.time.sleep", lambda _: None)
+
+    assert ApifyClient(settings(), session).start_run(
+        "actor/name", {}, token="token"
+    ) == ("run-1", "data-1")
+
+
+def test_monthly_usage_limit_raises_account_exhaustion():
+    session = FakeSession(
+        [
+            FakeResponse(
+                403,
+                {
+                    "error": {
+                        "type": "monthly-usage-limit-exceeded",
+                        "message": "Your account has reached its monthly usage limit.",
+                    }
+                },
+            )
+        ]
+    )
+
+    with pytest.raises(ApifyAccountExhaustedError):
+        ApifyClient(settings(), session).start_run("actor/name", {}, token="token")
+
+
 def test_dataset_pagination_continues_until_an_empty_page():
     session = FakeSession([FakeResponse(200, [{"id": 1}]), FakeResponse(200, [])])
 

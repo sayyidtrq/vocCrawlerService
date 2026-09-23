@@ -153,7 +153,7 @@ class ApifyClient:
                     f"Apify request failed: {exc}",
                     code="APIFY_REQUEST_FAILED",
                 ) from exc
-            if response.status_code == 429:
+            if self._is_concurrency_or_rate_limit(response):
                 if attempt < self.max_rate_limit_retries:
                     time.sleep(0.5 * (2**attempt))
                     continue
@@ -205,7 +205,9 @@ class ApifyClient:
         return data
 
     @staticmethod
-    def _is_credit_exhaustion(response) -> bool:
+    def _is_concurrency_or_rate_limit(response) -> bool:
+        if response.status_code == 429:
+            return True
         try:
             payload = response.json()
         except ValueError:
@@ -216,7 +218,52 @@ class ApifyClient:
         haystack = " ".join(
             str(error.get(key) or "") for key in ("type", "message", "code")
         ).lower()
-        return any(word in haystack for word in ("credit", "payment required", "quota"))
+        return any(
+            term in haystack
+            for term in (
+                "concurrent",
+                "rate-limit",
+                "rate limit",
+                "too many requests",
+                "actor-run-quota-exceeded",
+                "run-cannot-be-started",
+                "memory",
+            )
+        )
+
+    @staticmethod
+    def _is_credit_exhaustion(response) -> bool:
+        if response.status_code == 402:
+            return True
+        try:
+            payload = response.json()
+        except ValueError:
+            return False
+        error = payload.get("error") if isinstance(payload, dict) else None
+        if not isinstance(error, dict):
+            return False
+        haystack = " ".join(
+            str(error.get(key) or "") for key in ("type", "message", "code")
+        ).lower()
+        # Transient concurrency, memory, or rate limits are not credit exhaustion.
+        if any(
+            term in haystack
+            for term in ("concurrent", "rate-limit", "rate limit", "memory")
+        ):
+            return False
+        return any(
+            word in haystack
+            for word in (
+                "credit",
+                "payment required",
+                "payment-required",
+                "insufficient funds",
+                "monthly usage",
+                "usage limit",
+                "spending limit",
+                "out of prepaid",
+            )
+        )
 
     @staticmethod
     def _error_message(response) -> str:

@@ -167,7 +167,7 @@ class Settings(BaseModel):
     apify_run_timeout_seconds: int = 300
     apify_poll_interval_seconds: int = 5
     redis_url: str | None = None
-    apify_account_exhausted_ttl_seconds: int = 86400
+    apify_account_exhausted_ttl_seconds: int = 1800
     analysis_batch_size: int = 20
     prompt_version: str = "v1"
     page_size: int = 20
