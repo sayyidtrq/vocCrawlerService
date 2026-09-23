@@ -30,7 +30,7 @@ REVIEW_SOURCE_MODES = {
     "third_party",
     "apify",
 }
-AnalysisProvider = Literal["absa", "openai"]
+AnalysisProvider = Literal["absa", "openai", "jev"]
 
 # Fields that go through the old _as_int/_as_bool/_as_float/_as_optional_int/
 # _as_list helpers, all of which treat a blank env value as absent (use the
@@ -50,6 +50,8 @@ _BLANK_USES_DEFAULT_FIELDS = (
     "openai_model",
     "absa_confidence_threshold",
     "absa_timeout_seconds",
+    "jev_confidence_threshold",
+    "jev_timeout_seconds",
     "onebox_base_url",
     "onebox_service_email",
     "onebox_service_password",
@@ -100,6 +102,7 @@ _INT_FLOORS = {
     "analysis_llm_max_retries": 0,
     "analysis_circuit_breaker_threshold": 0,
     "absa_timeout_seconds": 1,
+    "jev_timeout_seconds": 1,
     "apify_account_exhausted_ttl_seconds": 60,
 }
 
@@ -138,6 +141,12 @@ class Settings(BaseModel):
     absa_profile: str = "maps_high_recall"
     absa_confidence_threshold: float = 0.1
     absa_timeout_seconds: int = 300
+    jev_base_url: str = "https://openrouter.ai/api"
+    jev_api_key: str | None = None
+    jev_engine_version: str = "~typesafe/jev-latest"
+    jev_profile: str = "maps_high_recall"
+    jev_confidence_threshold: float = 0.1
+    jev_timeout_seconds: int = 300
     openai_base_url: str = "https://api.openai.com/v1"
     openai_api_key: str | None = None
     openai_model: str | None = None
@@ -274,6 +283,9 @@ class _EnvSettings(Settings, BaseSettings):
         "absa_base_url",
         "absa_engine_version",
         "absa_profile",
+        "jev_base_url",
+        "jev_engine_version",
+        "jev_profile",
         "openai_base_url",
         "apify_actor_id",
         "prompt_version",
@@ -297,8 +309,8 @@ class _EnvSettings(Settings, BaseSettings):
     @classmethod
     def _validate_analysis_provider(cls, value: str) -> str:
         normalized = value.strip().lower()
-        if normalized not in {"absa", "openai"}:
-            raise ValueError("ANALYSIS_PROVIDER must be absa or openai.")
+        if normalized not in {"absa", "openai", "jev"}:
+            raise ValueError("ANALYSIS_PROVIDER must be absa, openai, or jev.")
         return normalized
 
     @field_validator("gemini_model", mode="after")
@@ -330,6 +342,11 @@ class _EnvSettings(Settings, BaseSettings):
     @field_validator("absa_confidence_threshold", mode="after")
     @classmethod
     def _clamp_absa_confidence_threshold(cls, value: float) -> float:
+        return min(1.0, max(0.0, value))
+
+    @field_validator("jev_confidence_threshold", mode="after")
+    @classmethod
+    def _clamp_jev_confidence_threshold(cls, value: float) -> float:
         return min(1.0, max(0.0, value))
 
     @field_validator("analysis_llm_concurrency", mode="after")
