@@ -1,4 +1,4 @@
 #!/bin/sh
 set -eu
 
-exec python -m scripts.run_crawl_worker
+exec python -u -m scripts.run_crawl_worker

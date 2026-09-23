@@ -444,6 +444,8 @@ class ApifyReviewClient(ReviewSourceClient):
             "response": getattr(error, "response", None),
         }
         next_token = self.token_pool.rotate(marker)
+        if next_token is None:
+            raise ApifyAllAccountsExhaustedError("All configured Apify accounts are exhausted.")
         switch = self.token_pool.last_switch
         if switch is not None:
             self.last_metadata["apify_account_switch"] = switch
