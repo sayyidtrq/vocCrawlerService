@@ -165,6 +165,7 @@ class LocalLLMClient(GeminiClientBase):
                 ],
                 temperature=0.1,
                 response_format={"type": "json_object"},
+                max_tokens=1000,
             )
         except APIError as exc:
             raise LLMProviderError(f"OpenAI API request failed: {exc}") from exc

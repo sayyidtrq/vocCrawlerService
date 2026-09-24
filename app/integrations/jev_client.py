@@ -123,6 +123,17 @@ class JevAiClient(GeminiClientBase):
             )
 
         result_payload = response.json()
+        usage = result_payload.get("usage", {})
+        input_tokens = int(usage.get("input_tokens") or usage.get("prompt_tokens") or 0)
+        output_tokens = int(usage.get("output_tokens") or usage.get("completion_tokens") or 0)
+        total_tokens = int(usage.get("total_tokens") or (input_tokens + output_tokens))
+        cost = float(usage.get("cost") or 0.0)
+        self.last_usage = {
+            "prompt_tokens": input_tokens,
+            "completion_tokens": output_tokens,
+            "total_tokens": total_tokens,
+            "cost": cost,
+        }
         return self._to_analysis(result_payload, review)
 
     @staticmethod
