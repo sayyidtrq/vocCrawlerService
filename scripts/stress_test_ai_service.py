@@ -65,7 +65,7 @@ DIM = "\033[2m"
 # Price reference (per 1M tokens or per request)
 # Jev AI via OpenRouter: ~$0.0000319 per query or ~$0.035 / 1M prompt, $0.14 / 1M completion
 # Gemini 2.5 Flash Lite: $0.075 / 1M prompt, $0.30 / 1M completion
-USD_TO_IDR = 16_000.0
+USD_TO_IDR = 17_500.0
 
 
 @dataclass

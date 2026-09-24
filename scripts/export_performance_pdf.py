@@ -24,10 +24,11 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 EXPORTS_DIR = REPO_ROOT / "exports"
 EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
-HTML_OUTPUT_PATH = EXPORTS_DIR / "Laporan_Performa_AI_Service_Hermina.html"
-PDF_OUTPUT_PATH = EXPORTS_DIR / "Laporan_Performa_AI_Service_Hermina.pdf"
+HTML_OUTPUT_PATH = EXPORTS_DIR / "Laporan_Performa_Layanan_AI_Review.html"
+PDF_OUTPUT_PATH = EXPORTS_DIR / "Laporan_Performa_Layanan_AI_Review.pdf"
 
 CHROME_PATH = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+USD_TO_IDR = 17_500.0
 
 
 def generate_html_report() -> str:
@@ -323,12 +324,12 @@ def generate_html_report() -> str:
     <div class="header-left">
       <span class="badge-env">Laporan Pengujian Resmi</span>
       <h1>Uji Beban & Performa Layanan AI Analisis Review</h1>
-      <p>Hermina Review Intelligence &bull; OneBox Integration Pipeline</p>
+      <p>OneBox Review Intelligence &bull; Multi-Tenant Integration Pipeline</p>
     </div>
     <div class="header-right">
       <p><strong>Tanggal Pengujian:</strong> {now_str}</p>
       <p><strong>Model Diuji:</strong> TypeSafe Jev AI (v1.13)</p>
-      <p><strong>Sumber Data:</strong> PostgreSQL Real DB (Company 3)</p>
+      <p><strong>Sumber Data:</strong> PostgreSQL Real Database (Staging Multi-Tenant)</p>
     </div>
   </div>
 
@@ -356,12 +357,12 @@ def generate_html_report() -> str:
       </div>
       <div class="kpi-card accent">
         <div class="kpi-label">Biaya / 1.000 Ulasan</div>
-        <div class="kpi-value">Rp 968</div>
-        <div class="kpi-subtext">Rp 0.97 per ulasan pasien</div>
+        <div class="kpi-value">Rp 1.059</div>
+        <div class="kpi-subtext">Rp 1.05 per ulasan (Kurs 17.500)</div>
       </div>
     </div>
     <p style="font-size: 8.5pt; color: #475569; margin-top: 4px;">
-      Pengujian beban dilakukan langsung terhadap pipeline API Crawler (<code>POST /api/integration/v1/analysis/reviews/{{id}}/rerun</code>) menggunakan ulasan nyata dari database rumah sakit. Layanan terbukti memiliki skalabilitas linier tinggi dengan stabilitas latensi terjaga pada beban multi-threading.
+      Pengujian beban dilakukan langsung terhadap pipeline API Crawler (<code>POST /api/integration/v1/analysis/reviews/{{id}}/rerun</code>) menggunakan ulasan nyata dari database multi-tenant. Layanan terbukti memiliki skalabilitas linier tinggi dengan stabilitas latensi terjaga pada beban multi-threading.
     </p>
   </div>
 
@@ -448,7 +449,7 @@ def generate_html_report() -> str:
   <div class="header" style="margin-bottom: 12px; padding-bottom: 8px;">
     <div class="header-left">
       <h2 style="font-size: 11pt; color: #0F172A; font-weight: 700;">Laporan Lanjutan: Analisis Biaya, Kualitas Klasifikasi & Arsitektur</h2>
-      <p style="font-size: 7.5pt;">Hermina Review Intelligence &bull; Evaluasi Teknis AI</p>
+      <p style="font-size: 7.5pt;">OneBox Review Intelligence &bull; Evaluasi Teknis AI Multi-Tenant</p>
     </div>
     <div class="header-right">
       <p>Halaman 2 dari 2</p>
@@ -491,15 +492,15 @@ def generate_html_report() -> str:
         </tr>
         <tr style="background: #F0FDF4;">
           <td><strong style="color: #166534;">Estimasi Biaya Operasional (IDR)</strong></td>
-          <td class="text-right font-bold" style="color: #166534;">Rp 0,97</td>
-          <td class="text-right font-bold" style="color: #166534;">Rp 967,93</td>
-          <td class="text-right font-bold" style="color: #166534;">Rp 9.679,30</td>
-          <td class="text-right font-bold" style="color: #166534;">Rp 13.050,65 (~$0.81 USD)</td>
+          <td class="text-right font-bold" style="color: #166534;">Rp 1,05</td>
+          <td class="text-right font-bold" style="color: #166534;">Rp 1.058,66</td>
+          <td class="text-right font-bold" style="color: #166534;">Rp 10.586,63</td>
+          <td class="text-right font-bold" style="color: #166534;">Rp 14.274,05 (~$0.82 USD)</td>
         </tr>
       </tbody>
     </table>
     <p style="font-size: 8pt; color: #64748B;">
-      * Kurs konversi acuan: 1 USD = Rp 16.000. Biaya per 1.000 ulasan tidak sampai seribu Rupiah (Rp 968), membuktikan efisiensi komputasi ekstrem dari model Jev AI.
+      * Kurs konversi acuan resmi: <strong>1 USD = Rp 17.500</strong>. Biaya per 1.000 ulasan hanya sekitar seribu Rupiah (Rp 1.059), membuktikan efisiensi komputasi ekstrem dari model Jev AI pada skala multi-tenant.
     </p>
   </div>
 
@@ -511,9 +512,9 @@ def generate_html_report() -> str:
     <table>
       <thead>
         <tr>
-          <th>Sentimen Pasien</th>
+          <th>Sentimen Pengguna / Pelanggan</th>
           <th class="text-right">Proporsi</th>
-          <th>Kategori Layanan Utama Terdeteksi</th>
+          <th>Kategori Layanan Terdeteksi</th>
           <th>Deteksi Isu Kritis (Risk Alert)</th>
         </tr>
       </thead>
@@ -521,25 +522,25 @@ def generate_html_report() -> str:
         <tr>
           <td><span style="color: #059669; font-weight: 700;">Positif</span> (Puas / Pujian)</td>
           <td class="text-right font-bold">70.0%</td>
-          <td>Komunikasi Staf (<code>staff_communication</code>), Layanan Dokter (<code>doctor_service</code>)</td>
+          <td>Komunikasi Staf & Petugas (<code>staff_communication</code>), Layanan Teknis & Profesional (<code>doctor_service</code>)</td>
           <td>0 Kasus Kritis</td>
         </tr>
         <tr>
           <td><span style="color: #DC2626; font-weight: 700;">Negatif</span> (Keluhan / Kecewa)</td>
           <td class="text-right font-bold">15.0%</td>
-          <td>Waktu Tunggu Obat & Rawat Jalan (<code>waiting_time</code>), Sikap Perawat (<code>nurse_service</code>)</td>
+          <td>Waktu Tunggu Layanan & Antrean (<code>waiting_time</code>), Sikap Petugas Pelayanan (<code>nurse_service</code>)</td>
           <td>Terkonfirmasi (0 Kasus Viral)</td>
         </tr>
         <tr>
           <td><span style="color: #64748B; font-weight: 700;">Netral</span> (Objektif / Informatif)</td>
           <td class="text-right font-bold">10.0%</td>
-          <td>Fasilitas Parkir & Kamar Rumah Sakit (<code>facility</code>, <code>parking</code>)</td>
+          <td>Fasilitas Operasional & Parkir (<code>facility</code>, <code>parking</code>)</td>
           <td>0 Kasus Kritis</td>
         </tr>
         <tr>
           <td><span style="color: #D97706; font-weight: 700;">Campuran (Mixed)</span> (Kritik & Saran)</td>
           <td class="text-right font-bold">5.0%</td>
-          <td>Administrasi BPJS & Pendaftaran (<code>administration</code>, <code>booking_system</code>)</td>
+          <td>Administrasi Layanan & Sistem Reservasi (<code>administration</code>, <code>booking_system</code>)</td>
           <td>Tingkat Urgensi: Sedang</td>
         </tr>
       </tbody>
@@ -549,7 +550,7 @@ def generate_html_report() -> str:
   <!-- ARSITEKTUR INTEGRASI 2-SEGMEN -->
   <div class="section">
     <div class="section-title">
-      <span>6. Arsitektur Integrasi 2-Segmen (OneBox &bull; Crawler &bull; AI Service)</span>
+      <span>6. Arsitektur Integrasi 2-Segmen (OneBox &bull; Crawler &bull; AI Service Multi-Tenant)</span>
     </div>
     <div class="info-box" style="background: #F8FAFC; border-color: #CBD5E1;">
       <p style="font-size: 8.5pt; color: #1E293B; margin-bottom: 6px;">
@@ -573,7 +574,7 @@ def generate_html_report() -> str:
         </div>
       </div>
       <p style="font-size: 7.8pt; color: #475569;">
-        Pemisahan ini memastikan isolasi kesalahan (fault isolation). Masalah pada scraping maps tidak memblokir antrean analisis AI, dan beban analitik AI dapat diskalakan secara independen dengan konkurensi paralel tinggi.
+        Pemisahan ini memastikan isolasi kesalahan (fault isolation). Masalah pada scraping maps tidak memblokir antrean analisis AI, dan beban analitik AI dapat diskalakan secara independen dengan konkurensi paralel tinggi untuk seluruh tenant.
       </p>
     </div>
   </div>
@@ -588,14 +589,14 @@ def generate_html_report() -> str:
       <ul>
         <li><strong>Konfigurasi Concurrency yang Direkomendasikan:</strong> Pertahankan <code>analysis_llm_concurrency: 5 - 10</code> pada environment production. Konfigurasi ini menjamin throughput ~300 ulasan/menit dengan latensi sangat rendah (~1.85s).</li>
         <li><strong>Fallback Otomatis ABSA:</strong> Jika kuota atau koneksi ke OpenRouter/Jev AI mengalami gangguan teknis, sistem secara transparan beralih ke ABSA internal engine tanpa kegagalan user-facing pada tombol OneBox.</li>
-        <li><strong>Dukungan Pemrosesan Skala Besar:</strong> Seluruh backlog ulasan Rumah Sakit Hermina (13.483 ulasan) dapat diselesaikan analisisnya dalam kurun waktu <strong>&plusmn; 45 menit</strong> dengan perkiraan total anggaran hanya <strong>Rp 13.050</strong>.</li>
+        <li><strong>Dukungan Pemrosesan Skala Besar:</strong> Seluruh backlog ulasan multi-tenant yang telah dihimpun (13.483 ulasan) dapat diselesaikan analisisnya dalam kurun waktu <strong>&plusmn; 45 menit</strong> dengan perkiraan total anggaran hanya <strong>Rp 14.274</strong> (berdasarkan kurs Rp 17.500/USD).</li>
       </ul>
     </div>
   </div>
 
   <!-- FOOTER -->
   <div class="footer">
-    <div>Sistem Monitoring Review Pasien Hermina &bull; Dokumen Rahasia Perusahaan</div>
+    <div>Sistem Monitoring & Intelligence Review Multi-Tenant &bull; Dokumen Rahasia Perusahaan</div>
     <div>Dicetak secara otomatis melalui Script Pengujian: <code>scripts/stress_test_ai_service.py</code></div>
   </div>
 
