@@ -61,6 +61,7 @@ class CrawlWorker:
                 exhausted_ttl_seconds=(
                     self.settings.apify_account_exhausted_ttl_seconds
                 ),
+                fallback_to_primary_on_exhaustion=True,
             )
             self.fetch_service_factory = lambda company_id: ApifyFetchService(
                 company_id=company_id,
@@ -142,6 +143,13 @@ class CrawlWorker:
             if batch is not None:
                 batch.status = "running"
                 batch.started_at = batch.started_at or now
+            logger.info(
+                "Worker %s claimed job %s (batch %s, location %s)",
+                worker_id,
+                job.id,
+                batch.public_id if batch else "",
+                job.location_id,
+            )
             request_options = dict((job.result_json or {}).get("request") or {})
             crawl_mode = request_options.get("crawl_mode") or "regular_delta"
             quota_remaining = self._remaining_review_quota(
@@ -395,6 +403,10 @@ class CrawlWorker:
                 raise RuntimeError("Claimed crawl job disappeared.")
             current = dict(job.result_json or {})
             current["source_run"] = source_run
+            metadata = dict(current.get("metadata") or {})
+            metadata.pop("stop_reason", None)
+            metadata.pop("stopped_reason", None)
+            current["metadata"] = metadata
             job.result_json = current
             job.status = "awaiting_source"
             job.available_at = now + timedelta(
@@ -504,6 +516,15 @@ class CrawlWorker:
             job.lease_expires_at = None
             if status in {"succeeded", "partial_success", "skipped", "failed"}:
                 job.finished_at = now
+            logger.info(
+                "Job %s finished: status=%s, fetched=%s, inserted=%s, duplicate=%s, stop_reason=%s",
+                claimed.id,
+                status,
+                enriched_result.get("total_fetched", 0),
+                enriched_result.get("total_inserted", 0),
+                enriched_result.get("total_duplicate", 0),
+                public_stop_reason,
+            )
             session.flush()
             batch = session.get(CrawlBatch, claimed.batch_id)
             if batch is None:

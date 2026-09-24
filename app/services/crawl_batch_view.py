@@ -138,7 +138,11 @@ def serialize_batch(
                 "crawl_mode": ((job.result_json or {}).get("request") or {}).get(
                     "crawl_mode"
                 ),
-                "stop_reason": stop_reason(job.result_json or {}),
+                "stop_reason": (
+                    stop_reason(job.result_json or {})
+                    if job.status not in ("queued", "running", "awaiting_source", "retry_wait")
+                    else None
+                ),
                 "rating_snapshot": rating_snapshot(job.result_json or {}),
                 "status": _public_status(job.status),
                 "attempts": job.attempts,
@@ -175,6 +179,8 @@ def batch_kind(jobs) -> str:
 def batch_stop_reasons(jobs) -> tuple[str | None, dict[str, int]]:
     counts: dict[str, int] = {}
     for job in jobs:
+        if job.status in ("queued", "running", "awaiting_source", "retry_wait"):
+            continue
         reason = stop_reason(job.result_json or {})
         if not reason:
             continue

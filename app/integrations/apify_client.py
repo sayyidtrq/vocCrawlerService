@@ -104,12 +104,14 @@ class ApifyClient:
     def iter_dataset_items(self, dataset_id: str, *, token: str) -> Iterator[dict]:
         offset = 0
         page_size = 1000
+        timeout = max(120, self.settings.fetch_timeout_seconds)
         while True:
             response = self._request(
                 "get",
                 f"{self.base_url}/datasets/{quote(dataset_id, safe='')}/items",
                 token=token,
                 params={"format": "json", "limit": page_size, "offset": offset},
+                timeout=timeout,
             )
             try:
                 items = response.json()
@@ -133,22 +135,29 @@ class ApifyClient:
     def _request(self, method: str, url: str, *, token: str, **kwargs):
         headers = dict(kwargs.pop("headers", {}))
         headers["Authorization"] = f"Bearer {token}"
+        timeout = kwargs.pop("timeout", self.settings.fetch_timeout_seconds)
         for attempt in range(self.max_rate_limit_retries + 1):
             try:
                 response = self.http_session.request(
                     method,
                     url,
                     headers=headers,
-                    timeout=self.settings.fetch_timeout_seconds,
+                    timeout=timeout,
                     **kwargs,
                 )
             except (requests.Timeout, requests.ConnectionError) as exc:
+                if attempt < self.max_rate_limit_retries:
+                    time.sleep(min(3.0, 0.5 * (2**attempt)))
+                    continue
                 raise ReviewSourceError(
                     f"Apify request failed: {exc}",
                     retriable=True,
                     code="APIFY_REQUEST_FAILED",
                 ) from exc
             except requests.RequestException as exc:
+                if attempt < self.max_rate_limit_retries:
+                    time.sleep(min(3.0, 0.5 * (2**attempt)))
+                    continue
                 raise ReviewSourceError(
                     f"Apify request failed: {exc}",
                     code="APIFY_REQUEST_FAILED",

@@ -21,6 +21,7 @@ class ApifyTokenPool:
         redis_url: str | None = None,
         exhausted_ttl_seconds: int = 86400,
         redis_client=None,
+        fallback_to_primary_on_exhaustion: bool = False,
     ):
         self._tokens = [token.strip() for token in tokens if token.strip()]
         self._index = 0
@@ -28,6 +29,7 @@ class ApifyTokenPool:
         self._redis = redis_client
         self._redis_errors: tuple[type[BaseException], ...] = ()
         self._exhausted_ttl_seconds = exhausted_ttl_seconds
+        self._fallback_to_primary_on_exhaustion = fallback_to_primary_on_exhaustion
         self.last_switch: dict | None = None
         signature = hashlib.sha256(
             "\0".join(self._tokens).encode()
@@ -87,6 +89,13 @@ class ApifyTokenPool:
         if self.is_exhausted(self._index):
             available = self._find_first_available()
             if available is None:
+                if self._fallback_to_primary_on_exhaustion:
+                    logger.warning(
+                        "All Apify accounts marked exhausted; resetting exhausted set and falling back to primary token."
+                    )
+                    self._exhausted.clear()
+                    self._index = 0
+                    return self._tokens[0]
                 raise ApifyAllAccountsExhaustedError(
                     "All configured Apify accounts are exhausted."
                 )
@@ -129,9 +138,14 @@ class ApifyTokenPool:
                 break
 
         if next_index is None:
-            # If all are exhausted or only 1 token and it is exhausted:
             if not self.is_exhausted(previous):
                 next_index = previous
+            elif self._fallback_to_primary_on_exhaustion:
+                logger.warning(
+                    "All Apify accounts marked exhausted during rotate; resetting and falling back to primary token."
+                )
+                self._exhausted.clear()
+                next_index = 0
             else:
                 return None
 
