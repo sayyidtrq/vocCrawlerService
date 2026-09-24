@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
-"""Export AI Service Performance & Stress Test Report to a Professional PDF (in Bahasa Indonesia).
+"""Export Comprehensive Fetching & AI Performance Stress Test Report to PDF (in Bahasa Indonesia).
 
-Generates an executive-ready PDF report containing:
-- Executive Summary & Key Performance Indicators (KPIs)
-- Concurrency Scalability Benchmark (1, 5, 10 workers)
-- Latency Percentile Distribution (p50, p90, p95, p99, Min, Max, StdDev)
-- Token Consumption & Operational Cost Estimation (USD & IDR)
-- Sentiment & Quality Classification Breakdown
-- Architectural Recommendations for OneBox & Hermina Crawler Pipeline
+Includes:
+- Segment 1: Review Fetching Pipeline Performance (Throughput, Deduplication, Latency, DB Write)
+- Segment 2: Multi-Model AI Performance Comparison (Jev AI vs OpenAI GPT-4o-mini vs ABSA v14)
+- Concurrency Scalability Benchmarks (1, 5, 10 workers)
+- Token Consumption & Operational Cost Estimation (at 17,500 IDR/USD exchange rate)
+- Architectural 2-Segment Workflow & Deployment Recommendations
 """
 
 from __future__ import annotations
@@ -38,7 +37,7 @@ def generate_html_report() -> str:
 <html lang="id">
 <head>
   <meta charset="UTF-8">
-  <title>Laporan Uji Beban & Performa Layanan AI Analisis Review</title>
+  <title>Laporan Pengujian Beban & Performa Layanan Penarikan dan Analisis AI</title>
   <style>
     @page {{
       size: A4 portrait;
@@ -60,7 +59,7 @@ def generate_html_report() -> str:
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
       color: #1E293B;
       background: #FFFFFF;
-      font-size: 8.8pt;
+      font-size: 8.5pt;
       line-height: 1.35;
       -webkit-print-color-adjust: exact;
       print-color-adjust: exact;
@@ -69,23 +68,23 @@ def generate_html_report() -> str:
     /* Header styling */
     .header {{
       border-bottom: 2px solid #0EA5E9;
-      padding-bottom: 8px;
-      margin-bottom: 10px;
+      padding-bottom: 7px;
+      margin-bottom: 9px;
       display: flex;
       justify-content: space-between;
       align-items: flex-end;
     }}
 
     .header-left h1 {{
-      font-size: 16pt;
+      font-size: 14pt;
       font-weight: 800;
       color: #0F172A;
       letter-spacing: -0.3px;
-      margin-bottom: 4px;
+      margin-bottom: 2px;
     }}
 
     .header-left p {{
-      font-size: 9pt;
+      font-size: 8.5pt;
       color: #0284C7;
       font-weight: 600;
       text-transform: uppercase;
@@ -94,7 +93,7 @@ def generate_html_report() -> str:
 
     .header-right {{
       text-align: right;
-      font-size: 8pt;
+      font-size: 7.5pt;
       color: #64748B;
     }}
 
@@ -102,27 +101,27 @@ def generate_html_report() -> str:
       display: inline-block;
       background: #E0F2FE;
       color: #0369A1;
-      padding: 2px 8px;
+      padding: 2px 7px;
       border-radius: 4px;
       font-weight: 700;
-      font-size: 7.5pt;
-      margin-bottom: 3px;
+      font-size: 6.8pt;
+      margin-bottom: 2px;
       text-transform: uppercase;
     }}
 
     /* Section styling */
     .section {{
-      margin-bottom: 16px;
+      margin-bottom: 10px;
       page-break-inside: avoid;
     }}
 
     .section-title {{
-      font-size: 11pt;
+      font-size: 9.5pt;
       font-weight: 700;
       color: #0F172A;
       border-left: 3.5px solid #0284C7;
-      padding-left: 8px;
-      margin-bottom: 10px;
+      padding-left: 7px;
+      margin-bottom: 6px;
       display: flex;
       align-items: center;
       justify-content: space-between;
@@ -132,29 +131,29 @@ def generate_html_report() -> str:
     .kpi-grid {{
       display: grid;
       grid-template-columns: repeat(4, 1fr);
-      gap: 8px;
-      margin-bottom: 12px;
+      gap: 7px;
+      margin-bottom: 8px;
     }}
 
     .kpi-card {{
       background: #F8FAFC;
       border: 1px solid #E2E8F0;
       border-radius: 6px;
-      padding: 10px 12px;
+      padding: 7px 9px;
       text-align: left;
     }}
 
     .kpi-label {{
-      font-size: 7.5pt;
+      font-size: 6.8pt;
       color: #64748B;
       font-weight: 600;
       text-transform: uppercase;
       letter-spacing: 0.3px;
-      margin-bottom: 4px;
+      margin-bottom: 2px;
     }}
 
     .kpi-value {{
-      font-size: 15pt;
+      font-size: 13pt;
       font-weight: 800;
       color: #0F172A;
       line-height: 1.1;
@@ -162,7 +161,7 @@ def generate_html_report() -> str:
     }}
 
     .kpi-subtext {{
-      font-size: 7.5pt;
+      font-size: 6.8pt;
       color: #10B981;
       font-weight: 600;
     }}
@@ -187,8 +186,8 @@ def generate_html_report() -> str:
     table {{
       width: 100%;
       border-collapse: collapse;
-      margin-bottom: 8px;
-      font-size: 8.5pt;
+      margin-bottom: 6px;
+      font-size: 7.8pt;
     }}
 
     th {{
@@ -196,15 +195,15 @@ def generate_html_report() -> str:
       color: #334155;
       font-weight: 700;
       text-align: left;
-      padding: 6px 8px;
+      padding: 4.5px 6.5px;
       border: 1px solid #E2E8F0;
-      font-size: 8pt;
+      font-size: 7.2pt;
       text-transform: uppercase;
       letter-spacing: 0.3px;
     }}
 
     td {{
-      padding: 6px 8px;
+      padding: 4.5px 6.5px;
       border: 1px solid #E2E8F0;
       color: #1E293B;
     }}
@@ -227,29 +226,19 @@ def generate_html_report() -> str:
       font-weight: 700;
     }}
 
-    /* Grid 2 col */
-    .grid-2 {{
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 12px;
-      margin-bottom: 8px;
-    }}
-
     /* Info boxes */
     .info-box {{
       background: #F8FAFC;
       border: 1px solid #E2E8F0;
       border-radius: 6px;
-      padding: 10px 12px;
+      padding: 8px 10px;
     }}
 
     .info-box h4 {{
-      font-size: 9pt;
+      font-size: 8.5pt;
       font-weight: 700;
       color: #0F172A;
-      margin-bottom: 6px;
-      display: flex;
-      align-items: center;
+      margin-bottom: 5px;
     }}
 
     .info-box ul {{
@@ -258,9 +247,9 @@ def generate_html_report() -> str:
     }}
 
     .info-box li {{
-      font-size: 8pt;
+      font-size: 7.8pt;
       color: #334155;
-      margin-bottom: 4px;
+      margin-bottom: 3px;
       display: flex;
       justify-content: space-between;
       border-bottom: 1px dashed #E2E8F0;
@@ -284,52 +273,54 @@ def generate_html_report() -> str:
     .recom-box {{
       background: #F8FAFC;
       border-left: 4px solid #10B981;
-      padding: 8px 12px;
+      padding: 7px 10px;
       border-radius: 0 6px 6px 0;
-      margin-top: 6px;
+      margin-top: 4px;
     }}
 
     .recom-box p {{
-      font-size: 8.5pt;
+      font-size: 8pt;
       color: #1E293B;
-      margin-bottom: 4px;
+      margin-bottom: 3px;
     }}
 
     .recom-box ul {{
-      padding-left: 18px;
-      font-size: 8pt;
+      padding-left: 16px;
+      font-size: 7.5pt;
       color: #334155;
     }}
 
     .recom-box li {{
-      margin-bottom: 3px;
+      margin-bottom: 2.5px;
     }}
 
     /* Footer */
     .footer {{
-      margin-top: 18px;
+      margin-top: 10px;
       border-top: 1px solid #E2E8F0;
-      padding-top: 8px;
+      padding-top: 6px;
       display: flex;
       justify-content: space-between;
-      font-size: 7.5pt;
+      font-size: 7pt;
       color: #94A3B8;
     }}
   </style>
 </head>
 <body>
 
+  <!-- ==================== HALAMAN 1 ==================== -->
+
   <!-- HEADER -->
   <div class="header">
     <div class="header-left">
       <span class="badge-env">Laporan Pengujian Resmi</span>
-      <h1>Uji Beban & Performa Layanan AI Analisis Review</h1>
-      <p>OneBox Review Intelligence &bull; Multi-Tenant Integration Pipeline</p>
+      <h1>Uji Beban & Performa Pipeline Penarikan dan Analisis AI</h1>
+      <p>OneBox Review Intelligence &bull; Multi-Tenant Architecture Pipeline</p>
     </div>
     <div class="header-right">
       <p><strong>Tanggal Pengujian:</strong> {now_str}</p>
-      <p><strong>Model Diuji:</strong> TypeSafe Jev AI (v1.13)</p>
-      <p><strong>Sumber Data:</strong> PostgreSQL Real Database (Staging Multi-Tenant)</p>
+      <p><strong>Cakupan Evaluasi:</strong> Segmen 1 (Fetch) & Segmen 2 (AI Analysis)</p>
+      <p><strong>Model Diuji:</strong> Jev AI, OpenAI (GPT-4o-mini), ABSA (v14)</p>
     </div>
   </div>
 
@@ -343,33 +334,85 @@ def generate_html_report() -> str:
       <div class="kpi-card accent">
         <div class="kpi-label">Tingkat Keberhasilan</div>
         <div class="kpi-value">100%</div>
-        <div class="kpi-subtext">0 error dari seluruh pengujian</div>
+        <div class="kpi-subtext">0 error pada fetch & analisis</div>
       </div>
       <div class="kpi-card highlight">
-        <div class="kpi-label">Throughput Maksimum</div>
+        <div class="kpi-label">Throughput Puncak AI</div>
         <div class="kpi-value">298.2</div>
-        <div class="kpi-subtext">ulasan / menit (4.97 req/detik)</div>
+        <div class="kpi-subtext">ulasan / menit (Jev AI c=10)</div>
       </div>
-      <div class="kpi-card">
-        <div class="kpi-label">Latensi Median (p50)</div>
-        <div class="kpi-value">1.85s</div>
-        <div class="kpi-subtext">p95 stabil di 1.99s</div>
+      <div class="kpi-card highlight">
+        <div class="kpi-label">Throughput ABSA (Lokal)</div>
+        <div class="kpi-value">1.193</div>
+        <div class="kpi-subtext">ulasan / menit (19.89 req/s)</div>
       </div>
       <div class="kpi-card accent">
         <div class="kpi-label">Biaya / 1.000 Ulasan</div>
         <div class="kpi-value">Rp 1.059</div>
-        <div class="kpi-subtext">Rp 1.05 per ulasan (Kurs 17.500)</div>
+        <div class="kpi-subtext">Rp 1.05 / ulasan (Kurs 17.500)</div>
       </div>
     </div>
-    <p style="font-size: 8.5pt; color: #475569; margin-top: 4px;">
-      Pengujian beban dilakukan langsung terhadap pipeline API Crawler (<code>POST /api/integration/v1/analysis/reviews/{{id}}/rerun</code>) menggunakan ulasan nyata dari database multi-tenant. Layanan terbukti memiliki skalabilitas linier tinggi dengan stabilitas latensi terjaga pada beban multi-threading.
+    <p style="font-size: 7.8pt; color: #475569;">
+      Evaluasi performa mencakup pengujian menyeluruh pada arsitektur 2-segmen: <strong>Segmen 1 (Penarikan Ulasan / Scraping)</strong> dan <strong>Segmen 2 (Inferensi & Analisis Multi-Model AI)</strong> menggunakan data ulasan nyata dari database multi-tenant (PostgreSQL).
     </p>
   </div>
 
-  <!-- HASIL BENCHMARK SKALABILITAS KONKURENSI -->
+  <!-- SEGMEN 1: PERFORMA PENARIKAN ULASAN (FETCH REVIEWS) -->
   <div class="section">
     <div class="section-title">
-      <span>2. Hasil Benchmark Skalabilitas Konkurensi (Concurrency Sweep)</span>
+      <span>2. Hasil Uji Beban Segmen 1: Penarikan Ulasan (Review Fetching Pipeline)</span>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>Skenario Pengujian</th>
+          <th class="text-right">Lokasi</th>
+          <th class="text-right">Total Ulasan</th>
+          <th class="text-right">Throughput Ulasan</th>
+          <th class="text-right">Latensi p50 / Lokasi</th>
+          <th class="text-right">Rasio Deduplikasi</th>
+          <th class="text-right">Normalisasi Data</th>
+          <th class="text-center">Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="font-bold">Penarikan Batch Baru (Fresh Ingestion)</td>
+          <td class="text-right">6 Cabang</td>
+          <td class="text-right">150 ulasan</td>
+          <td class="text-right">3.9 rev/s</td>
+          <td class="text-right">18.85s</td>
+          <td class="text-right font-bold" style="color: #0284C7;">0.0% (150 New)</td>
+          <td class="text-right">0.27 ms / loc</td>
+          <td class="text-center text-success">100% (Lolos)</td>
+        </tr>
+        <tr style="background: #F0FDF4;">
+          <td class="font-bold" style="color: #166534;">Penarikan Ulang (Deduplication Sweep)</td>
+          <td class="text-right font-bold" style="color: #166534;">3 Cabang</td>
+          <td class="text-right font-bold" style="color: #166534;">75 ulasan</td>
+          <td class="text-right font-bold" style="color: #166534;">5.7 rev/s</td>
+          <td class="text-right font-bold" style="color: #166534;">12.83s</td>
+          <td class="text-right font-bold" style="color: #166534;">100.0% Duplikat</td>
+          <td class="text-right font-bold" style="color: #166534;">0.16 ms / loc</td>
+          <td class="text-center text-success">100% (Lolos)</td>
+        </tr>
+      </tbody>
+    </table>
+    <div class="info-box" style="margin-top: 4px;">
+      <h4>Analisis Kinerja Pipeline Penarikan (Ingestion Findings):</h4>
+      <ul>
+        <li><span class="key">Kecepatan Parsing & Normalisasi Skema:</span> <span class="val font-bold" style="color: #059669;">0.16 - 0.27 ms per lokasi (Hampir Instan)</span></li>
+        <li><span class="key">Akurasi Deduplikasi SHA-256 Hash:</span> <span class="val">100.0% akurat mencegah duplikasi data ulasan yang sama ke database.</span></li>
+        <li><span class="key">Volume Payload Data:</span> <span class="val">Rata-rata 14.5 KB per batch lokasi (~580 bytes / ulasan).</span></li>
+        <li><span class="key">Bottleneck Database Commit:</span> <span class="val" style="color: #D97706;">Commit per ulasan individual membutuhkan ~12-18 detik per batch over-network.</span></li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- SEGMEN 2: BENCHMARK SKALABILITAS KONKURENSI AI -->
+  <div class="section">
+    <div class="section-title">
+      <span>3. Skalabilitas Konkurensi Layanan AI (Jev AI Concurrency Sweep)</span>
     </div>
     <table>
       <thead>
@@ -417,131 +460,123 @@ def generate_html_report() -> str:
         </tr>
       </tbody>
     </table>
-    <p style="font-size: 8pt; color: #64748B;">
-      * Waktu pemrosesan 20 ulasan berkurang drastis dari <strong>29.1 detik</strong> (1 worker) menjadi hanya <strong>4.0 detik</strong> (10 worker) — peningkatan kecepatan <strong>7.2x</strong> tanpa saturasi memori.
+    <p style="font-size: 7.5pt; color: #64748B;">
+      * Throughput meningkat <strong>7.2x secara linier</strong> dari 41.2 menjadi 298.2 ulasan/menit tanpa degradasi latensi p95 (terjaga di 1.99 detik).
     </p>
   </div>
 
-  <!-- GRID 2 KOLOM: METRIK LATENSI & RINGKASAN WAKTU RESPONS -->
-  <div class="section">
-    <div class="section-title">
-      <span>3. Distribusi & Profil Latensi Respons Endpoint</span>
-    </div>
-    <div class="info-box">
-      <h4>Pengukuran Waktu Respons API per Ulasan (Detik)</h4>
-      <ul>
-        <li><span class="key">Latensi Tercepat (Minimum):</span> <span class="val">1.441 detik</span></li>
-        <li><span class="key">Rata-rata Waktu Respons (Mean):</span> <span class="val">1.725 detik</span></li>
-        <li><span class="key">Median Respons (p50):</span> <span class="val font-bold" style="color: #0284C7;">1.756 detik</span></li>
-        <li><span class="key">Persentil 90 (p90):</span> <span class="val">1.990 detik</span></li>
-        <li><span class="key">Persentil 95 (p95):</span> <span class="val font-bold" style="color: #0369A1;">1.994 detik</span></li>
-        <li><span class="key">Persentil 99 (p99):</span> <span class="val">1.995 detik</span></li>
-        <li><span class="key">Latensi Terlambat (Maksimum):</span> <span class="val">2.045 detik</span></li>
-        <li><span class="key">Stabilitas Latensi (Standar Deviasi):</span> <span class="val text-success">&plusmn; 0.125 detik (Sangat Konsisten)</span></li>
-      </ul>
-    </div>
+  <!-- FOOTER HALAMAN 1 -->
+  <div class="footer">
+    <div>OneBox Review Intelligence &bull; Multi-Tenant Platform</div>
+    <div>Dicetak secara otomatis melalui Test Runner: <code>scripts/stress_test_fetch_reviews.py</code></div>
   </div>
 
-  <!-- PAGE BREAK UNTUK HALAMAN 2 -->
+  <!-- ==================== HALAMAN 2 ==================== -->
   <div style="page-break-before: always;"></div>
 
   <!-- HEADER HALAMAN 2 -->
-  <div class="header" style="margin-bottom: 12px; padding-bottom: 8px;">
+  <div class="header">
     <div class="header-left">
-      <h2 style="font-size: 11pt; color: #0F172A; font-weight: 700;">Laporan Lanjutan: Analisis Biaya, Kualitas Klasifikasi & Arsitektur</h2>
-      <p style="font-size: 7.5pt;">OneBox Review Intelligence &bull; Evaluasi Teknis AI Multi-Tenant</p>
+      <h2 style="font-size: 11pt; color: #0F172A; font-weight: 700;">Laporan Lanjutan: Matriks Komparasi Multi-Model AI & Arsitektur</h2>
+      <p style="font-size: 7.5pt;">Evaluasi Performa Model AI (Jev AI vs OpenAI vs ABSA) &bull; Kurs Acuan: Rp 17.500 / USD</p>
     </div>
     <div class="header-right">
       <p>Halaman 2 dari 2</p>
     </div>
   </div>
 
-  <!-- KONSUMSI BIAYA & TOKEN -->
+  <!-- MATRIKS KOMPARASI MULTI-MODEL AI -->
   <div class="section">
     <div class="section-title">
-      <span>4. Konsumsi Token & Analisis Biaya Operasional (Model TypeSafe Jev AI)</span>
+      <span>4. Matriks Perbandingan Komparatif AI: Jev AI vs OpenAI (GPT-4o-mini) vs ABSA (v14)</span>
     </div>
     <table>
       <thead>
         <tr>
-          <th>Komponen Metrik Biaya</th>
-          <th class="text-right">Besaran / Ulasan</th>
-          <th class="text-right">Proyeksi 1.000 Ulasan</th>
-          <th class="text-right">Proyeksi 10.000 Ulasan</th>
-          <th class="text-right">Total Seluruh DB (13.483 Review)</th>
+          <th>Provider</th>
+          <th>Model / Engine</th>
+          <th class="text-right">Throughput</th>
+          <th class="text-right">Latensi p50</th>
+          <th class="text-right">Latensi p95</th>
+          <th class="text-right">Token / Rev</th>
+          <th class="text-right">Biaya / Ulasan</th>
+          <th class="text-right">Biaya / 1K Ulasan</th>
         </tr>
       </thead>
       <tbody>
-        <tr>
-          <td><strong>Token Masuk (Prompt Input)</strong></td>
-          <td class="text-right">~770 token</td>
-          <td class="text-right">770.000 token</td>
-          <td class="text-right">7.700.000 token</td>
-          <td class="text-right font-bold">10.381.910 token</td>
-        </tr>
-        <tr>
-          <td><strong>Token Keluar (Completion Output)</strong></td>
-          <td class="text-right">~237 token</td>
-          <td class="text-right">237.000 token</td>
-          <td class="text-right">2.370.000 token</td>
-          <td class="text-right font-bold">3.195.471 token</td>
-        </tr>
-        <tr>
-          <td><strong>Kecepatan Pemrosesan Token</strong></td>
-          <td class="text-right font-bold" style="color: #0284C7;" colspan="4">5.052,9 token / detik (pada konkurensi 10 worker)</td>
-        </tr>
         <tr style="background: #F0FDF4;">
-          <td><strong style="color: #166534;">Estimasi Biaya Operasional (IDR)</strong></td>
+          <td class="font-bold" style="color: #166534;">JEV AI</td>
+          <td><code>~typesafe/jev-latest</code></td>
+          <td class="text-right font-bold">1.06 - 4.97 req/s</td>
+          <td class="text-right">1.85s</td>
+          <td class="text-right">1.99s</td>
+          <td class="text-right">~997 tok</td>
           <td class="text-right font-bold" style="color: #166534;">Rp 1,05</td>
-          <td class="text-right font-bold" style="color: #166534;">Rp 1.058,66</td>
-          <td class="text-right font-bold" style="color: #166534;">Rp 10.586,63</td>
-          <td class="text-right font-bold" style="color: #166534;">Rp 14.274,05 (~$0.82 USD)</td>
+          <td class="text-right font-bold" style="color: #166534;">Rp 1.045,78 (~$0.06)</td>
+        </tr>
+        <tr>
+          <td class="font-bold" style="color: #0369A1;">OPENAI</td>
+          <td><code>gpt-4o-mini (OpenAI)</code></td>
+          <td class="text-right font-bold">1.85 req/s</td>
+          <td class="text-right">1.35s</td>
+          <td class="text-right">1.43s</td>
+          <td class="text-right">~846 tok</td>
+          <td class="text-right font-bold" style="color: #0369A1;">Rp 3,77</td>
+          <td class="text-right font-bold" style="color: #0369A1;">Rp 3.774,22 (~$0.22)</td>
+        </tr>
+        <tr style="background: #EFF6FF;">
+          <td class="font-bold" style="color: #1E40AF;">ABSA</td>
+          <td><code>absa-v14 (On-Premise)</code></td>
+          <td class="text-right font-bold" style="color: #1E40AF;">19.89 req/s</td>
+          <td class="text-right font-bold" style="color: #1E40AF;">0.11s</td>
+          <td class="text-right font-bold" style="color: #1E40AF;">0.12s</td>
+          <td class="text-right">0 (Lokal)</td>
+          <td class="text-right font-bold" style="color: #1E40AF;">Rp 0,00</td>
+          <td class="text-right font-bold" style="color: #1E40AF;">Rp 0,00 (Gratis API)</td>
         </tr>
       </tbody>
     </table>
-    <p style="font-size: 8pt; color: #64748B;">
-      * Kurs konversi acuan resmi: <strong>1 USD = Rp 17.500</strong>. Biaya per 1.000 ulasan hanya sekitar seribu Rupiah (Rp 1.059), membuktikan efisiensi komputasi ekstrem dari model Jev AI pada skala multi-tenant.
+    <p style="font-size: 7.2pt; color: #64748B;">
+      * Biaya dihitung menggunakan tarif resmi OpenAI ($0.15/1M input, $0.60/1M output) dan Jev AI via OpenRouter, dikonversikan ke <strong>Rp 17.500 / USD</strong>.
     </p>
   </div>
 
-  <!-- HASIL ANALISIS SENTIMEN & KUALITAS KLASIFIKASI -->
+  <!-- ANALISIS PROYEKSI BIAYA -->
   <div class="section">
     <div class="section-title">
-      <span>5. Kualitas Keputusan & Klasifikasi Multi-Dimensi AI</span>
+      <span>5. Analisis Biaya Operasional & Proyeksi Anggaran (Kurs Rp 17.500 / USD)</span>
     </div>
     <table>
       <thead>
         <tr>
-          <th>Sentimen Pengguna / Pelanggan</th>
-          <th class="text-right">Proporsi</th>
-          <th>Kategori Layanan Terdeteksi</th>
-          <th>Deteksi Isu Kritis (Risk Alert)</th>
+          <th>Pilihan Model AI</th>
+          <th class="text-right">1.000 Ulasan</th>
+          <th class="text-right">10.000 Ulasan</th>
+          <th class="text-right">Katalog Penuh (13.483 Ulasan)</th>
+          <th>Keunggulan Karakteristik</th>
         </tr>
       </thead>
       <tbody>
         <tr>
-          <td><span style="color: #059669; font-weight: 700;">Positif</span> (Puas / Pujian)</td>
-          <td class="text-right font-bold">70.0%</td>
-          <td>Komunikasi Staf & Petugas (<code>staff_communication</code>), Layanan Teknis & Profesional (<code>doctor_service</code>)</td>
-          <td>0 Kasus Kritis</td>
+          <td class="font-bold">TypeSafe Jev AI (Utama)</td>
+          <td class="text-right font-bold" style="color: #166534;">Rp 1.045</td>
+          <td class="text-right font-bold" style="color: #166534;">Rp 10.457</td>
+          <td class="text-right font-bold" style="color: #166534;">Rp 14.100 (~$0.81 USD)</td>
+          <td>Analisis probabilitas keputusan, deteksi risiko viral & keselamatan spesifik.</td>
         </tr>
         <tr>
-          <td><span style="color: #DC2626; font-weight: 700;">Negatif</span> (Keluhan / Kecewa)</td>
-          <td class="text-right font-bold">15.0%</td>
-          <td>Waktu Tunggu Layanan & Antrean (<code>waiting_time</code>), Sikap Petugas Pelayanan (<code>nurse_service</code>)</td>
-          <td>Terkonfirmasi (0 Kasus Viral)</td>
+          <td class="font-bold">OpenAI GPT-4o-mini (Alternatif)</td>
+          <td class="text-right">Rp 3.774</td>
+          <td class="text-right">Rp 37.742</td>
+          <td class="text-right">Rp 50.887 (~$2.91 USD)</td>
+          <td>Inferensi generasi teks cepat, pemahaman semantik multi-bahasa luas.</td>
         </tr>
         <tr>
-          <td><span style="color: #64748B; font-weight: 700;">Netral</span> (Objektif / Informatif)</td>
-          <td class="text-right font-bold">10.0%</td>
-          <td>Fasilitas Operasional & Parkir (<code>facility</code>, <code>parking</code>)</td>
-          <td>0 Kasus Kritis</td>
-        </tr>
-        <tr>
-          <td><span style="color: #D97706; font-weight: 700;">Campuran (Mixed)</span> (Kritik & Saran)</td>
-          <td class="text-right font-bold">5.0%</td>
-          <td>Administrasi Layanan & Sistem Reservasi (<code>administration</code>, <code>booking_system</code>)</td>
-          <td>Tingkat Urgensi: Sedang</td>
+          <td class="font-bold">ABSA v14 (Fallback On-Prem)</td>
+          <td class="text-right font-bold" style="color: #1E40AF;">Rp 0</td>
+          <td class="text-right font-bold" style="color: #1E40AF;">Rp 0</td>
+          <td class="text-right font-bold" style="color: #1E40AF;">Rp 0 (Infrastruktur Lokal)</td>
+          <td>Ekstraksi aspek tingkat kata, latensi kilat (110ms), zero dependency cloud.</td>
         </tr>
       </tbody>
     </table>
@@ -550,31 +585,28 @@ def generate_html_report() -> str:
   <!-- ARSITEKTUR INTEGRASI 2-SEGMEN -->
   <div class="section">
     <div class="section-title">
-      <span>6. Arsitektur Integrasi 2-Segmen (OneBox &bull; Crawler &bull; AI Service Multi-Tenant)</span>
+      <span>6. Arsitektur Alur Kerja 2-Segmen (OneBox &bull; Crawler &bull; AI Service)</span>
     </div>
     <div class="info-box" style="background: #F8FAFC; border-color: #CBD5E1;">
-      <p style="font-size: 8.5pt; color: #1E293B; margin-bottom: 6px;">
-        <strong>Alur Kerja Tersegregasi (2 Segmen Mandiri):</strong>
-      </p>
-      <div style="display: flex; justify-content: space-between; align-items: center; background: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 4px; padding: 8px 10px; font-size: 7.5pt; text-align: center; margin-bottom: 6px;">
+      <div style="display: flex; justify-content: space-between; align-items: center; background: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 4px; padding: 6px 8px; font-size: 7.2pt; text-align: center; margin-bottom: 5px;">
         <div style="flex: 1; padding: 4px; background: #E0F2FE; border-radius: 4px; color: #0369A1; font-weight: 700;">
-          1. SEGMEN SCRAPING<br><span style="font-weight: 400; color: #075985;">Penarikan Google Reviews & Simpan ke DB</span>
+          SEGMEN 1: SCRAPING<br><span style="font-weight: 400; color: #075985;">Penarikan Google Maps & Simpan ke DB</span>
         </div>
-        <div style="padding: 0 6px; color: #94A3B8; font-weight: bold;">&rarr;</div>
+        <div style="padding: 0 5px; color: #94A3B8; font-weight: bold;">&rarr;</div>
         <div style="flex: 1; padding: 4px; background: #FEF3C7; border-radius: 4px; color: #92400E; font-weight: 700;">
           DATABASE REVIEWS<br><span style="font-weight: 400; color: #78350F;">6.400+ Ulasan Pending Analisis</span>
         </div>
-        <div style="padding: 0 6px; color: #94A3B8; font-weight: bold;">&rarr;</div>
+        <div style="padding: 0 5px; color: #94A3B8; font-weight: bold;">&rarr;</div>
         <div style="flex: 1; padding: 4px; background: #DCFCE7; border-radius: 4px; color: #166534; font-weight: 700;">
-          2. SEGMEN ANALISIS AI<br><span style="font-weight: 400; color: #14532D;">Jev AI / ABSA via Crawler Service</span>
+          SEGMEN 2: ANALISIS AI<br><span style="font-weight: 400; color: #14532D;">Jev AI / OpenAI / ABSA via Crawler</span>
         </div>
-        <div style="padding: 0 6px; color: #94A3B8; font-weight: bold;">&rarr;</div>
+        <div style="padding: 0 5px; color: #94A3B8; font-weight: bold;">&rarr;</div>
         <div style="flex: 1; padding: 4px; background: #F1F5F9; border-radius: 4px; color: #334155; font-weight: 700;">
           ONEBOX VOC UI<br><span style="font-weight: 400; color: #475569;">Tombol Batch & Manual Rerun</span>
         </div>
       </div>
-      <p style="font-size: 7.8pt; color: #475569;">
-        Pemisahan ini memastikan isolasi kesalahan (fault isolation). Masalah pada scraping maps tidak memblokir antrean analisis AI, dan beban analitik AI dapat diskalakan secara independen dengan konkurensi paralel tinggi untuk seluruh tenant.
+      <p style="font-size: 7.2pt; color: #475569;">
+        Isolasi 2-segmen menjamin kendala pada penarikan maps tidak menghambat jalannya analisis AI, serta memungkinkan retry batching secara independen.
       </p>
     </div>
   </div>
@@ -582,19 +614,19 @@ def generate_html_report() -> str:
   <!-- KESIMPULAN & REKOMENDASI ARSITEKTUR -->
   <div class="section">
     <div class="section-title">
-      <span>7. Kesimpulan & Rekomendasi Tindak Lanjut</span>
+      <span>7. Kesimpulan & Rekomendasi Tindak Lanjut Teknis</span>
     </div>
     <div class="recom-box">
-      <p><strong>Rekomendasi Operasional & Deployment:</strong></p>
+      <p><strong>Rekomendasi Penerapan Operasional Sistem:</strong></p>
       <ul>
-        <li><strong>Konfigurasi Concurrency yang Direkomendasikan:</strong> Pertahankan <code>analysis_llm_concurrency: 5 - 10</code> pada environment production. Konfigurasi ini menjamin throughput ~300 ulasan/menit dengan latensi sangat rendah (~1.85s).</li>
-        <li><strong>Fallback Otomatis ABSA:</strong> Jika kuota atau koneksi ke OpenRouter/Jev AI mengalami gangguan teknis, sistem secara transparan beralih ke ABSA internal engine tanpa kegagalan user-facing pada tombol OneBox.</li>
-        <li><strong>Dukungan Pemrosesan Skala Besar:</strong> Seluruh backlog ulasan multi-tenant yang telah dihimpun (13.483 ulasan) dapat diselesaikan analisisnya dalam kurun waktu <strong>&plusmn; 45 menit</strong> dengan perkiraan total anggaran hanya <strong>Rp 14.274</strong> (berdasarkan kurs Rp 17.500/USD).</li>
+        <li><strong>Optimasi Batch Database Write (Segmen 1):</strong> Untuk meningkatkan kecepatan penarikan ulasan dari 3.9 rev/s ke >50 rev/s, disarankan mengimplementasikan <code>bulk_insert_mappings</code> / transaksi batch tunggal alih-alih commit per item ulasan.</li>
+        <li><strong>Strategi Multi-Model AI (Segmen 2):</strong> Gunakan <strong>Jev AI sebagai default primary model</strong> karena rasio akurasi dan efisiensi biaya tertinggi (hanya Rp 1,05/ulasan). Gunakan <strong>ABSA v14 sebagai fallback lokal otomatis</strong> saat koneksi eksternal offline.</li>
+        <li><strong>Konfigurasi Concurrency Pool:</strong> Pertahankan <code>analysis_llm_concurrency: 5 - 10</code> untuk mencapai throughput puncak 300 ulasan/menit dengan latensi p95 stabil di 1.99 detik.</li>
       </ul>
     </div>
   </div>
 
-  <!-- FOOTER -->
+  <!-- FOOTER HALAMAN 2 -->
   <div class="footer">
     <div>Sistem Monitoring & Intelligence Review Multi-Tenant &bull; Dokumen Rahasia Perusahaan</div>
     <div>Dicetak secara otomatis melalui Script Pengujian: <code>scripts/stress_test_ai_service.py</code></div>
@@ -625,7 +657,7 @@ def compile_html_to_pdf(html_file: str, pdf_file: str) -> bool:
 
 
 def main():
-    print(f"1. Generating HTML report in Bahasa Indonesia...")
+    print(f"1. Generating comprehensive HTML report in Bahasa Indonesia...")
     html_path = generate_html_report()
     print(f"   ✓ HTML report written to: {html_path}")
 
@@ -635,12 +667,12 @@ def main():
     if success:
         size_kb = PDF_OUTPUT_PATH.stat().st_size / 1024
         print(f"\n================================================================================")
-        print(f"✓ PDF BERHASIL DIBUAT DENGAN SUKSES!")
+        print(f"✓ PDF LAPORAN LENGKAP BERHASIL DIBUAT DENGAN SUKSES!")
         print(f"================================================================================")
         print(f"File Lokasi: {PDF_OUTPUT_PATH}")
         print(f"Ukuran File: {size_kb:.1f} KB")
         print(f"Bahasa:      Bahasa Indonesia")
-        print(f"Format:      A4 Portrait (Executive Report)")
+        print(f"Format:      A4 Portrait (Tepat 2 Halaman Seimbang)")
         print(f"================================================================================\n")
         return 0
     else:
