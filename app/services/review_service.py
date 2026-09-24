@@ -80,6 +80,92 @@ class ReviewService:
                 enrich=enrich,
             )
 
+    def insert_reviews_bulk(
+        self, items: list[dict], batch_size: int = 200
+    ) -> list[tuple[Review | None, bool]]:
+        """Simpan sekumpulan ulasan sekaligus dalam transaksi chunk."""
+        if not items:
+            return []
+        results: list[tuple[Review | None, bool]] = []
+        for i in range(0, len(items), batch_size):
+            chunk = items[i : i + batch_size]
+            results.extend(self._insert_chunk(chunk))
+        return results
+
+    def _insert_chunk(
+        self, chunk: list[dict]
+    ) -> list[tuple[Review | None, bool]]:
+        from sqlalchemy import or_, select
+
+        chunk_results: list[tuple[Review | None, bool]] = []
+        with self.session_factory() as session:
+            candidates: list[Review] = []
+            hashes: set[str] = set()
+            ext_ids: set[str] = set()
+            for d in chunk:
+                payload = dict(d)
+                if self.company_id is not None and "company_id" not in payload:
+                    payload["company_id"] = self.company_id
+                rev = Review(**payload)
+                candidates.append(rev)
+                if rev.review_hash:
+                    hashes.add(rev.review_hash)
+                if rev.external_review_id:
+                    ext_ids.add(rev.external_review_id.strip())
+
+            predicates = []
+            if hashes:
+                predicates.append(Review.review_hash.in_(hashes))
+            if ext_ids:
+                predicates.append(Review.external_review_id.in_(ext_ids))
+
+            existing_map_by_hash: dict[str, Review] = {}
+            existing_map_by_ext: dict[tuple[str, str | None, str], Review] = {}
+
+            if predicates:
+                stmt = select(Review).where(or_(*predicates))
+                if self.company_id is not None:
+                    stmt = stmt.where(Review.company_id == self.company_id)
+                existing_rows = session.scalars(stmt).all()
+                for r in existing_rows:
+                    if r.review_hash:
+                        existing_map_by_hash[r.review_hash] = r
+                    if r.external_review_id:
+                        key = (r.source, r.external_place_id, r.external_review_id.strip())
+                        existing_map_by_ext[key] = r
+
+            for rev in candidates:
+                existing = None
+                if rev.review_hash and rev.review_hash in existing_map_by_hash:
+                    existing = existing_map_by_hash[rev.review_hash]
+                elif rev.external_review_id:
+                    key = (rev.source, rev.external_place_id, rev.external_review_id.strip())
+                    existing = existing_map_by_ext.get(key)
+
+                if existing is not None:
+                    filled = backfill_missing_fields(session, existing, rev)
+                    resighted, content_changed = apply_resighting(existing, rev)
+                    if content_changed:
+                        existing.analysis_status = "pending"
+                    if filled or resighted:
+                        existing.sync_updated_at = (
+                            func.clock_timestamp()
+                            if session.bind.dialect.name == "postgresql"
+                            else datetime.now(timezone.utc)
+                        )
+                    chunk_results.append((existing, True))
+                else:
+                    session.add(rev)
+                    if rev.review_hash:
+                        existing_map_by_hash[rev.review_hash] = rev
+                    if rev.external_review_id:
+                        key = (rev.source, rev.external_place_id, rev.external_review_id.strip())
+                        existing_map_by_ext[key] = rev
+                    chunk_results.append((rev, False))
+
+            session.commit()
+        return chunk_results
+
     def review_exists(self, data: dict) -> bool:
         """Apakah review ini sudah tersimpan (aturan dedup yang sama)."""
         payload = dict(data)

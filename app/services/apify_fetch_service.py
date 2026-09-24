@@ -117,6 +117,7 @@ class ApifyFetchService:
             on_progress=on_progress,
             sort_by=sort_by,
             insert_review=self.review_service.insert_review,
+            insert_reviews_bulk=self.review_service.insert_reviews_bulk,
             review_exists=self.review_service.review_exists,
             review_quota_remaining=review_quota_remaining,
             enable_fetch_log=True,
@@ -161,6 +162,9 @@ class ApifyFetchService:
             insert_review=functools.partial(
                 self.competitor_review_service.insert_review, competitor_id_value
             ),
+            insert_reviews_bulk=functools.partial(
+                self.competitor_review_service.insert_reviews_bulk, competitor_id_value
+            ),
             review_exists=functools.partial(
                 self.competitor_review_service.review_exists, competitor_id_value
             ),
@@ -201,6 +205,7 @@ class ApifyFetchService:
         review_exists=None,
         review_quota_remaining: int | None = None,
         fetch_raw=None,
+        insert_reviews_bulk=None,
     ) -> CrawlFetchResult:
         requested_target, effective_from, swept = self._plan(
             crawl_target,
@@ -292,6 +297,7 @@ class ApifyFetchService:
                 stored_times=stored_times,
                 review_exists=review_exists,
                 review_quota_remaining=review_quota_remaining,
+                insert_reviews_bulk=insert_reviews_bulk,
             )
 
             expected = result["metadata"].get("expected_review_count")
@@ -394,6 +400,7 @@ class ApifyFetchService:
                 stored_times=None,
                 review_exists=review_exists,
                 review_quota_remaining=review_quota_remaining,
+                insert_reviews_bulk=insert_reviews_bulk,
             )
             result["status"] = "failed"
             result["error_message"] = str(exc)
@@ -599,9 +606,74 @@ class ApifyFetchService:
         stored_times: list | None = None,
         review_exists=None,
         review_quota_remaining: int | None = None,
+        insert_reviews_bulk=None,
     ) -> bool:
         """Simpan review; True bila kuota review bulanan OneBox habis di tengah."""
         quota_hit = False
+
+        if insert_reviews_bulk is not None:
+            valid_items: list[tuple[dict, str | None]] = []
+            for raw_review in raw_reviews:
+                try:
+                    normalized = self.normalizer.normalize_review(
+                        crawl_target, raw_review
+                    )
+                    precision = normalized.get("review_time_precision")
+                    if not is_within_date_range_approx(
+                        normalized["review_time"], precision, date_from, date_to
+                    ):
+                        result["total_skipped_out_of_range"] += 1
+                        key = (
+                            "out_of_range_older"
+                            if self._is_older_than_range(
+                                normalized["review_time"], date_from
+                            )
+                            else "out_of_range_newer"
+                        )
+                        result["metadata"][key] = int(result["metadata"].get(key) or 0) + 1
+                        continue
+                    if (date_from or date_to) and precision not in {None, "day"}:
+                        result["metadata"]["approximate_in_window"] = (
+                            int(result["metadata"].get("approximate_in_window") or 0) + 1
+                        )
+                    valid_items.append((normalized, precision))
+                except Exception:
+                    result["total_failed"] += 1
+                    logger.exception("Failed to normalize one Apify review")
+
+            items_to_insert: list[tuple[dict, str | None]] = []
+            new_count = 0
+            for normalized, precision in valid_items:
+                is_dupe = review_exists(normalized) if review_exists is not None else False
+                if review_quota_remaining is not None and not is_dupe:
+                    if new_count >= review_quota_remaining:
+                        quota_hit = True
+                        result["metadata"]["skipped_quota"] = (
+                            int(result["metadata"].get("skipped_quota") or 0) + 1
+                        )
+                        continue
+                    new_count += 1
+                items_to_insert.append((normalized, precision))
+
+            bulk_payloads = [item[0] for item in items_to_insert]
+            bulk_results = insert_reviews_bulk(bulk_payloads)
+            for (normalized, precision), (_, duplicate) in zip(items_to_insert, bulk_results):
+                if duplicate:
+                    result["total_duplicate"] += 1
+                else:
+                    result["total_inserted"] += 1
+                if stored_times is not None:
+                    stored_times.append((normalized["review_time"], precision))
+            logger.info(
+                "Ingested %s reviews for %s: %s inserted, %s duplicate, %s skipped out of range",
+                len(raw_reviews),
+                crawl_target.branch_name,
+                result["total_inserted"],
+                result["total_duplicate"],
+                result["total_skipped_out_of_range"],
+            )
+            return quota_hit
+
         for raw_review in raw_reviews:
             try:
                 normalized = self.normalizer.normalize_review(
