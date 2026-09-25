@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Header, Request
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import or_, select
 
 from app.config import AnalysisProvider, get_settings
 from app.db.models import Location
@@ -29,6 +29,7 @@ REQUIRED_SCOPE = "analysis:write"
 
 class IntegrationAnalyzeRequest(BaseModel):
     location_id: int | None = Field(default=None, ge=1)
+    onebox_location_id: int | None = Field(default=None, ge=1)
     rating: int | None = Field(default=None, ge=1, le=5)
     provider: AnalysisProvider | None = None
 
@@ -76,18 +77,52 @@ def _require_entitlement(company_id: int, session_factory) -> None:
         raise IntegrationRequestError(403, "AI_NOT_ENABLED", str(exc)) from exc
 
 
-def _require_location(company_id: int, location_id: int, session_factory) -> None:
+def _require_location(
+    company_id: int,
+    session_factory,
+    location_id: int | None = None,
+    onebox_location_id: int | None = None,
+) -> int:
     with session_factory() as session:
-        exists_for_tenant = session.scalar(
+        clauses = []
+        if location_id is not None:
+            clauses.append(Location.id == location_id)
+            clauses.append(Location.onebox_location_id == location_id)
+        if onebox_location_id is not None:
+            clauses.append(Location.onebox_location_id == onebox_location_id)
+
+        if not clauses:
+            raise IntegrationRequestError(
+                400, "INVALID_PARAMETER", "location_id or onebox_location_id is required."
+            )
+
+        loc_id = session.scalar(
             select(Location.id).where(
-                Location.id == location_id,
                 Location.company_id == company_id,
+                or_(*clauses),
             )
         )
-    if exists_for_tenant is None:
+        if loc_id is None:
+            try:
+                from app.services.worklist_sync_service import WorklistSyncService
+
+                WorklistSyncService(
+                    company_id=company_id, session_factory=session_factory
+                ).sync()
+                loc_id = session.scalar(
+                    select(Location.id).where(
+                        Location.company_id == company_id,
+                        or_(*clauses),
+                    )
+                )
+            except Exception:
+                pass
+
+    if loc_id is None:
         raise IntegrationRequestError(
             404, "LOCATION_NOT_FOUND", "Location was not found for this tenant."
         )
+    return loc_id
 
 
 def _response(data: dict, request_id: str) -> dict:
@@ -167,13 +202,19 @@ def analyze_pending(
     _authorize(principal)
     request_id = _request_id(request, x_request_id)
     _require_entitlement(principal.company_id, session_factory)
-    if payload.location_id is not None:
-        _require_location(principal.company_id, payload.location_id, session_factory)
+    canonical_location_id = None
+    if payload.location_id is not None or payload.onebox_location_id is not None:
+        canonical_location_id = _require_location(
+            principal.company_id,
+            session_factory,
+            location_id=payload.location_id,
+            onebox_location_id=payload.onebox_location_id,
+        )
     result = AnalysisService(
         company_id=principal.company_id,
         session_factory=session_factory,
         provider=payload.provider,
-    ).analyze_pending(location_id=payload.location_id, rating=payload.rating)
+    ).analyze_pending(location_id=canonical_location_id, rating=payload.rating)
     return _response(result, request_id)
 
 

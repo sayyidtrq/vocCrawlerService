@@ -96,7 +96,7 @@ class IntegrationReviewService:
             location_id = decoded.location_id
 
         with self.session_factory() as session:
-            self._assert_location_in_tenant(session, location_id)
+            location_id = self._assert_location_in_tenant(session, location_id)
 
             lower, upper = self._resolve_bounds(
                 session, decoded, updated_since, location_id
@@ -185,21 +185,25 @@ class IntegrationReviewService:
 
     def _assert_location_in_tenant(
         self, session: Session, location_id: int | None
-    ) -> None:
+    ) -> int | None:
         if location_id is None:
-            return
-        owned = session.scalar(
+            return None
+        loc_id = session.scalar(
             select(Location.id).where(
-                Location.id == location_id,
                 Location.company_id == self.company_id,
+                or_(
+                    Location.id == location_id,
+                    Location.onebox_location_id == location_id,
+                ),
             )
         )
         # Same 404 whether the location is absent or owned by another tenant:
         # distinguishing them would confirm its existence.
-        if owned is None:
+        if loc_id is None:
             raise IntegrationRequestError(
                 404, "LOCATION_NOT_FOUND", "Location not found."
             )
+        return loc_id
 
     def _current_upper(
         self, session: Session, location_id: int | None

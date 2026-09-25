@@ -224,3 +224,21 @@ def test_service_token_can_monitor_and_rollback_its_analysis():
     assert rollback.json()["data"]["reviews_affected"] == 1
     with factory() as session:
         assert session.scalar(select(func.count(ReviewAnalysis.id))) == 0
+
+
+def test_analyze_pending_resolves_onebox_location_id():
+    factory = make_database()
+    with factory() as session:
+        loc = session.scalar(select(Location).where(Location.id == 1))
+        loc.onebox_location_id = 674
+        session.commit()
+
+    client = make_client(factory, principal(1))
+    # Call using onebox_location_id passed as location_id (OneBox backward compat)
+    res1 = client.post("/api/integration/v1/analysis/pending", json={"location_id": 674})
+    assert res1.status_code == 200, res1.text
+    assert res1.json()["data"]["total"] == 1
+
+    # Call using explicit onebox_location_id
+    res2 = client.post("/api/integration/v1/analysis/pending", json={"onebox_location_id": 674})
+    assert res2.status_code == 200, res2.text
