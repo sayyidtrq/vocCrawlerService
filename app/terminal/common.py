@@ -31,7 +31,7 @@ def ask_yes_no(prompt: str, default: bool = True) -> bool:
 
 def show_locations(locations: list) -> None:
     if not locations:
-        print("No Hermina locations found.")
+        print("No locations found.")
         print("Please add a location first.")
         return
     print_table(

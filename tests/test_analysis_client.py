@@ -169,7 +169,7 @@ def test_jev_calls_systemone_and_maps_the_response():
     assert result["issue_category"] == "waiting_time"
     # Because of viral risk and rating=1 with negative sentiment, urgency should be "high"
     assert result["urgency"] == "high"
-    assert "Pasien menyampaikan keluhan" in result["summary"]
+    assert "Pelanggan menyampaikan keluhan" in result["summary"]
     assert "Tinjau aspek layanan" in result["recommended_action"]
     assert result["keywords"] == []
     assert result["is_potential_viral"] is True

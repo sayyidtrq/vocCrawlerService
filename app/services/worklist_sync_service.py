@@ -225,7 +225,11 @@ class WorklistSyncService:
                     "onebox_location_id",
                 ),
                 "hospital_name": str(
-                    raw.get("hospital_name") or raw.get("branch_name") or "Hospital"
+                    raw.get("hospital_name")
+                    or raw.get("company_name")
+                    or raw.get("brand_name")
+                    or raw.get("branch_name")
+                    or "Company"
                 ).strip(),
                 "branch_name": str(
                     raw.get("branch_name") or raw.get("name") or "Unnamed location"

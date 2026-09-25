@@ -56,7 +56,7 @@ class MockReviewClient(ReviewSourceClient):
             (
                 "Lina Wati",
                 5,
-                "Secara keseluruhan pelayanan Hermina sangat memuaskan.",
+                "Secara keseluruhan pelayanan sangat memuaskan.",
             ),
         ]
         reviews = []

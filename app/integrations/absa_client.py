@@ -105,7 +105,19 @@ class AbsaClient(GeminiClientBase):
         text = str(review.get("review_text") or "").lower()
         safety = any(
             word in text
-            for word in ("salah obat", "malpraktik", "darurat", "nyawa", "infeksi")
+            for word in (
+                "salah obat",
+                "malpraktik",
+                "darurat",
+                "nyawa",
+                "infeksi",
+                "cedera",
+                "bahaya",
+                "celaka",
+                "kecelakaan",
+                "keracunan",
+                "kebakaran",
+            )
         )
         viral = any(word in text for word in ("viral", "sebarkan", "media sosial"))
         rating = review.get("rating")
@@ -119,9 +131,9 @@ class AbsaClient(GeminiClientBase):
             else "low"
         )
         summaries = {
-            "negative": "Pasien menyampaikan keluhan yang memerlukan tindak lanjut.",
-            "mixed": "Pasien memberi apresiasi sekaligus menyampaikan kendala.",
-            "positive": "Pasien menyampaikan pengalaman pelayanan yang positif.",
+            "negative": "Pelanggan menyampaikan keluhan yang memerlukan tindak lanjut.",
+            "mixed": "Pelanggan memberi apresiasi sekaligus menyampaikan kendala.",
+            "positive": "Pelanggan menyampaikan pengalaman pelayanan yang positif.",
         }
         keywords = list(
             dict.fromkeys(

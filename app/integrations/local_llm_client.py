@@ -149,7 +149,7 @@ class LocalLLMClient(GeminiClientBase):
 
     def analyze_review(self, review: dict) -> dict:
         prompt = (
-            "Analisis review rumah sakit berikut sesuai instruksi sistem.\n\n"
+            "Analisis review berikut sesuai instruksi sistem.\n\n"
             f"Rating: {review.get('rating')}\n"
             f"Reviewer: {review.get('reviewer_name') or 'Anonymous'}\n"
             f"Waktu review: {review.get('review_time') or 'unknown'}\n"
