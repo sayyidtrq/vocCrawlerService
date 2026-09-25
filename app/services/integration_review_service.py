@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.config import get_settings
 from app.db.models import Location, Review, ReviewAnalysis
 from app.db.session import get_session_factory
+from app.services.analysis_service import ALLOWED_CATEGORIES
 from app.utils.integration_cursor import (
     CURSOR_VERSION,
     CursorPosition,
@@ -33,6 +34,21 @@ from app.utils.integration_cursor import (
 # Lower bound for a consumer that has never synced. Exclusive, and every real id
 # is >= 1, so nothing is missed.
 EPOCH = CursorPosition(sync_updated_at=datetime(1970, 1, 1, tzinfo=timezone.utc), id=0)
+
+HISTORICAL_CATEGORY_ALIASES = {
+    "customer service": "customer_service",
+    "service quality": "customer_service",
+    "waiting time": "waiting_time",
+    "general": "other",
+}
+
+
+def _contract_category(value: str | None) -> str | None:
+    if value is None:
+        return None
+    category = value.strip().lower()
+    category = HISTORICAL_CATEGORY_ALIASES.get(category, category)
+    return category if category in ALLOWED_CATEGORIES else "other"
 
 
 class IntegrationRequestError(Exception):
@@ -338,7 +354,9 @@ class IntegrationReviewService:
                 if analysis and analysis.sentiment_score is not None
                 else None
             ),
-            "issue_category": analysis.issue_category if analysis else None,
+            "issue_category": (
+                _contract_category(analysis.issue_category) if analysis else None
+            ),
             "urgency": analysis.urgency if analysis else None,
             "summary": analysis.summary if analysis else None,
             "recommended_action": analysis.recommended_action if analysis else None,

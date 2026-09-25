@@ -14,7 +14,7 @@ from typing import get_args
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -453,6 +453,33 @@ def test_sync_updated_at_is_exposed_and_differs_from_updated_at(client, seeded):
     # No analysis: watermark equals the review's own updated_at.
     unanalyzed = by_hash["hash-unanalyzed"]
     assert unanalyzed["sync_updated_at"] == unanalyzed["updated_at"]
+
+
+@pytest.mark.parametrize(
+    ("stored", "expected"),
+    [
+        ("customer service", "customer_service"),
+        ("service quality", "customer_service"),
+        ("waiting time", "waiting_time"),
+        ("General", "other"),
+        ("future category", "other"),
+    ],
+)
+def test_historical_issue_category_is_normalized(
+    client, session_factory, stored, expected
+):
+    with session_factory() as session:
+        analysis = session.scalar(
+            select(ReviewAnalysis)
+            .join(Review, Review.id == ReviewAnalysis.review_id)
+            .where(Review.review_hash == "hash-positive")
+        )
+        analysis.issue_category = stored
+        session.commit()
+
+    payload = _get(client, limit=100)
+    by_hash = {item["review_hash"]: item for item in payload["data"]}
+    assert by_hash["hash-positive"]["issue_category"] == expected
 
 
 # --------------------------------------------------------------------------- #
