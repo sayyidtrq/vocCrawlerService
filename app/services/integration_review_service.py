@@ -89,19 +89,18 @@ class IntegrationReviewService:
         updated_since: datetime | None = None,
         location_id: int | None = None,
     ) -> dict:
-        decoded = self._resolve_cursor(cursor, updated_since, location_id)
-        # A follow-up page may send the cursor alone; the filter it was opened
-        # with lives inside it, so it survives without the consumer resending it.
-        if decoded is not None:
-            location_id = decoded.location_id
-
         with self.session_factory() as session:
-            location_id = self._assert_location_in_tenant(session, location_id)
+            canonical_location_id = self._assert_location_in_tenant(session, location_id)
+            decoded = self._resolve_cursor(cursor, updated_since, canonical_location_id)
+            # A follow-up page may send the cursor alone; the filter it was opened
+            # with lives inside it, so it survives without the consumer resending it.
+            if decoded is not None:
+                canonical_location_id = decoded.location_id
 
             lower, upper = self._resolve_bounds(
-                session, decoded, updated_since, location_id
+                session, decoded, updated_since, canonical_location_id
             )
-            rows = self._fetch_page(session, lower, upper, location_id, limit)
+            rows = self._fetch_page(session, lower, upper, canonical_location_id, limit)
 
         has_more = len(rows) > limit
         rows = rows[:limit]
@@ -112,7 +111,7 @@ class IntegrationReviewService:
         if has_more:
             last = rows[-1][0]
             next_cursor = self._encode(
-                location_id,
+                canonical_location_id,
                 lower=CursorPosition(_as_utc(last.sync_updated_at), last.id),
                 upper=upper,
             )
@@ -120,7 +119,7 @@ class IntegrationReviewService:
             # Snapshot drained. The checkpoint's lower == upper, which is how the
             # next cycle recognises it should open a fresh upper bound from here
             # instead of replaying this exhausted snapshot.
-            checkpoint_cursor = self._encode(location_id, lower=upper, upper=upper)
+            checkpoint_cursor = self._encode(canonical_location_id, lower=upper, upper=upper)
 
         return {
             "items": items,
@@ -262,7 +261,7 @@ class IntegrationReviewService:
     ) -> list:
         latest = _latest_analysis_subquery()
         statement = (
-            select(Review, Location.branch_name, ReviewAnalysis)
+            select(Review, Location.branch_name, ReviewAnalysis, Location.onebox_location_id)
             .join(Location, Location.id == Review.location_id)
             .outerjoin(latest, latest.c.review_id == Review.id)
             .outerjoin(ReviewAnalysis, ReviewAnalysis.id == latest.c.analysis_id)
@@ -304,10 +303,12 @@ class IntegrationReviewService:
         review: Review = row[0]
         branch_name: str = row[1]
         analysis: ReviewAnalysis | None = row[2]
+        onebox_location_id: int | None = row[3]
 
         return {
             "id": review.id,
             "location_id": review.location_id,
+            "onebox_location_id": onebox_location_id,
             "location": branch_name,
             "source": review.source,
             "external_place_id": review.external_place_id,

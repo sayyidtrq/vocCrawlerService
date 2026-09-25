@@ -64,6 +64,7 @@ class _Base(BaseModel):
 class IntegrationReviewItem(_Base):
     id: int
     location_id: int
+    onebox_location_id: int | None = None
     location: str
     source: str
     external_place_id: str | None = None

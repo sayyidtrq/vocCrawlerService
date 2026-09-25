@@ -48,6 +48,7 @@ FORBIDDEN_FIELDS = {"raw_payload", "raw_response", "company_id"}
 EXPECTED_ITEM_FIELDS = {
     "id",
     "location_id",
+    "onebox_location_id",
     "location",
     "source",
     "external_place_id",

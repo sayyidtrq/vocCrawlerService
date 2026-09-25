@@ -3,6 +3,7 @@
     {
       "id": 101,
       "location_id": 10,
+      "onebox_location_id": null,
       "location": "Cabang Depok",
       "source": "selenium_google_maps",
       "external_place_id": "place-depok-1",
@@ -32,13 +33,17 @@
       "urgency": "low",
       "summary": "Pujian untuk keramahan dan kejelasan dokter.",
       "recommended_action": "Bagikan umpan balik positif ke tim dokter terkait.",
-      "keywords": ["dokter", "ramah"],
+      "keywords": [
+        "dokter",
+        "ramah"
+      ],
       "is_potential_viral": false,
       "is_patient_safety_issue": false
     },
     {
       "id": 102,
       "location_id": 10,
+      "onebox_location_id": null,
       "location": "Cabang Depok",
       "source": "selenium_google_maps",
       "external_place_id": "place-depok-1",
@@ -68,13 +73,18 @@
       "urgency": "critical",
       "summary": "Keluhan keterlambatan penanganan pasien di IGD.",
       "recommended_action": "Eskalasi ke kepala IGD dan audit waktu tunggu triase.",
-      "keywords": ["igd", "menunggu", "penanganan"],
+      "keywords": [
+        "igd",
+        "menunggu",
+        "penanganan"
+      ],
       "is_potential_viral": true,
       "is_patient_safety_issue": true
     },
     {
       "id": 103,
       "location_id": 11,
+      "onebox_location_id": null,
       "location": "Cabang Bekasi",
       "source": "selenium_google_maps",
       "external_place_id": "place-bekasi-1",

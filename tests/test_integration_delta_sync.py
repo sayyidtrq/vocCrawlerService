@@ -646,3 +646,29 @@ def test_location_filter_scopes_the_cycle(client, session_factory, tenants):
 
     collected, _ = drain(client, limit=1, location_id=tenants["depok_id"])
     assert collected == [depok]
+
+
+def test_location_filter_with_onebox_location_id_cursor_paging(client, session_factory, tenants):
+    with session_factory() as session:
+        loc = session.get(Location, tenants["depok_id"])
+        loc.onebox_location_id = 9876
+        session.commit()
+
+    r1 = add_review(
+        session_factory,
+        company_id=tenants["company_id"],
+        location_id=tenants["depok_id"],
+        tag="rev-1",
+        sync_at=BASE,
+    )
+    r2 = add_review(
+        session_factory,
+        company_id=tenants["company_id"],
+        location_id=tenants["depok_id"],
+        tag="rev-2",
+        sync_at=BASE + timedelta(minutes=1),
+    )
+
+    # Calling with onebox_location_id (9876) across multiple pages must succeed without INVALID_CURSOR_CONTEXT
+    collected, _ = drain(client, limit=1, location_id=9876)
+    assert collected == [r1, r2]
