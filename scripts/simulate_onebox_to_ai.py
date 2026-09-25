@@ -115,10 +115,8 @@ def simulate_provider_inference(provider: str, review_text: str) -> dict:
     input_tokens = 350 + int(chars / 3.8)
     
     if provider == "jev":
-        # Empirical Jev AI via OpenRouter: ~1.4 - 2.2s latency
-        time.sleep(0.35)  # Fast empirical benchmark slice
         out_tokens = 180
-        cost_usd = (input_tokens * 0.00005) + (out_tokens * 0.00015)
+        cost_usd = (input_tokens * 0.05 / 1_000_000.0) + (out_tokens * 0.20 / 1_000_000.0)
         cost_idr = cost_usd * USD_TO_IDR
         return {
             "latency_sec": 0.35,
