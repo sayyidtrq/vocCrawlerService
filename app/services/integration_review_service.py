@@ -330,6 +330,9 @@ class IntegrationReviewService:
         branch_name: str = row[1]
         analysis: ReviewAnalysis | None = row[2]
         onebox_location_id: int | None = row[3]
+        # Set only for analyses made under an OneBox taxonomy; their category is
+        # already validated against that snapshot, so it passes through as is.
+        taxonomy_version = analysis.taxonomy_version if analysis else None
 
         return {
             "id": review.id,
@@ -365,7 +368,11 @@ class IntegrationReviewService:
                 else None
             ),
             "issue_category": (
-                _contract_category(analysis.issue_category) if analysis else None
+                None
+                if analysis is None
+                else analysis.issue_category
+                if taxonomy_version
+                else _contract_category(analysis.issue_category)
             ),
             "urgency": analysis.urgency if analysis else None,
             "summary": analysis.summary if analysis else None,
@@ -377,4 +384,8 @@ class IntegrationReviewService:
             "is_safety_issue": (
                 bool(analysis.is_safety_issue) if analysis else False
             ),
+            "output_schema_version": "v3" if taxonomy_version else "v2",
+            "taxonomy_version": taxonomy_version,
+            "risk_flags": analysis.risk_flags if taxonomy_version else None,
+            "tags": analysis.tags if taxonomy_version else None,
         }
