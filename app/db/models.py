@@ -97,6 +97,26 @@ class ApiClient(Base):
     company: Mapped[Company] = relationship(back_populates="api_clients")
 
 
+class TaxonomySnapshot(Base):
+    """Industry taxonomy delivered by OneBox, kept so a worklist outage still has it."""
+
+    __tablename__ = "taxonomy_snapshots"
+    __table_args__ = (
+        UniqueConstraint("company_id", "key", name="uq_taxonomy_snapshots_company_key"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    company_id: Mapped[int] = mapped_column(
+        ForeignKey("companies.id", ondelete="CASCADE"), nullable=False
+    )
+    key: Mapped[str] = mapped_column(String(80), nullable=False)
+    version: Mapped[str] = mapped_column(String(16), nullable=False)
+    body: Mapped[dict] = mapped_column(JsonType, nullable=False)
+    received_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
 class WorklistSyncState(Base):
     """Last pull outcome for the OneBox-owned worklist cache."""
 
@@ -330,6 +350,9 @@ class Location(_CrawlCoverageColumns, Base):
     # happens to be blank.
     ai_model: Mapped[str | None] = mapped_column(String(100))
     ai_output_schema_version: Mapped[str | None] = mapped_column(String(20))
+    # Industry taxonomy named by OneBox; null = built-in legacy taxonomy.
+    taxonomy_key: Mapped[str | None] = mapped_column(String(80))
+    taxonomy_version: Mapped[str | None] = mapped_column(String(16))
     worklist_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
@@ -474,6 +497,10 @@ class ReviewAnalysis(Base):
     is_patient_safety_issue = synonym("is_safety_issue")
     model_name: Mapped[str | None] = mapped_column(String(100))
     prompt_version: Mapped[str | None] = mapped_column(String(50))
+    # Set only when the analysis ran under an OneBox industry taxonomy.
+    taxonomy_version: Mapped[str | None] = mapped_column(String(16))
+    risk_flags: Mapped[dict | None] = mapped_column(JsonType)
+    tags: Mapped[list | None] = mapped_column(JsonType)
     raw_response: Mapped[dict] = mapped_column(JsonType, default=dict, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
