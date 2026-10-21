@@ -35,7 +35,7 @@ Satu deployment crawler melayani **banyak tenant OneBox** (satu site = satu comp
 3. **Satu arah: OneBox → crawler (opsi D).** OneBox mengirim worklist ke crawler; crawler tidak memegang kredensial OneBox dan tidak pernah memanggil OneBox.
 4. **Isolasi data mutlak** antar tenant.
 5. **Isolasi kegagalan** — tenant bermasalah tidak menghentikan tenant lain.
-6. **Adil & terukur** — weighted round robin antar tenant; biaya Apify tercatat per tenant.
+6. **Adil & terukur** — weighted round robin antar tenant; satu akun Apify platform yang anonim bagi tenant, dengan biaya tercatat per tenant.
 
 **Kenapa:** produk ditujukan ke enterprise yang tersebar luas (contoh: Pertamina, Hermina, Kopi Kenangan), bukan hanya rumah sakit; CEO meminta uji stabilitas saat banyak company crawling bersamaan (`REVISI_CEO_07-08-2026`). Di dev sudah ada **site 169** (utama) dan **site 177** (testing).
 
@@ -62,7 +62,7 @@ Satu deployment crawler melayani **banyak tenant OneBox** (satu site = satu comp
 - **Push snapshot worklist** dari OneBox ke crawler (event + scheduled push + cek versi), lewat queue OneBox.
 - Penonaktifan / penaktifan ulang tenant.
 - Weighted round robin antar tenant di worker crawler.
-- Atribusi biaya Apify per tenant.
+- Apify lewat satu akun platform (tanpa akun/rotasi/top-up per tenant) + atribusi biaya per tenant.
 - Pengurangan setup manual (CLI) di crawler.
 
 **Di luar scope**
@@ -84,16 +84,17 @@ Satu deployment crawler melayani **banyak tenant OneBox** (satu site = satu comp
 | Tenant nonaktif: pending batal, claimed selesai, data tetap | Q-09 |
 | Weighted round robin di crawler | Q-12 |
 | Uji di dev dengan site 169 + 177 | Q-20, Q-24 |
+| Apify: satu akun platform, anonim bagi tenant; biaya tetap dicatat per tenant | Q-11 |
 
 ## 5. Gerbang yang masih terbuka
 
 | Gerbang | Pertanyaan | Menghambat | Status |
 |---|---|---|---|
 | G1 — Istilah & ADR | Q-25 (proxy check), Q-23 | MT-01 | open |
-| G2 — Kondisi OneBox nyata | Q-31 | Fase 3 | open (menunggu repo OneBox) |
-| G3 — Keandalan queue OneBox (syarat opsi D) | Q-32 | MT-30, MT-33, MT-35 | open — bila rapuh, fallback opsi C |
+| G2 — Kondisi OneBox nyata | Q-31, Q-35 | Fase 3 | partial — putaran 1 selesai; definisi gerbang "paket VoC" (Q-35) terbuka |
+| G3 — Outbox OneBox (syarat opsi D) | Q-32 | MT-30, MT-33, MT-35 | partial — **belum ada outbox**, harus dibangun (tabel DB atau RabbitMQ); fallback opsi C bila terlalu mahal |
 | G4 — Bobot round robin | Q-26 | MT-40 | open |
-| G5 — Usulan yang perlu dikonfirmasi | Q-28, Q-29, Q-33 | MT-13, MT-31–33 | proposed |
+| G5 — Usulan yang perlu dikonfirmasi | Q-28, Q-29, Q-33, Q-36 | MT-13, MT-30–33 | proposed |
 
 ## 6. Fase & urutan
 
@@ -125,7 +126,7 @@ flowchart TD
 
 | Fase | Isi | Task | Prasyarat | Status |
 |---|---|---|---|---|
-| **0** | ADR-0006, guard refresh lintas tenant, inventaris kode OneBox | MT-01 – MT-03 | — | `todo` |
+| **0** | ADR-0006, guard refresh lintas tenant, inventaris kode OneBox | MT-01 – MT-03 | — | MT-02 `done`, MT-03 `wip`, MT-01 `todo` |
 | **1** | Migration registry tenant + `snapshot_version`, mode config, `apply_snapshot` | MT-10, MT-11, MT-13 (MT-12 `dropped`) | — | `todo` |
 | **2** | Endpoint provisioning, `PUT /worklist`, tenant nonaktif; hapus jalur pull di akhir transisi | MT-20 – MT-23 | Fase 1 | `todo` |
 | **3** | Hook paket VoC, Setup Parameter, builder snapshot + counter versi, job push (queue/retry/debounce), scheduled push + cek versi | MT-30 – MT-33, MT-35 (MT-34 `dropped`) | MT-03, Fase 2, G2, G3 | `blocked` (MT-03) |
@@ -153,7 +154,7 @@ flowchart TD
 | Lokasi per tenant (maks) | ± 100 | Q-13 |
 | Review per lokasi (maks / rata-rata) | ± 1.000 / ± 500 | Q-13 |
 | Backfill tenant terbesar | ± 100.000 review | turunan |
-| Biaya Apify | $20 ≈ ± 100.000 review (perkiraan) | Q-11 |
+| Biaya Apify | $20 ≈ ± 100.000 review (perkiraan); satu akun platform | Q-11 |
 | Harga VoC | ± Rp200.000 per lokasi (perkiraan) | Q-11 |
 | Jumlah tenant aktif, review baru per hari | **belum diketahui** | Q-13 |
 
@@ -166,7 +167,7 @@ flowchart TD
 | Queue OneBox kurang andal untuk retry/debounce/status | Push & deaktivasi bisa hilang diam-diam (opsi D tidak punya self-healing dari crawler) | Q-32, MT-03; scheduled push + cek versi (MT-35); fallback opsi C |
 | Rework jalur pull yang sudah dibangun (client worklist, registry mode) | Kerja terbuang sebagian | `_validate_payload`/`_apply` dipakai ulang; jalur pull tetap sebagai mode transisi |
 | Backfill tenant besar memonopoli worker | Tenant lain lambat | MT-40 (bobot + batas konkurensi) |
-| Kredit Apify habis | Semua tenant berhenti | MT-41 (atribusi), Q-11 (batas) |
+| Batas/kredit akun Apify bersama tercapai | Semua tenant berhenti bersamaan (satu akun) | Alert + batas konkurensi ≤ batas akun (Q-34, Q-22); atribusi MT-41 |
 | Ratifikasi tertunda | Keputusan bisa berubah | Q-23 |
 
 ## 10. Log status fase
@@ -175,4 +176,7 @@ flowchart TD
 |---|---|---|
 | 2026-10-21 | 0 | Plan dibuat dari spec Opsi C + audit kode crawler. |
 | 2026-10-21 | 0 | Plan ditulis ulang setelah jawaban Sayyid: model provisioning paket VoC, weighted round robin, nol setup manual. 13 pertanyaan terjawab. |
+| 2026-10-21 | 0 | MT-02 selesai: company asing tidak bisa lagi memicu refresh yang menyalin worklist site lain. Site 177 aman diberi company & token di crawler. |
+| 2026-10-21 | 0 | MT-03 putaran 1: builder worklist OneBox sudah ada, outbox belum ada, benefit VoC ada enam (Q-35), token per Connection (Q-36). |
+| 2026-10-21 | 0 | Perubahan desain Apify: satu akun platform, anonim bagi tenant, tanpa rotasi/top-up per tenant (Q-11 terjawab; Q-34 batas akun bersama ditambah). |
 | 2026-10-21 | 0 | Keputusan **opsi D** (OneBox push worklist, crawler tanpa kredensial OneBox). Gerbang G3 diganti keandalan queue OneBox. |

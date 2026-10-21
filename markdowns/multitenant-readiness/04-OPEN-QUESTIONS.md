@@ -10,8 +10,8 @@ tags:
 status: living
 updated: 2026-10-21
 owner: Sayyid
-open_count: 16
-answered_count: 15
+open_count: 18
+answered_count: 16
 dropped_count: 2
 ---
 
@@ -37,7 +37,6 @@ dropped_count: 2
 | ID | Prio | Topik | Pertanyaan singkat | Ditujukan ke | Menghambat | Status |
 |---|---|---|---|---|---|---|
 | [[#Q-10]] | 🟢 | Data | Kapan review boleh dibersihkan dari DB Crawler setelah masuk OneBox? | Sayyid | — | partial |
-| [[#Q-11]] | 🟠 | Biaya | Apify per tenant: cukup dicatat, atau dibatasi kuota? | Product | MT-41 | partial |
 | [[#Q-13]] | 🟠 | Skala | Berapa tenant aktif & review baru per hari yang ditargetkan? | Product / CEO | MT-40, MT-41 | partial |
 | [[#Q-15]] | 🟢 | Integrasi | Revert `13ad618` di staging alasannya sama dengan Q-14? | Sayyid | MT-03 | open |
 | [[#Q-19]] | 🟢 | Onboarding | Selain aktivasi paket VoC, ada langkah Registration lain untuk site baru? | Tim OneBox | MT-52 | open |
@@ -49,9 +48,12 @@ dropped_count: 2
 | [[#Q-28]] | 🟠 | Keamanan | Token di Setup Parameter: siapa yang boleh lihat & regenerate? | Sayyid / security | MT-31 | proposed |
 | [[#Q-29]] | 🟠 | Reliability | Crawler mati saat paket diaktifkan — OneBox retry bagaimana? | Sayyid | MT-30 | proposed |
 | [[#Q-30]] | 🟢 | AI/ML | Setting per tenant (kategori ML): disimpan di mana & dikirim lewat apa? | Product / ML | MT-44 | open |
-| [[#Q-31]] | 🔴 | Inventaris | Apa saja yang sudah diimplementasi/diubah di OneBox untuk multisite? | Sayyid (cek kode OneBox) | Fase 3 | open |
-| [[#Q-32]] | 🔴 | Reliability | Queue OneBox untuk push worklist & provisioning (retry, debounce, status) seandal apa? | Sayyid (cek kode OneBox) | MT-33, MT-35 | open |
+| [[#Q-31]] | 🔴 | Inventaris | Apa saja yang sudah diimplementasi/diubah di OneBox untuk multisite? | Sayyid (lanjutan MT-03) | Fase 3 | partial |
+| [[#Q-32]] | 🔴 | Reliability | Outbox/queue OneBox untuk push worklist & provisioning: pakai apa (RabbitMQ, tabel DB)? | Sayyid | MT-33, MT-35 | partial |
 | [[#Q-33]] | 🟠 | Kontrak | `snapshot_version`: counter per site di OneBox, atau `generated_at` + hash? | Sayyid | MT-13, MT-32 | proposed |
+| [[#Q-34]] | 🟠 | Biaya | Batas akun Apify bersama (concurrent runs, plafon bulanan) & alert apa? | Sayyid (cek akun Apify) | MT-40, MT-41 | open |
+| [[#Q-35]] | 🔴 | Entitlement | Apa definisi "paket VoC aktif" — benefit yang mana yang jadi gerbang tenant? | Sayyid / product | MT-30, MT-32 | open |
+| [[#Q-36]] | 🟠 | Kredensial | Token tenant disimpan di level site (Setting) atau disalin ke tiap Connection cabang? | Sayyid | MT-30, MT-31 | proposed |
 
 ### Sudah terjawab
 
@@ -70,6 +72,7 @@ dropped_count: 2
 | [[#Q-18]] | Kardinalitas site ↔ company | **Satu site = satu company** | Sayyid (chat) | 2026-10-21 |
 | [[#Q-20]] | Site uji tenant kedua | **Site 177** (testing) di dev, berdampingan dengan **site 169** (utama) | Sayyid (chat) | 2026-10-21 |
 | [[#Q-24]] | Lokasi uji dua tenant | Dev environment (site 169 + 177 sudah ada); laptop cadangan sedang setup OneBox | Sayyid (chat) | 2026-10-21 |
+| [[#Q-11]] | Akun & biaya Apify | **Satu akun Apify milik platform**, anonim bagi tenant; tidak ada akun/rotasi/top-up per tenant. Biaya tetap **dicatat per tenant** (atribusi) untuk harga VoC | Sayyid (chat) | 2026-10-21 |
 | [[#Q-07]] | Gerbang paket VoC | Tidak ada lagi panggilan crawler → `VocWorklist`. OneBox hanya provisioning & push untuk site berpaket VoC aktif; paket mati → `PATCH active=false` | Desain opsi D | 2026-10-21 |
 | [[#Q-16]] | Pemicu pembaruan worklist | OneBox push snapshot saat paket aktif, cabang/kompetitor berubah, tombol Refresh, dan scheduled push; ketinggalan dicek lewat `GET /tenants/{site_id}` | Desain opsi D | 2026-10-21 |
 
@@ -141,6 +144,7 @@ dropped_count: 2
 
 - **Sudah jelas:** gerbangnya adalah **paket VoC** (Sayyid: "paket VoC itu dulu aja"). Paket lain (mis. kuota AI `VOC_AI`) menyusul.
 - **Jawaban (desain opsi D, 2026-10-21):** pertanyaan awal ("`VocWorklist` membalas apa?") tidak relevan lagi karena crawler tidak memanggil `VocWorklist`. Gerbang sepenuhnya di OneBox: provisioning & push worklist hanya untuk site berpaket VoC aktif; paket dimatikan → `PATCH /tenants/{site_id} {active:false}`. Token tenant yang paketnya mati tetap bisa **membaca** hasil lama, tapi `PUT /worklist` dan enqueue crawl ditolak `409 TENANT_INACTIVE`.
+- **Catatan MT-03:** "paket VoC" di OneBox ternyata enam benefit terpisah → definisi gerbangnya di [[#Q-35]].
 - **Konsekuensi:** tidak ada self-healing dari sisi crawler; keandalan deaktivasi bergantung pada retry queue OneBox ([[#Q-29]], [[#Q-32]]).
 - **Jebakan OneBox tetap berlaku:** cek paket pakai pemeriksaan murni (`hasBenefit`), bukan `verifyBenefit()` yang menaikkan `SiteBenefit.Quantity` ([[ADR-0001-ownership-inversion]] §Konsekuensi teknis).
 
@@ -167,11 +171,15 @@ dropped_count: 2
 
 ### Q-11
 
-**Kredit Apify per tenant?**
+**Akun dan biaya Apify: per tenant atau bersama?**
 
-- **Jawaban sebagian (Sayyid, 2026-10-21):** biaya Apify **sebaiknya dipisah per tenant**, karena VoC punya harga sendiri (perkiraan ± **Rp200.000 per lokasi**). Kredit **$20 Apify sudah sangat banyak** — perkiraan cukup untuk **± 100.000 review**. Jadi pencatatan per tenant bagus.
-- **Turunan desain:** minimal **atribusi** — catat jumlah review & biaya Apify per `company_id` per run (MT-41).
-- **Sisa:** perlu **batas keras** per tenant (crawl berhenti saat kuota habis) atau cukup laporan? Angka $20 ≈ 100k review adalah perkiraan Sayyid — dicocokkan dengan tagihan Apify nyata setelah ada data per tenant.
+- **Jawaban (Sayyid, 2026-10-21):** perubahan desain — Apify dipakai lewat **satu akun milik platform**. Tidak perlu rotate akun dan tidak perlu mengisi kredit per tenant. Dari sisi user/tenant, engine-nya **anonim**: tenant tidak tahu ada Apify di belakang dan tidak pernah memberi akun apa pun.
+- **Perkiraan angka (Sayyid):** harga VoC ± **Rp200.000 per lokasi**; $20 kredit Apify ≈ ± **100.000 review**.
+- **Turunan desain:**
+  - `ApifyTokenPool` multi-akun dengan rotasi saat *exhausted* tidak lagi dibutuhkan; cukup `APIFY_API_TOKENS` berisi **satu** token (pool dengan satu token sudah didukung kode, jadi tidak ada perubahan kode wajib). Logika exhausted tidak dihapus — kegagalan akun tetap harus muncul sebagai error jelas, bukan crawl diam-diam berhenti.
+  - Tenant tidak punya kredensial atau konfigurasi Apify; tidak ada field Apify di provisioning, Setup Parameter, maupun worklist.
+  - **Atribusi per tenant tetap perlu** — bukan untuk menagih akun, melainkan untuk menghitung biaya pokok per tenant/lokasi terhadap harga VoC (MT-41).
+- **Risiko baru (karena satu akun dipakai semua tenant):** batas akun (concurrent runs, plafon pengeluaran) bersifat bersama → [[#Q-34]]; berinteraksi dengan batas konkurensi round robin ([[#Q-26]]).
 
 ### Q-12
 
@@ -304,18 +312,32 @@ dropped_count: 2
 
 **Apa saja yang sudah diimplementasi atau diubah di OneBox untuk multisite?**
 
-- **Konteks:** Sayyid: sebagian sudah diimplementasikan dan diubah. Dokumen ini disusun tanpa membaca kode OneBox (belum ada di laptop cadangan), jadi semua klaim sisi OneBox berstatus `[asumsi]` sampai dicek.
-- **Yang perlu diinventaris:** aktivasi paket VoC → Connection otomatis? · field token di `Connection.Options`? · gerbang paket di `VocWorklist`? · halaman Setup Parameter? · keanggotaan akun layanan ([[#Q-27]]).
-- **Jawaban:** _belum_ — dikerjakan setelah repo OneBox ter-clone.
+- **Status: sebagian terjawab** (MT-03 putaran 1, 2026-10-21). Repo: WSL distro `onebox`, `/var/www/html/onecloud`, branch `feature/DNGO19-3549_VOC-AI-Ticket-Entitlement`. Semua di bawah `[code]`, dibaca langsung.
+- **Sudah ada dan bisa dipakai ulang:**
+  - `services/VocWorklist.php` — `VocWorklist::forSite($siteId)` menyusun worklist satu site (dari registry `VocTarget`, fallback ke Connection). Bentuk item: `onebox_connection_id`, `onebox_target_id`, `onebox_location_id`, `kind`, `external_place_id`, `branch_name`, `organization_name`, `city`, `target_review_count`, `google_maps_url`, `active`, `crawl_enabled`, `ingest_reviews`, `mock`, `voc_target_id`, `provisioning_status`, `updated_at`, `ai_enabled`, `ai_model`, `ai_output_schema_version`. Ini yang akan menjadi `items[]` snapshot (MT-32); kunci ini sudah sama dengan yang di-parse `WorklistSyncService._validate_payload` di crawler.
+  - `controllers/api/v1/VocWorklistController.php` — tenant dari JWT (`sid`), bukan dari request.
+  - `services/VocCrawlQueue.php` — jalur tunggal enqueue crawl (tombol Fetch Jobs + scheduler cron); `clientForSite($siteId)` sudah membuat client crawler **per site** dari Connection.
+  - `library/VoiceOfCustomerSystemClient.php` — dua mode: `service` (`Options.service_token`, jalur baca) dan `user` (username/password, jalur tulis lama). Ada `whoami()` sebagai guard tenant.
+  - Benefit VoC: `VOC_AI`, `VOC_REVIEW`, `VOC_SCRAPE`, `VOC_SCHED`, `VOC_COMP`, `VOC_TICKET` (`VocController::VOC_BENEFITS`, `benefitPackages()`); belum ada alur pembayaran — memilih paket langsung menambah kuota.
+  - Model: `VocSchedule`, `VocScheduleRun`, `VocTarget`, `VocKelompok`, `VocLocationKelompok`.
+- **Masih tersisa dari desain lama (push sinkron ADR-0001):** `VocController::provisionLocation` / `provisionCompetitor` / `locationResyncAction`, dan field `provisioning_status` di item worklist. Ini jalur lama yang menulis ke crawler lewat login user; ADR-0003 menyatakannya usang. Harus diputuskan nasibnya di MT-30/33 (diganti, bukan dibiarkan dua jalur).
+- **Belum ditemukan (perlu dicek/dibangun):** hook "aktivasi paket VoC → provisioning tenant" (benefit dibeli per-kode, tidak ada satu event "paket VoC aktif" → [[#Q-35]]); halaman **Setup Parameter** (belum dicari); counter `snapshot_version` per site ([[#Q-33]]).
+- **Sisa untuk putaran 2:** `VocTargetRegistry` dan `VocTarget` (cara cabang disimpan), cara scheduler cron menjalankan `VocSchedule`, ada tidaknya UI tombol Refresh, dan tempat menyimpan token ([[#Q-36]]).
+- **Jawaban:** _sebagian_
 
 ### Q-32
 
 **Seandal apa mekanisme queue di OneBox untuk panggilan ke crawler?**
 
 - **Konteks:** dengan opsi D, OneBox memikul retry untuk provisioning, push worklist, dan deaktivasi. Dibutuhkan: job tahan restart, retry + backoff, debounce per site, status yang bisa ditampilkan, dan tidak ada dua push untuk site yang sama berjalan bersamaan.
-- **Yang perlu dicek di kode OneBox:** mekanisme queue/worker yang sudah ada (worker Swoole? tabel job? task terjadwal seperti `SonarTask`), cara retry, dan cara memantau kegagalan.
-- **Bila ternyata rapuh:** pertimbangkan opsi C (crawler tetap pull dengan kredensial mesin) supaya retry tetap di antrean durable crawler yang sudah teruji.
-- **Jawaban:** _belum_ — bagian dari inventaris [[#Q-31]].
+- **Temuan MT-03 putaran 1 (`[code]`, 2026-10-21):**
+  - **Tidak ada outbox/queue khusus VoC untuk panggilan keluar.** `VoiceOfCustomerSystemClient::withRetry` hanya retry **di dalam request**: maksimal 2 kali, backoff 2 detik dan 8 detik, hanya untuk kegagalan sementara (curl error / HTTP 5xx). Kalau proses mati atau semua percobaan gagal, panggilan hilang.
+  - Yang ada dan **tahan restart**: tabel `VocSchedule` / `VocScheduleRun` untuk jadwal crawl yang dijalankan cron (`VocCron`, `VoiceOfCustomerSystemTask`) — bisa jadi pola untuk tabel outbox.
+  - OneBox punya infrastruktur **RabbitMQ** (`library/Rabbitmq.php`, `RabbitBroker.php`, `RabbitTask`, dipakai `Monitor*Task` dan `ReportTask`). Belum dicek apakah dipakai untuk VoC dan apakah ada di semua environment.
+  - Jalur lama `locationResyncAction` (tombol kirim ulang cabang yang gagal) adalah preseden UI "status + kirim ulang" untuk Setup Parameter.
+- **Artinya:** opsi D **bukan** tinggal memakai queue yang sudah ada; outbox perlu dibangun. Dua cara: (1) tabel outbox DB + task cron (mengikuti pola `VocScheduleRun`, tidak tergantung RabbitMQ), (2) RabbitMQ bila terbukti tersedia di dev/staging/prod. **Usulan:** mulai dari tabel outbox DB — paling sedikit ketergantungan, mudah ditampilkan statusnya di Setup Parameter.
+- **Bila ternyata terlalu mahal dibangun:** fallback opsi C (crawler pull dengan kredensial mesin).
+- **Jawaban:** _sebagian_ — keputusan outbox DB vs RabbitMQ menunggu konfirmasi.
 
 ### Q-33
 
@@ -326,3 +348,29 @@ dropped_count: 2
 - **Aturan crawler:** versi ≤ versi tersimpan → `200 {"status": "stale"}` tanpa perubahan.
 - **Jawaban:** _menunggu konfirmasi usulan_
 
+### Q-34
+
+**Apa batas akun Apify bersama, dan apa yang harus dipantau?**
+
+- **Konteks:** dengan satu akun platform ([[#Q-11]]), semua tenant berbagi batas akun Apify: jumlah run bersamaan, memori total, dan plafon pengeluaran bulanan. Kode saat ini sudah membedakan batas konkurensi dari kredit habis (commit `b5de735`, `673db8a`).
+- **Yang perlu dicek:** paket akun Apify yang dipakai · maksimum run bersamaan · apakah ada plafon pengeluaran bulanan dan apa yang terjadi saat tercapai · kanal alert ([[#Q-22]]).
+- **Kaitan desain:** `CRAWL_MAX_CONCURRENCY_PER_TENANT` dan jumlah total worker harus ≤ batas run bersamaan akun, kalau tidak weighted round robin hanya memindahkan antrean ke sisi Apify.
+- **Jawaban:** _belum_
+
+### Q-35
+
+**Apa definisi "paket VoC aktif" — benefit mana yang menjadi gerbang tenant?**
+
+- **Temuan (`[code]`):** di OneBox tidak ada satu "paket VoC". Yang ada enam benefit terpisah: `VOC_AI` (analisis review), `VOC_REVIEW` (review per bulan), `VOC_SCRAPE` (crawl per hari), `VOC_SCHED` (jadwal aktif), `VOC_COMP` (kompetitor, on/off), `VOC_TICKET` (tiket, on/off). Tiap benefit dibeli sebagai item bernilai kuota dan menambah kuota langsung (belum ada pembayaran).
+- **Pertanyaan:** event apa yang berarti "tenant aktif" untuk crawler? Usulan: **tenant aktif = `VOC_SCRAPE` aktif dan kuotanya > 0** (crawl adalah yang dilakukan crawler); `VOC_AI` hanya mengatur analisa, bukan keberadaan tenant. Dan "nonaktif" = `VOC_SCRAPE` habis/dicabut?
+- **Detail yang perlu diputuskan:** kuota harian habis (`VOC_SCRAPE` per hari) **bukan** nonaktif — hanya enqueue yang ditolak oleh OneBox; nonaktif ke crawler hanya saat benefit dicabut/kedaluwarsa. Dan: tenant yang baru membeli `VOC_SCRAPE` tapi belum punya cabang tetap didaftarkan (snapshot kosong).
+- **Jebakan:** gunakan `hasBenefit`, bukan `verifyBenefit()` yang menaikkan `SiteBenefit.Quantity` ([[ADR-0001-ownership-inversion]]).
+- **Jawaban:** _belum_
+
+### Q-36
+
+**Token tenant disimpan di level site atau disalin ke tiap Connection cabang?**
+
+- **Temuan (`[code]`):** token baca sekarang ada di `Connection.Options.service_token`, dan satu Connection = satu cabang. `VocCrawlQueue::clientForSite()` mengambil Connection cabang pertama yang layak, jadi secara efektif token diperlakukan sebagai milik site. Rotasi token berarti mengubah semua Connection site itu bila disalin.
+- **Usulan:** simpan satu token per site di tempat level site (mis. baris `Setting` per site, pola `VocKelompokScope`); `clientForSite()` membacanya dulu dan jatuh ke `Connection.Options.service_token` selama masa transisi. Regenerate dari Setup Parameter cukup mengubah satu tempat.
+- **Jawaban:** _menunggu konfirmasi usulan_

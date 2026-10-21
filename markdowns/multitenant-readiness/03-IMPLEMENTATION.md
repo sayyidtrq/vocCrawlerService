@@ -35,8 +35,8 @@ Konvensi: satu task = satu PR ke `dev` (atau turunan `feature/multitenant-readin
 | ID | Task | Sisi | Fase | Prasyarat | Status |
 |---|---|---|---|---|---|
 | MT-01 | ADR-0006: provisioning paket VoC + push worklist (amandemen ADR-0003 D1) + round robin | Keputusan | 0 | Q-25, Q-23 | `todo` |
-| MT-02 | Guard interim: refresh on-demand tidak boleh lintas tenant | Crawler | 0 | — | `todo` |
-| MT-03 | Inventaris kode OneBox (paket VoC, Connection, queue, Setup Parameter) | OneBox (baca) | 0 | repo OneBox ter-clone | `todo` |
+| MT-02 | Guard interim: refresh on-demand tidak boleh lintas tenant | Crawler | 0 | — | `done` (belum di-commit) |
+| MT-03 | Inventaris kode OneBox (paket VoC, Connection, queue, Setup Parameter) | OneBox (baca) | 0 | repo OneBox ter-clone | `wip` (putaran 1 selesai) |
 | MT-10 | Migration `companies`, `worklist_sync_states`, `crawl_jobs` | Crawler | 1 | Q-21 | `todo` |
 | MT-11 | Mode config `ONEBOX_TENANT_MODE=single\|managed` | Crawler | 1 | MT-10 | `todo` |
 | MT-12 | ~~Client pull per site~~ | Crawler | 1 | — | `dropped` (opsi D) |
@@ -45,14 +45,14 @@ Konvensi: satu task = satu PR ke `dev` (atau turunan `feature/multitenant-readin
 | MT-21 | Endpoint `PUT /worklist` *(diubah: opsi D)* | Crawler | 2 | MT-13, MT-20 | `todo` |
 | MT-22 | Hapus jalur pull & refresh on-demand, hapus kredensial OneBox dari crawler | Crawler | 2 | MT-21, transisi selesai | `todo` |
 | MT-23 | Tenant nonaktif: batalkan job `pending`, tolak enqueue & push | Crawler | 2 | MT-10 | `todo` |
-| MT-30 | Hook aktivasi/deaktivasi paket VoC → provisioning via queue | OneBox | 3 | MT-03, MT-20, Q-29, Q-32 | `blocked` (MT-03) |
-| MT-31 | Setup Parameter: status & versi sinkron, token ter-mask, Refresh, Regenerate, bobot | OneBox | 3 | MT-30, Q-28 | `blocked` |
-| MT-32 | Builder snapshot worklist per site (dari logika `VocWorklist`) + counter versi *(diubah: opsi D)* | OneBox | 3 | MT-03, Q-33 | `blocked` |
-| MT-33 | Job push worklist: queue, retry, debounce, status + hook simpan cabang/kompetitor *(diubah: opsi D)* | OneBox | 3 | MT-21, MT-32, Q-32 | `blocked` |
+| MT-30 | Hook aktivasi/deaktivasi VoC → provisioning via outbox | OneBox | 3 | MT-20, Q-35, Q-36, Q-29, Q-32 | `blocked` (Q-35) |
+| MT-31 | Setup Parameter: status & versi sinkron, token ter-mask, Refresh, Regenerate, bobot (preseden UI: `locationResyncAction`) | OneBox | 3 | MT-30, Q-28 | `blocked` |
+| MT-32 | Builder snapshot worklist per site: bungkus `VocWorklist::forSite` + counter versi *(diubah: opsi D)* | OneBox | 3 | MT-03 ✔ putaran 1, Q-33 | `todo` |
+| MT-33 | **Outbox** push worklist (tabel DB + task cron, atau RabbitMQ): retry, debounce, status + hook simpan cabang/kompetitor; ganti jalur `provisionLocation` lama *(diubah: opsi D)* | OneBox | 3 | MT-21, MT-32, Q-32 | `blocked` (Q-32) |
 | MT-34 | ~~Akses akun layanan ke site~~ | OneBox | 3 | — | `dropped` (Q-27) |
 | MT-35 | Scheduled push + cek ketinggalan versi & status paket | OneBox | 3 | MT-33 | `blocked` |
 | MT-40 | Weighted round robin di `claim_next` | Crawler | 4 | MT-10, Q-26 | `blocked` (Q-26) |
-| MT-41 | Atribusi pemakaian Apify per tenant | Crawler | 4 | MT-10 | `todo` |
+| MT-41 | Atribusi pemakaian Apify per tenant (akun Apify tunggal milik platform) | Crawler | 4 | MT-10 | `todo` |
 | MT-42 | Observability per tenant | Crawler | 4 | Q-22 | `todo` |
 | MT-43 | ~~Refresh periodik di crawler~~ | Crawler | 4 | — | `dropped` (pindah ke MT-35) |
 | MT-44 | Setting per tenant dipakai analisa (prompt profile, nanti kategori ML) | Crawler | 4 | MT-20, Q-30 | `blocked` (Q-30) |
@@ -70,14 +70,27 @@ Konvensi: satu task = satu PR ke `dev` (atau turunan `feature/multitenant-readin
 - **Selesai bila:** ADR berstatus Accepted (internal), Q-25 terjawab; ratifikasi Pak Agung dilacak di Q-23.
 
 ### MT-02 — Guard interim refresh on-demand
-- **Kenapa sekarang:** site 177 sudah ada di dev. Selama mode `single` (pull) masih dipakai, bahaya [[02-DESIGN#2.4 Bahaya laten yang sudah ada hari ini]] bisa terjadi begitu site 177 punya company & token.
-- **File:** `app/services/worklist_sync_service.py` (tolak refresh bila `company_id` ≠ `settings.onebox_company_id`), `apps/api/app_api/routers/integration_analysis.py:~107` (`except Exception: pass` → log warning), `app/services/fetch_service.py:44`.
-- **Test:** `test_on_demand_refresh_refuses_foreign_company`; enqueue target tak dikenal oleh company lain → `TARGET_NOT_FOUND`, worklist company itu tidak berubah.
-- **Umur:** hilang bersama jalurnya di MT-22.
+- **Status: `done` (2026-10-21), belum di-commit.** Full suite: 249 lulus, 2 gagal (sama dengan baseline, bukan regresi), 2 di-skip.
+- **Kenapa:** site 177 sudah ada di dev. Selama mode `single` (pull) masih dipakai, bahaya [[02-DESIGN#2.4 Bahaya laten yang sudah ada hari ini]] bisa terjadi begitu site 177 punya company & token.
+- **Yang diubah:**
+  - `app/services/worklist_sync_service.py` — `WorklistTenantMismatchError` (subclass `WorklistSyncError`) + `_require_company_owns_site` di awal `refresh()`: company ≠ `ONEBOX_COMPANY_ID` ditolak **sebelum** menghubungi OneBox dan **tanpa** menulis `WorklistSyncState` untuk company itu. Bila `ONEBOX_COMPANY_ID` kosong guard tidak aktif (jalur otomatis tidak terbentuk tanpa `is_configured`; CLI dengan `--company-id` eksplisit tetap diperbolehkan).
+  - `app/services/crawl_queue.py` — `_refresh_worklist_once` memakai `settings=self.settings` (sebelumnya `is_configured` memeriksa `self.settings` tapi refresh memakai `get_settings()` global).
+  - `app/services/fetch_service.py` — mismatch → `{"status": "skipped_foreign_tenant"}`, crawl lanjut dengan lokasi yang ada (bukan gagal total).
+  - `apps/api/app_api/routers/integration_analysis.py` — `except Exception: pass` diganti log warning; hasil tetap `LOCATION_NOT_FOUND`.
+- **Test** (`tests/test_worklist_sync.py`, 5 baru, T8/T9): company asing ditolak tanpa panggil OneBox dan tanpa menyentuh lokasinya; mismatch adalah `WorklistSyncError`; auto-refresh enqueue tidak menyentuh company asing; fetch lanjut dengan status skip; company pemilik tetap sinkron normal. **Mutation check:** guard dimatikan → 3 test kunci gagal.
+- **Umur:** dihapus bersama jalur pull-nya di MT-22.
+
 
 ### MT-03 — Inventaris OneBox
-- Setelah `onecloud` ter-clone, cek: alur aktivasi paket VoC; pembuatan Connection otomatis; field token di `Connection.Options`; logika `VocWorklist` (untuk dipakai ulang di builder snapshot); **mekanisme queue/worker** (retry, backoff, status — Q-32); halaman Setup Parameter.
-- **Output:** jawaban [[04-OPEN-QUESTIONS#Q-31]] dan [[04-OPEN-QUESTIONS#Q-32]]; status MT-30–MT-35 diperbarui. Bila queue OneBox rapuh → bahas fallback opsi C sebelum Fase 3.
+- **Status:** putaran 1 selesai (2026-10-21), putaran 2 menunggu. Repo: WSL `onebox`, `/var/www/html/onecloud`, branch `feature/DNGO19-3549_VOC-AI-Ticket-Entitlement`.
+- **Hasil putaran 1** (detail: [[04-OPEN-QUESTIONS#Q-31]], [[04-OPEN-QUESTIONS#Q-32]]):
+  - `VocWorklist::forSite($siteId)` sudah menjadi builder worklist → MT-32 cukup membungkusnya jadi snapshot + versi.
+  - Tidak ada outbox untuk panggilan keluar (retry hanya 2x dalam request) → MT-33 harus membangun outbox.
+  - Benefit VoC ada enam, tidak ada satu "paket VoC" → [[04-OPEN-QUESTIONS#Q-35]] sebelum MT-30.
+  - Token baca ada per Connection (`Options.service_token`) → [[04-OPEN-QUESTIONS#Q-36]].
+  - Jalur provisioning push lama (`provisionLocation`, `locationResyncAction`) masih ada → diganti di MT-30/33.
+- **Putaran 2 (sisa):** `VocTargetRegistry`/`VocTarget`, eksekusi `VocSchedule` oleh cron, halaman Setup Parameter dan tombol Refresh, ketersediaan RabbitMQ per environment.
+- **Selesai bila:** Q-31 dan Q-32 terjawab penuh.
 
 ---
 
@@ -160,7 +173,9 @@ Dikerjakan setelah mode `managed` terbukti di dev & staging.
 - **Test (Postgres):** bobot 3:1 → rasio claim mendekati 3:1; tenant tanpa job tidak menahan tenant lain; batas konkurensi dihormati; dua worker paralel tidak meng-claim job yang sama.
 
 ### MT-41 — Atribusi Apify
-- `apify_review_client.py` / `apify_fetch_service.py`: catat `company_id`, review yang ditagih, perkiraan biaya per run. Laporan per tenant per bulan.
+- Konteks: satu akun Apify milik platform, anonim bagi tenant ([[04-OPEN-QUESTIONS#Q-11]]). Tidak ada rotasi atau top-up per tenant; `APIFY_API_TOKENS` cukup satu token (tanpa perubahan kode). Logika *exhausted* di `ApifyTokenPool` dipertahankan supaya kegagalan akun tetap jadi error jelas.
+- `apify_review_client.py` / `apify_fetch_service.py`: catat `company_id`, review yang ditagih, perkiraan biaya per run. Laporan internal per tenant per bulan (tidak diekspos lewat API tenant).
+- Cek batas akun bersama dan alert: [[04-OPEN-QUESTIONS#Q-34]].
 
 ### MT-42 — Observability
 - Log provisioning, push worklist, dan worker membawa `company_id` + `site_id`. Metrik: snapshot diterapkan/ditolak/stale per tenant, umur snapshot terakhir per tenant, kedalaman antrean per tenant, review Apify per tenant. Alert → Q-22.
@@ -187,7 +202,7 @@ Dipindah ke OneBox sebagai MT-35 (crawler tidak memanggil OneBox).
 | T6 | Nonaktif → `pending` batal, `claimed` selesai, enqueue & push `409`, data utuh; aktif lagi → lanjut | unit + Postgres | tidak |
 | T7 | Snapshot versi lama setelah versi baru → `stale`, tidak ada perubahan | unit | tidak |
 | T8 | Weighted round robin 3:1, tanpa starvation, batas konkurensi | Postgres | tidak |
-| T9 | Refresh on-demand lintas tenant tidak mungkin (MT-02, lalu MT-22) | unit | tidak |
+| T9 | Refresh on-demand lintas tenant tidak mungkin (MT-02, lalu MT-22) | unit | **ya** (5 test di `test_worklist_sync.py`) |
 | T10 | Rotate token: lama berlaku sampai overlap habis | unit | sebagian (CLI rotate) |
 | T11 | Pemakaian Apify tercatat per `company_id` | unit | tidak |
 | T12 | Snapshot invalid → `422` per item, worklist lama utuh (atomik) | unit | tidak |
@@ -215,4 +230,7 @@ Isi utama: "aktifkan paket VoC di OneBox". Ditambah: membaca status & versi di S
 |---|---|---|---|
 | 2026-10-21 | — | Dokumen dibuat | — |
 | 2026-10-21 | semua | Dinomori ulang ke model provisioning paket VoC + weighted round robin | — |
+| 2026-10-21 | MT-02 | Guard `WorklistTenantMismatchError` + perbaikan settings di `_refresh_worklist_once` + skip di fetch + log di analysis. 5 test baru, 0 regresi (249 lulus) | belum di-commit |
+| 2026-10-21 | MT-03 | Putaran 1: builder `VocWorklist::forSite` ada; tidak ada outbox; 6 benefit (bukan 1 paket); token per Connection; Q-35, Q-36 ditambah | — |
+| 2026-10-21 | MT-41 | Apify: satu akun platform anonim (Q-11) — tidak ada perubahan kode wajib, atribusi tetap | — |
 | 2026-10-21 | MT-12, 13, 21, 22, 32–35, 43 | Opsi D: MT-12/34/43 `dropped`; MT-13/21/32/33 diubah ke push snapshot; MT-35 baru | — |
