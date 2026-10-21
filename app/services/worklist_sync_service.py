@@ -40,6 +40,10 @@ class WorklistSyncError(RuntimeError):
     """The worklist could not be safely synchronized."""
 
 
+class WorklistTenantMismatchError(WorklistSyncError):
+    """The company asking for a refresh does not own the configured OneBox site."""
+
+
 @dataclass(frozen=True)
 class WorklistSyncResult:
     status: str
@@ -170,6 +174,7 @@ class WorklistSyncService:
     def refresh(self) -> WorklistSyncResult:
         company_id = self._require_company_id()
         site_id = self._require_site_id()
+        self._require_company_owns_site(company_id, site_id)
         try:
             payload = self.client.get_worklist()
             items = self._validate_payload(payload, site_id)
@@ -191,6 +196,25 @@ class WorklistSyncService:
                 "ONEBOX_COMPANY_ID is required; never infer a tenant from the worklist."
             )
         return int(self.company_id)
+
+    def _require_company_owns_site(self, company_id: int, site_id: int) -> None:
+        # Login dan worklist selalu milik ONEBOX_SITE_ID, jadi hanya company
+        # ONEBOX_COMPANY_ID yang boleh menerimanya. Tanpa ini, company lain yang
+        # memicu refresh (enqueue target tak dikenal, analisa, fetch) menerima
+        # cabang site itu, dan cabangnya sendiri ikut dinonaktifkan karena
+        # tidak ada di worklist. Sengaja tidak memanggil _record_error: state
+        # company lain tidak boleh disentuh sama sekali.
+        owner = self.settings.onebox_company_id
+        if owner is not None and int(owner) != company_id:
+            logger.warning(
+                "worklist refresh ditolak: company %s bukan pemilik site %s (ONEBOX_COMPANY_ID=%s)",
+                company_id,
+                site_id,
+                owner,
+            )
+            raise WorklistTenantMismatchError(
+                f"Company {company_id} does not own OneBox site {site_id}; refusing to refresh."
+            )
 
     def _require_site_id(self) -> int:
         if self.settings.onebox_site_id is None:

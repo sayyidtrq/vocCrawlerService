@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from typing import Annotated
 from uuid import uuid4
@@ -20,6 +21,8 @@ from app.services.integration_review_service import IntegrationRequestError
 from apps.api.app_api.integration_schemas import API_VERSION, IntegrationErrorResponse
 from apps.api.app_api.serializers import to_jsonable
 from apps.api.app_api.service_auth import ServicePrincipal, require_service_principal
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/integration/v1/analysis", tags=["integration-analysis"]
@@ -104,7 +107,10 @@ def _require_location(
         )
         if loc_id is None:
             try:
-                from app.services.worklist_sync_service import WorklistSyncService
+                from app.services.worklist_sync_service import (
+                    WorklistSyncError,
+                    WorklistSyncService,
+                )
 
                 WorklistSyncService(
                     company_id=company_id, session_factory=session_factory
@@ -115,8 +121,14 @@ def _require_location(
                         or_(*clauses),
                     )
                 )
+            except WorklistSyncError as exc:
+                # Best-effort: tetap berakhir LOCATION_NOT_FOUND, tapi alasannya
+                # (mis. company bukan pemilik site) harus terlihat di log.
+                logger.warning(
+                    "refresh worklist otomatis dilewati untuk company %s: %s", company_id, exc
+                )
             except Exception:
-                pass
+                logger.exception("refresh worklist otomatis gagal untuk company %s", company_id)
 
     if loc_id is None:
         raise IntegrationRequestError(
