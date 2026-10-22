@@ -5,7 +5,7 @@ from functools import lru_cache
 from typing import Iterator
 
 from sqlalchemy import create_engine
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import get_settings
@@ -21,8 +21,13 @@ def get_engine() -> Engine:
     # small bounded pool and recycle idle connections so we stay well under the
     # cap. For higher concurrency, point DATABASE_URL at the transaction pooler
     # (port 6543) instead of 5432.
+    url = make_url(get_settings().database_url)
+    if url.get_backend_name() == "sqlite":
+        # SQLite memakai pool bawaannya sendiri (SingletonThreadPool untuk
+        # :memory:) yang menolak max_overflow/pool_timeout. Hanya dev/test.
+        return create_engine(url, pool_pre_ping=True)
     return create_engine(
-        get_settings().database_url,
+        url,
         pool_pre_ping=True,
         pool_size=3,
         max_overflow=5,
