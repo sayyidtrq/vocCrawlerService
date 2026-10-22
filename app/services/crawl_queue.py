@@ -623,6 +623,14 @@ class CrawlQueue:
             WorklistSyncService,
         )
 
+        if self.settings.onebox_managed:
+            logger.warning(
+                "crawl target %s tidak dikenal; mode managed: worklist dikirim OneBox, "
+                "minta OneBox mengirim ulang snapshot (Refresh di Setup Parameter)",
+                missing,
+            )
+            return False
+
         if not WorklistSyncService.is_configured(self.settings):
             logger.warning(
                 "crawl target %s tidak dikenal dan worklist OneBox belum "
@@ -632,8 +640,12 @@ class CrawlQueue:
             return False
 
         try:
+            # settings dioper eksplisit: is_configured di atas memeriksa
+            # self.settings, jadi refresh harus memakai konfigurasi yang sama.
             result = WorklistSyncService(
-                company_id=company_id, session_factory=self.session_factory
+                company_id=company_id,
+                session_factory=self.session_factory,
+                settings=self.settings,
             ).refresh()
         except WorklistSyncError as exc:
             logger.warning("refresh worklist otomatis gagal untuk %s: %s", missing, exc)

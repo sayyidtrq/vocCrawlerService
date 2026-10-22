@@ -32,7 +32,7 @@ related:
 > - **OneBox = source of truth & control panel.** Tenant (= site, satu site = satu company) hidup dan mati karena **paket VoC** diaktifkan/dimatikan di OneBox.
 > - **Semua panggilan satu arah: OneBox → crawler.** Crawler tidak memegang kredensial OneBox dan tidak pernah memanggil OneBox (**opsi D**).
 > - OneBox mendaftarkan tenant (provisioning), mendapat token tenant, lalu **mengirim (push) snapshot worklist** memakai token itu.
-> - Crawler **tanpa setup manual** dan membagi worker antar tenant dengan **weighted round robin**; biaya Apify dicatat per tenant.
+> - Crawler **tanpa setup manual** dan membagi worker antar tenant dengan **weighted round robin**; satu akun Apify milik platform (anonim bagi tenant), biaya dicatat per tenant.
 >
 > Sumber: jawaban Sayyid di [[04-OPEN-QUESTIONS]] (Q-01 – Q-05, Q-08, Q-09, Q-12, Q-18), keputusan opsi D di [[04-OPEN-QUESTIONS#Q-03]].
 
@@ -53,9 +53,9 @@ related:
 | P6 | **Panggilan satu arah OneBox → crawler** | Q-03 (opsi D) |
 | P7 | **Setiap query ter-scope `company_id`**; tenant diturunkan dari token, tidak pernah dari parameter request | SPEC §6 |
 | P8 | **Kegagalan satu tenant tidak menular** | SPEC §4.3 |
-| P9 | **Tenant nonaktif → data tetap**; job `pending` dibatalkan, job `claimed` selesai | Q-09 |
+| P9 | **Tenant nonaktif → data tetap**; job yang belum jalan (`queued` / `retry_wait` / `awaiting_source`) dibatalkan, job `running` selesai | Q-09 |
 | P10 | **Weighted round robin** antar tenant di crawler | Q-12 |
-| P11 | Biaya Apify **teratribusi per tenant** | Q-11 |
+| P11 | **Satu akun Apify milik platform**; tenant anonim terhadap engine (tanpa akun/rotasi/top-up per tenant). Biaya tetap **teratribusi per tenant** | Q-11 |
 
 ---
 
@@ -86,7 +86,20 @@ Kode crawler `dev` @ `7021cd0`.
 | Setup manual lewat CLI | `scripts/manage_company.py`, `manage_api_client.py`, `refresh_worklist.py` | Hanya alat darurat ops |
 | `companies` tanpa penghubung & status | `models.py:31-49` | Ditambah kolom (§3.7) |
 | Antrean worker FIFO global | `crawl_worker.py:120` | Weighted round robin (§3.5) |
-| Pool Apify global tanpa atribusi | `apify_token_pool.py:16`, `config.py:164` | Atribusi per tenant (§3.6) |
+| Pool multi-akun Apify dengan rotasi saat exhausted, tanpa atribusi | `apify_token_pool.py:16`, `config.py:164` | Cukup satu token di `APIFY_API_TOKENS` (tanpa perubahan kode); tambah atribusi per tenant (§3.6) |
+
+### 2.2b Kondisi OneBox (MT-03 putaran 1)
+
+Semua `[code]`, dibaca dari repo OneBox (WSL `onebox`, branch `feature/DNGO19-3549_VOC-AI-Ticket-Entitlement`). Detail dan sisa pekerjaan: [[04-OPEN-QUESTIONS#Q-31]], [[04-OPEN-QUESTIONS#Q-32]].
+
+| Hal | Temuan | Dampak ke desain |
+|---|---|---|
+| Builder worklist | `VocWorklist::forSite($siteId)` (registry `VocTarget`, fallback Connection); bentuk item sudah sama dengan yang di-parse crawler | Snapshot opsi D = bungkus builder ini + versi (MT-32) |
+| Tenant di endpoint OneBox | `VocWorklistController` mengambil site dari JWT `sid` | Selaras prinsip P7 |
+| Client ke crawler | `VoiceOfCustomerSystemClient`: mode `service` (`Options.service_token`) dan `user`; `clientForSite()` per site; retry hanya 2x dalam request (2s/8s) | Perlu **outbox** untuk push/provisioning (MT-33); token level site (Q-36) |
+| Queue/outbox keluar | Tidak ada untuk VoC. Ada `VocSchedule`/`VocScheduleRun` (durable, cron) dan infrastruktur RabbitMQ umum | Usulan outbox tabel DB (Q-32) |
+| "Paket VoC" | Enam benefit terpisah (`VOC_AI`, `VOC_REVIEW`, `VOC_SCRAPE`, `VOC_SCHED`, `VOC_COMP`, `VOC_TICKET`); belum ada pembayaran | Definisi gerbang tenant harus diputuskan (Q-35) |
+| Provisioning lama | `provisionLocation`/`provisionCompetitor`/`locationResyncAction`, `provisioning_status` di item worklist | Diganti oleh push snapshot (MT-30/33) |
 
 ### 2.3 Flag entitlement sisa di crawler `[code]`
 
@@ -95,7 +108,7 @@ Kode crawler `dev` @ `7021cd0`.
 ### 2.4 Bahaya laten yang sudah ada hari ini
 
 > [!warning] Refresh worklist on-demand bisa menyalin worklist satu site ke company lain
-> `[code — dibaca, belum direproduksi dengan test]` · Hilang total di opsi D (jalurnya dihapus); guard interim = MT-02
+> `[code]` · **Diamankan sementara oleh MT-02 (2026-10-21)**: company yang bukan pemilik site ditolak oleh `WorklistSyncService.refresh()`. Hilang total di opsi D (jalurnya dihapus, MT-22)
 
 Tiga jalur memanggil refresh worklist dengan `company_id` milik pemanggil, tetapi login ke OneBox memakai `site_id` global:
 
@@ -194,8 +207,8 @@ stateDiagram-v2
     inactive --> active: paket VoC diaktifkan lagi (POST /tenants, idempoten)
     note right of inactive
         data tetap
-        job pending dibatalkan
-        job claimed dibiarkan selesai
+        job menunggu dibatalkan
+        job running dibiarkan selesai
         PUT /worklist dan enqueue ditolak
         token masih bisa membaca hasil lama
     end note
@@ -205,8 +218,8 @@ stateDiagram-v2
 |---|---|---|
 | Paket VoC aktif (pertama kali) | `POST /tenants`, lalu `PUT /worklist` | Buat company cermin + token; terapkan snapshot |
 | Paket VoC aktif lagi | `POST /tenants` (idempoten), lalu `PUT /worklist` | `is_active=true`; token lama tetap; lanjut dari cursor terakhir |
-| Paket VoC dimatikan | `PATCH /tenants/{site_id}` `{active:false}` | `is_active=false`, `deactivated_at`; job `pending` → `cancelled` (`tenant_inactive`); enqueue & push → `409 TENANT_INACTIVE` |
-| Bobot / setting diubah | `PATCH /tenants/{site_id}` | Simpan `weight` / `settings` |
+| Paket VoC dimatikan | `PATCH /tenants/{site_id}` `{active:false}` | `is_active=false`, `deactivated_at`; job `queued` / `retry_wait` / `awaiting_source` → `cancelled` (`last_error_code=tenant_inactive`); enqueue & push → `409 TENANT_INACTIVE` |
+| Bobot / setting diubah | `PATCH /tenants/{site_id}` | Simpan `weight` / setting (kolomnya ditambah di MT-40 / MT-44) |
 | Tombol Regenerate | `POST /tenants/{site_id}/token:rotate` | Token baru; token lama berlaku sampai masa tumpang tindih habis |
 | Cabang/kompetitor berubah, tombol Refresh, scheduled push | `PUT /worklist` | Terapkan snapshot bila versinya lebih baru |
 
@@ -292,6 +305,8 @@ Authorization: Bearer <token tenant site 177>
 4. **Atomik per tenant:** satu transaksi dengan row lock pada state tenant; dua kiriman bersamaan diserialkan, versi tertinggi menang.
 5. **Validasi sama dengan sekarang** (`_validate_payload`: `kind`, `external_place_id` wajib, tanpa duplikat, `onebox_target_id` unik).
 
+**Builder sudah ada:** `VocWorklist::forSite($siteId)` di OneBox ([[#2.2b Kondisi OneBox (MT-03 putaran 1)]]); snapshot hanya menambah `snapshot_version` dan `generated_at`.
+
 **Pemicu di OneBox** (Q-16): paket aktif · cabang/kompetitor berubah (dengan **debounce** per site) · tombol Refresh · **scheduled push** (usulan tiap 60 menit atau sebelum tiap window crawl). Semua lewat queue; jalur simpan admin tidak menunggu crawler.
 
 **Deteksi ketinggalan:** OneBox membaca `GET /tenants/{site_id}` → `worklist.snapshot_version`. Bila lebih kecil dari versi terbaru di OneBox, kirim ulang.
@@ -328,33 +343,47 @@ claim_next(worker_id):
 
 Contoh: bobot site 169 = 3, site 177 = 1 → ± 3 job site 169 untuk tiap 1 job site 177. Tenant tanpa job tidak menahan kapasitas. Butuh index `crawl_jobs (company_id, status, available_at)`. Bobot, default, batas konkurensi, dan prioritas `regular_delta` vs `initial_backfill` → Q-26.
 
-### 3.6 Atribusi biaya Apify per tenant
+### 3.6 Apify: satu akun platform, biaya per tenant
 
-- Setiap run Apify dicatat dengan `company_id`, review yang ditagih, dan perkiraan biaya.
-- Laporan per tenant per bulan; pembanding harga VoC (± Rp200.000/lokasi) vs biaya Apify ($20 ≈ ± 100.000 review) — keduanya perkiraan Sayyid.
-- Batas keras per tenant belum diputuskan (Q-11).
-- Beban (Q-13): tenant terbesar ± 100 lokasi × ± 1.000 review = ± 100.000 review backfill; rata-rata ± 500 review/lokasi.
+**Keputusan (Q-11):** Apify dipakai lewat **satu akun milik platform**. Dari sisi tenant engine-nya anonim: tidak ada akun, kredit, atau konfigurasi Apify di sisi tenant, dan tidak ada rotasi akun.
+
+| Aspek | Desain |
+|---|---|
+| Kredensial | `APIFY_API_TOKENS` berisi satu token (env crawler, tidak pernah keluar dari crawler). Pool tetap dipakai dengan satu entri |
+| Tenant | Tidak melihat Apify di mana pun: bukan di provisioning, Setup Parameter, worklist, maupun respons API |
+| Atribusi | Setiap run dicatat dengan `company_id`, review yang ditagih, dan perkiraan biaya (kolom di `fetch_logs`/`crawl_jobs` atau tabel `source_usage`) — MT-41 |
+| Laporan | Biaya pokok per tenant per bulan vs harga VoC (± Rp200.000/lokasi); $20 ≈ ± 100.000 review — keduanya perkiraan Sayyid |
+| Kegagalan akun | Akun habis/ditolak tetap menghasilkan error jelas per job (logika *exhausted* tidak dihapus); semua tenant terdampak bersama, jadi harus ada alert (Q-22, Q-34) |
+| Batas bersama | Concurrent runs dan plafon akun berlaku lintas tenant → `CRAWL_MAX_CONCURRENCY_PER_TENANT` dan total worker ≤ batas akun (Q-34) |
+
+Beban (Q-13): tenant terbesar ± 100 lokasi × ± 1.000 review = ± 100.000 review backfill; rata-rata ± 500 review/lokasi.
 
 ### 3.7 Model data (crawler)
 
+**Sudah ada (MT-10, `20261022_0012`)**
+
 | Perubahan | Detail |
 |---|---|
-| `companies.onebox_site_id` | `integer`, **unik**, nullable (company lama non-OneBox) — Q-18 |
+| `companies.onebox_site_id` | `integer`, **unik** (unique index `uq_companies_onebox_site`), nullable (company non-OneBox) — Q-18 |
 | `companies.is_active` / `deactivated_at` | `boolean not null default true` / `timestamptz null` |
-| `companies.weight` | `integer not null default 1` — Q-26 |
-| `companies.settings` | `JSON not null default '{}'` — setting dari OneBox (AI, prompt profile, nanti kategori ML) — Q-30 |
-| `worklist_sync_states.snapshot_version` | `bigint null` + `applied_at` — versi snapshot terakhir yang diterapkan (tabel sudah satu baris per company) |
-| `crawl_jobs` | status `cancelled` + `cancel_reason`; index `(company_id, status, available_at)` |
-| Atribusi Apify | kolom/tabel pemakaian per `company_id` |
-| Backfill | company Hermina → `onebox_site_id` dari `worklist_sync_states.site_id` — Q-21 |
-| Flag lama | `ai_enable_flag`, `analyze_competitor_flag`, `total_enable_review` diisi dari `settings`; tidak dihapus dulu |
+| `worklist_sync_states.snapshot_version` / `applied_at` | `bigint null` / `timestamptz null` — versi snapshot terakhir yang diterapkan (tabel sudah satu baris per company) |
+| Backfill | `onebox_site_id` dari `worklist_sync_states.site_id`, hanya bila tidak ambigu dan belum dipakai company lain; sisanya dibiarkan kosong dan dicatat |
+
+**Menyusul (sengaja belum, bentuknya belum pasti)**
+
+| Perubahan | Di task | Menunggu |
+|---|---|---|
+| `companies.weight` (`integer not null default 1`, `> 0`) + index `crawl_jobs (company_id, status, available_at)` | MT-40 | Q-26 |
+| Kolom setting tenant/lokasi (AI, prompt profile, nanti kategori ML); flag lama `ai_enable_flag`, `analyze_competitor_flag`, `total_enable_review` diisi darinya | MT-44 | Q-30 dan rencana taksonomi per lokasi |
+| Atribusi Apify per `company_id` | MT-41 | — |
+| Status job `cancelled` | MT-23 | tanpa migration (`status` tanpa constraint); butuh kode di `crawl_queue`/`crawl_batch_view` |
 
 ### 3.8 Konfigurasi crawler
 
 | Env | Sekarang | Target |
 |---|---|---|
 | `ONEBOX_BASE_URL`, `ONEBOX_SVC_EMAIL`, `ONEBOX_SVC_PASSWORD`, `ONEBOX_SITE_ID`, `ONEBOX_COMPANY_ID`, `ONEBOX_WORKLIST_PATH` | Wajib untuk pull | **Dihapus** setelah transisi (hanya dipakai mode `single`) |
-| `ONEBOX_TENANT_MODE` | — | Baru, transisi: `single` (pull lama, satu tenant) / `managed` (push + provisioning) |
+| `ONEBOX_TENANT_MODE` | — | **Ada (MT-11).** `single` (default; pull lama, satu tenant) / `managed` (push + provisioning). `managed` menolak `ONEBOX_SITE_ID`/`ONEBOX_COMPANY_ID` saat boot dan hanya memperingatkan sisa `ONEBOX_BASE_URL`/`SVC_*` |
 | `ONEBOX_PROVISIONING_KEY_HASH` | — | Baru — hash kunci provisioning |
 
 Akhir transisi: crawler **tidak punya satu pun kredensial OneBox**.

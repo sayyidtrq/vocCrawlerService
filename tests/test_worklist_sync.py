@@ -14,9 +14,13 @@ from app.config import Settings
 from app.db.base import Base
 from app.db.models import Company
 from app.integrations.onebox_worklist_client import OneBoxUnavailableError, OneBoxWorklistClient
+from app.integrations.mock_review_client import MockReviewClient
+from app.services.crawl_queue import CrawlQueue
+from app.services.fetch_service import FetchService
 from app.services.worklist_sync_service import (
     WorklistSyncError,
     WorklistSyncService,
+    WorklistTenantMismatchError,
     is_onebox_managed,
 )
 
@@ -738,3 +742,135 @@ def test_worklist_generated_by_onebox_registry_mode_syncs_and_survives_cutover(
             select(Location).where(Location.external_place_id == "ChIJ-depok-0001")
         )
         assert depok.is_active is False and depok.crawl_enabled is False
+
+
+# --- MT-02: refresh on-demand tidak boleh melintasi tenant -------------------
+#
+# Worklist yang ditarik selalu milik site di konfigurasi (ONEBOX_SITE_ID), dan
+# company pemiliknya ONEBOX_COMPANY_ID. Company lain yang memicu refresh
+# (enqueue target tak dikenal, analisa lokasi tak dikenal, fetch) tidak boleh
+# menerima worklist itu, apalagi kehilangan targetnya sendiri.
+
+
+class RecordingWorklistClient(FakeWorklistClient):
+    def __init__(self, payload=None, error=None):
+        super().__init__(payload, error)
+        self.calls = 0
+
+    def get_worklist(self):
+        self.calls += 1
+        return super().get_worklist()
+
+
+def _other_company_with_managed_location(session_factory):
+    with session_factory() as session:
+        other = Company(name="Other Tenant")
+        session.add(other)
+        session.flush()
+        session.add(
+            Location(
+                company_id=other.id,
+                hospital_name="Other Org",
+                branch_name="Other Branch",
+                source="onebox",
+                external_place_id="place-other",
+                onebox_connection_id=77,
+                crawl_enabled=True,
+                ingest_reviews=True,
+                is_active=True,
+            )
+        )
+        session.commit()
+        return other.id
+
+
+def _other_company_state(session_factory, other_id):
+    with session_factory() as session:
+        locations = session.scalars(select(Location).where(Location.company_id == other_id)).all()
+        states = session.scalars(
+            select(WorklistSyncState).where(WorklistSyncState.company_id == other_id)
+        ).all()
+        return locations, states
+
+
+def test_refresh_refuses_a_company_that_does_not_own_the_configured_site(
+    session_factory, settings, company_id
+):
+    other_id = _other_company_with_managed_location(session_factory)
+    client = RecordingWorklistClient(payload())
+    service = WorklistSyncService(
+        company_id=other_id,
+        session_factory=session_factory,
+        settings=onebox_settings(settings, company_id),
+        client=client,
+    )
+
+    with pytest.raises(WorklistTenantMismatchError):
+        service.refresh()
+
+    assert client.calls == 0
+    locations, states = _other_company_state(session_factory, other_id)
+    assert [(row.external_place_id, row.is_active, row.crawl_enabled) for row in locations] == [
+        ("place-other", True, True)
+    ]
+    assert states == []
+    with session_factory() as session:
+        assert session.scalar(select(func.count()).select_from(Competitor)) == 0
+
+
+def test_tenant_mismatch_is_a_worklist_sync_error():
+    assert issubclass(WorklistTenantMismatchError, WorklistSyncError)
+
+
+def test_enqueue_auto_refresh_never_touches_a_foreign_company(
+    session_factory, settings, company_id, monkeypatch
+):
+    other_id = _other_company_with_managed_location(session_factory)
+    client = RecordingWorklistClient(payload())
+    monkeypatch.setattr(
+        "app.services.worklist_sync_service.OneBoxWorklistClient", lambda _settings: client
+    )
+    queue = CrawlQueue(
+        session_factory=session_factory, settings=onebox_settings(settings, company_id)
+    )
+
+    assert queue._refresh_worklist_once(other_id, [123]) is False
+
+    assert client.calls == 0
+    locations, states = _other_company_state(session_factory, other_id)
+    assert [row.is_active for row in locations] == [True]
+    assert states == []
+
+
+def test_fetch_skips_the_refresh_for_a_foreign_company_instead_of_failing(
+    session_factory, settings, company_id
+):
+    other_id = _other_company_with_managed_location(session_factory)
+    client = RecordingWorklistClient(payload())
+    fetch = FetchService(
+        company_id=other_id,
+        session_factory=session_factory,
+        settings=onebox_settings(settings, company_id),
+        client=MockReviewClient(),
+    )
+    fetch.worklist_sync_service.client = client
+
+    result = fetch._refresh_worklist()
+
+    assert result["status"] == "skipped_foreign_tenant"
+    assert client.calls == 0
+    locations, _ = _other_company_state(session_factory, other_id)
+    assert [row.is_active for row in locations] == [True]
+
+
+def test_owner_company_still_refreshes_normally(session_factory, settings, company_id):
+    client = RecordingWorklistClient(payload())
+    result = WorklistSyncService(
+        company_id=company_id,
+        session_factory=session_factory,
+        settings=onebox_settings(settings, company_id),
+        client=client,
+    ).refresh()
+
+    assert client.calls == 1
+    assert result.status == "synced"

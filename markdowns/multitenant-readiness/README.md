@@ -41,7 +41,7 @@ pekerjaan baru — **kecuali ADR**, yang tetap otoritas tertinggi (lihat `integr
 > membuat token, lalu token disimpan di Connection dan tampil di Setup Parameter. **Semua panggilan satu arah
 > OneBox → crawler (opsi D):** OneBox mengirim (push) snapshot worklist memakai token tenant; crawler tidak
 > memegang kredensial OneBox. Crawler **tanpa setup manual** dan membagi worker antar tenant dengan
-> **weighted round robin**. Biaya Apify dicatat per tenant.
+> **weighted round robin**. Apify dipakai lewat satu akun platform yang anonim bagi tenant; biaya dicatat per tenant.
 >
 > **Kondisi kode crawler:** lapisan data sudah multi-tenant (`company_id` di semua tabel, token per company),
 > tapi config & orkestrasi masih satu tenant (`ONEBOX_SITE_ID`/`ONEBOX_COMPANY_ID`, CLI manual, antrean FIFO).
@@ -116,3 +116,8 @@ Dokumen yang **tidak dipakai** (superseded): `integrations/implementation-plan-o
 | 2026-10-21 | Folder dibuat. Sintesis brainstorm + spec + meeting Agung + audit kode `dev`. 24 pertanyaan terbuka dicatat. Bahaya laten refresh worklist lintas-tenant ditemukan. | semua |
 | 2026-10-21 | Jawaban Sayyid: model diganti ke provisioning paket VoC + OneBox control panel + weighted round robin + nol setup manual. 13 Q terjawab, Q-06 di-drop, Q-25–Q-31 ditambah. Design/Plan/Implementation ditulis ulang; ID task MT dinomori ulang. | Q-01–Q-31 |
 | 2026-10-21 | Keputusan **opsi D**: OneBox push snapshot worklist (`PUT /worklist`, berversi, atomik), crawler tanpa kredensial OneBox — amandemen ADR-0003 D1. Q-07 & Q-16 terjawab oleh desain, Q-27 di-drop, Q-32 (queue OneBox) & Q-33 (`snapshot_version`) ditambah. MT-12/34/43 `dropped`, MT-35 baru. | Q-03, Q-07, Q-16, Q-27, Q-32, Q-33 |
+| 2026-10-21 | Perubahan desain Apify: satu akun platform, anonim bagi tenant, tanpa rotasi/top-up per tenant. Q-11 terjawab, Q-34 (batas akun bersama) ditambah. | Q-11, Q-34, MT-41 |
+| 2026-10-21 | MT-03 putaran 1 (baca kode OneBox): `VocWorklist::forSite` siap dipakai ulang, **tidak ada outbox** untuk panggilan keluar, "paket VoC" = 6 benefit terpisah, token per Connection. Q-31/Q-32 partial; Q-35, Q-36 ditambah. | Q-31, Q-32, Q-35, Q-36, MT-03 |
+| 2026-10-21 | **MT-02 selesai** (kode): guard `WorklistTenantMismatchError`; 5 test baru; full suite 249 lulus, 2 gagal pra-ada, 0 regresi. Belum di-commit. | MT-02, T9 |
+| 2026-10-22 | **MT-10 selesai** (SQLite): migration `20261022_0012`, kolom `onebox_site_id`/`is_active`/`deactivated_at` dan `snapshot_version`/`applied_at`, 12 test. Scope dikecilkan (tanpa `weight`, `settings`, `cancel_reason`). Status job di dokumen dikoreksi ke nama asli kode. | MT-10, MT-23, MT-40, MT-44 |
+| 2026-10-22 | **MT-11 selesai**: `ONEBOX_TENANT_MODE=single\|managed`, 15 test. Default `single` tidak mengubah perilaku. | MT-11 |

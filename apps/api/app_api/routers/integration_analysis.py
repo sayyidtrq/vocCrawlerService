@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from typing import Annotated
 from uuid import uuid4
@@ -17,9 +18,12 @@ from app.integrations.analysis_client import create_analysis_client
 from app.services.analysis_service import AnalysisService
 from app.services.entitlement_service import EntitlementError, EntitlementService
 from app.services.integration_review_service import IntegrationRequestError
+from app.services.worklist_sync_service import WorklistSyncError, WorklistSyncService
 from apps.api.app_api.integration_schemas import API_VERSION, IntegrationErrorResponse
 from apps.api.app_api.serializers import to_jsonable
 from apps.api.app_api.service_auth import ServicePrincipal, require_service_principal
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/integration/v1/analysis", tags=["integration-analysis"]
@@ -102,10 +106,8 @@ def _require_location(
                 or_(*clauses),
             )
         )
-        if loc_id is None:
+        if loc_id is None and WorklistSyncService.is_configured(get_settings()):
             try:
-                from app.services.worklist_sync_service import WorklistSyncService
-
                 WorklistSyncService(
                     company_id=company_id, session_factory=session_factory
                 ).refresh()
@@ -115,8 +117,14 @@ def _require_location(
                         or_(*clauses),
                     )
                 )
+            except WorklistSyncError as exc:
+                # Best-effort: tetap berakhir LOCATION_NOT_FOUND, tapi alasannya
+                # (mis. company bukan pemilik site) harus terlihat di log.
+                logger.warning(
+                    "refresh worklist otomatis dilewati untuk company %s: %s", company_id, exc
+                )
             except Exception:
-                pass
+                logger.exception("refresh worklist otomatis gagal untuk company %s", company_id)
 
     if loc_id is None:
         raise IntegrationRequestError(
