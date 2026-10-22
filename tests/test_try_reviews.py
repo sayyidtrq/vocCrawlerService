@@ -4,9 +4,11 @@ import pytest
 
 from app.services.taxonomy_service import upsert_snapshots
 from scripts import try_reviews
+from scripts.try_examples import REVIEW_EXAMPLES
 from scripts.try_reviews import EXAMPLES, Example, judge
 
 KESEHATAN = "kesehatan:0e20266e"
+ALL_EXAMPLES = [e for examples in REVIEW_EXAMPLES.values() for e in examples]
 
 
 class FakeModel:
@@ -20,7 +22,7 @@ class FakeModel:
     def analyze_review(self, review):
         self.seen.append(review)
         self.last_usage = {"total_tokens": 100}
-        return self.answer(next((e for e in EXAMPLES if e.text == review["review_text"]), None), review)
+        return self.answer(next((e for e in ALL_EXAMPLES if e.text == review["review_text"]), None), review)
 
 
 def perfect(example, review):
@@ -109,7 +111,7 @@ def test_every_example_runs_and_a_perfect_model_passes(stored):
     assert code == 0, text
     assert len(model.seen) == len(EXAMPLES)
     assert all(call["taxonomy"]["industry"] == "kesehatan" and call["rating"] is not None for call in model.seen)
-    assert "taxonomy kesehatan:0e20266e (industry kesehatan), multi-tag ON" in text
+    assert "kesehatan:0e20266e (industry kesehatan, sent by OneBox), multi-tag ON" in text
     assert "provider: fake-model" in text
     assert "Dokternya bagus dan sabar menjelaskan, tapi parkirnya penuh" in text  # the review itself is shown
     assert "pelayanan_dokter (0.90) positive | parkir (0.90) negative" in text  # tags with their sentiment
@@ -151,10 +153,58 @@ def test_only_filters_the_examples_and_list_needs_no_model_or_database(stored):
     assert len(model.seen) == sum("campuran" in e.name.lower() for e in EXAMPLES) == 3 and code == 0
 
     code, text = run(["--only", "tidak ada contoh begini"], client=FakeModel(), factory=stored)
-    assert code == 2 and "No example matches" in text
+    assert code == 2 and "No example of this industry matches --only" in text
 
     code, text = run(["--list"])
     assert code == 0 and all(e.name in text for e in EXAMPLES)
+
+
+def test_an_industry_onebox_has_not_sent_uses_the_built_in_catalog_copy_with_tagging_on(stored):
+    model = FakeModel()
+    code, text = run(["--industry", "asuransi"], client=model, factory=stored)
+
+    assert code == 0, text
+    assert "industry asuransi, built-in catalog copy: OneBox has not sent this industry), multi-tag ON" in text
+    assert len(model.seen) == len(REVIEW_EXAMPLES["asuransi"])
+    assert all(c["taxonomy"]["industry"] == "asuransi" and c["taxonomy"]["tagging"]["enabled"] for c in model.seen)
+    assert "sengketa_klaim=YES" in text and "dugaan_penipuan=YES" in text
+
+
+def test_a_stored_snapshot_of_the_industry_wins_over_the_built_in_copy(stored):
+    model = FakeModel()
+    code, text = run(["--industry", "kesehatan", "--tagging"], client=model, factory=stored)
+    assert code == 0 and "industry kesehatan, sent by OneBox" in text
+    assert model.seen[0]["taxonomy"]["version"] == "0e20266e"  # the stored one, not the catalog copy's version
+
+
+def test_all_industries_runs_every_industry_and_sums_up(stored):
+    model = FakeModel()
+    code, text = run(["--all-industries", "--tagging"], client=model, factory=stored)
+
+    assert code == 0, text
+    assert len(model.seen) == len(ALL_EXAMPLES)
+    assert {c["taxonomy"]["industry"] for c in model.seen} == set(REVIEW_EXAMPLES)
+    assert text.count("#####") == len(REVIEW_EXAMPLES)
+    assert f"expectations met across {len(ALL_EXAMPLES)} reviews" in text
+    assert "tag expectations are skipped" not in text
+
+
+def test_with_multi_tag_off_tag_expectations_are_skipped_not_failed(stored):
+    # the stored Kesehatan snapshot has multi-tag off: no tag can exist, so only sentiment and flags are judged
+    model = FakeModel()
+    code, text = run([], client=model, factory=stored)
+
+    assert code == 0, text
+    assert "multi-tag is off, so tag expectations are skipped" in text
+    assert "FAIL  pelayanan_dokter" not in text and "overall sentiment" in text and "risk flag keselamatan_pasien raised" in text
+    wrong_flag = FakeModel(lambda example, review: raw(example.sentiment[0], [], flags={}))
+    code, text = run(["--only", "salah obat"], client=wrong_flag, factory=stored)
+    assert code == 1 and "FAIL  risk flag keselamatan_pasien raised (it was not)" in text  # flags are still enforced
+
+
+def test_an_unknown_industry_is_rejected_by_the_parser(stored):
+    with pytest.raises(SystemExit):
+        run(["--industry", "perbankan"], client=FakeModel(), factory=stored)
 
 
 def test_a_free_text_review_is_analysed_without_expectations(stored):
@@ -177,16 +227,19 @@ def test_tagging_off_in_onebox_is_stated_and_shows_no_tags(stored):
     assert "multi-tag OFF (use --tagging to force it on)" in text and "(multi-tag is off for this taxonomy)" in text
 
 
-def test_key_and_company_pick_the_taxonomy_and_other_industries_get_a_note(tx_session_factory, tx_company_id, tx_fixture):
+def test_key_and_company_pick_the_taxonomy_and_its_industry_examples_run(tx_session_factory, tx_company_id, tx_fixture):
     with tx_session_factory() as session:
         upsert_snapshots(session, tx_company_id, tx_fixture["taxonomies"])
         session.commit()
 
     code, text = run(["--key", "spbu:6285c2fa", "--text", "x"], client=FakeModel(lambda e, r: raw("neutral", [])), factory=tx_session_factory)
-    assert code == 0 and "taxonomy spbu:6285c2fa (industry spbu)" in text
+    assert code == 0 and "spbu:6285c2fa (industry spbu, sent by OneBox)" in text
 
-    code, text = run(["--key", "spbu:6285c2fa"], client=FakeModel(), factory=tx_session_factory)
-    assert "the built-in examples are hospital reviews" in text
+    model = FakeModel()
+    code, text = run(["--key", "spbu:6285c2fa", "--tagging"], client=model, factory=tx_session_factory)
+    assert code == 0, text
+    assert len(model.seen) == len(REVIEW_EXAMPLES["spbu"]) and all(c["taxonomy"]["industry"] == "spbu" for c in model.seen)
+    assert "kecurangan_bbm=YES" in text  # the SPBU flags are the ones shown
 
     code, text = run(["--key", "belum:ada", "--text", "x"], client=FakeModel(), factory=tx_session_factory)
     assert code == 2
