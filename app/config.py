@@ -79,6 +79,7 @@ _BLANK_USES_DEFAULT_FIELDS = (
     "show_raw_payload",
     "onebox_site_id",
     "onebox_company_id",
+    "onebox_provisioning_key_hash",
     "onebox_worklist_path",
     "onebox_timeout_seconds",
     "onebox_max_retry",
@@ -196,6 +197,10 @@ class Settings(BaseModel):
     #          dari OneBox (perilaku lama).
     # managed: tenant didaftarkan OneBox; worklist dikirim OneBox, tidak ditarik.
     onebox_tenant_mode: OneBoxTenantMode = "single"
+    # HMAC (lihat tenant_registry_service.provisioning_key_hash) dari kunci yang dipakai
+    # OneBox untuk mendaftarkan tenant. Hanya hash yang ada di sini; kunci aslinya
+    # hanya di konfigurasi OneBox. Kosong = pendaftaran tenant dinonaktifkan.
+    onebox_provisioning_key_hash: str | None = None
     onebox_worklist_path: str = "/api/VocWorklist"
     onebox_timeout_seconds: int = 30
     onebox_max_retry: int = 3
