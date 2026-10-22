@@ -121,3 +121,5 @@ Dokumen yang **tidak dipakai** (superseded): `integrations/implementation-plan-o
 | 2026-10-21 | **MT-02 selesai** (kode): guard `WorklistTenantMismatchError`; 5 test baru; full suite 249 lulus, 2 gagal pra-ada, 0 regresi. Belum di-commit. | MT-02, T9 |
 | 2026-10-22 | **MT-10 selesai** (SQLite): migration `20261022_0012`, kolom `onebox_site_id`/`is_active`/`deactivated_at` dan `snapshot_version`/`applied_at`, 12 test. Scope dikecilkan (tanpa `weight`, `settings`, `cancel_reason`). Status job di dokumen dikoreksi ke nama asli kode. | MT-10, MT-23, MT-40, MT-44 |
 | 2026-10-22 | **MT-11 selesai**: `ONEBOX_TENANT_MODE=single\|managed`, 15 test. Default `single` tidak mengubah perilaku. | MT-11 |
+| 2026-10-22 | **MT-13 selesai** (SQLite): `WorklistSyncService.apply_snapshot` — validasi dulu, satu transaksi dengan kunci company, versi monoton, rollback total. 24 test. Fase 1 tuntas. | MT-13, Q-33 |
+| 2026-10-22 | **MT-20 selesai** (SQLite): `POST/GET/PATCH /tenants`, `token:rotate`, kunci provisioning ber-HMAC (`ONEBOX_PROVISIONING_KEY_HASH`), 37 test. Koreksi nama scope: `crawl:enqueue`. | MT-20 |

@@ -40,8 +40,8 @@ Konvensi: satu task = satu PR ke `dev` (atau turunan `feature/multitenant-readin
 | MT-10 | Migration `companies` (`onebox_site_id`, `is_active`, `deactivated_at`) + `worklist_sync_states` (`snapshot_version`, `applied_at`) | Crawler | 1 | — | `done` (SQLite; Postgres belum diuji) |
 | MT-11 | Mode config `ONEBOX_TENANT_MODE=single\|managed` | Crawler | 1 | MT-10 | `done` (belum di-commit) |
 | MT-12 | ~~Client pull per site~~ | Crawler | 1 | — | `dropped` (opsi D) |
-| MT-13 | `WorklistSyncService.apply_snapshot` + `snapshot_version` *(diubah: opsi D)* | Crawler | 1 | MT-10, Q-33 | `todo` |
-| MT-20 | Endpoint provisioning tenant (`POST/PATCH/GET /tenants`, rotate) | Crawler | 2 | MT-10 | `todo` |
+| MT-13 | `WorklistSyncService.apply_snapshot` + `snapshot_version` *(diubah: opsi D)* | Crawler | 1 | MT-10, Q-33 | `done` (SQLite; belum di-commit) |
+| MT-20 | Endpoint provisioning tenant (`POST/PATCH/GET /tenants`, rotate) | Crawler | 2 | MT-10 | `done` (SQLite; belum di-commit) |
 | MT-21 | Endpoint `PUT /worklist` *(diubah: opsi D)* | Crawler | 2 | MT-13, MT-20 | `todo` |
 | MT-22 | Hapus jalur pull & refresh on-demand, hapus kredensial OneBox dari crawler | Crawler | 2 | MT-21, transisi selesai | `todo` |
 | MT-23 | Tenant nonaktif: batalkan job yang belum jalan, tolak enqueue & push, ajari logika batch status `cancelled` | Crawler | 2 | MT-10 | `todo` |
@@ -122,25 +122,44 @@ Konvensi: satu task = satu PR ke `dev` (atau turunan `feature/multitenant-readin
 Tidak dibutuhkan: di opsi D crawler tidak menarik worklist dari OneBox.
 
 ### MT-13 — `apply_snapshot` *(diubah: opsi D)*
-- `app/services/worklist_sync_service.py`: pisahkan sumber data dari pemrosesan. Metode baru `apply_snapshot(company_id, snapshot_version, items)` memakai ulang `_validate_payload` dan `_apply`, dalam **satu transaksi** dengan row lock pada `worklist_sync_states` milik company itu.
-- Versi ≤ tersimpan → hasil `stale` tanpa perubahan. Validasi gagal → error per item, tidak ada perubahan.
-- `refresh()` (pull) tetap hidup hanya untuk mode `single`.
-- **Test:** apply → upsert & soft-deactivate; versi lama → `stale`; snapshot invalid → tidak ada perubahan sama sekali; dua apply bersamaan (Postgres) → versi tertinggi menang.
+- **Status: `done` di SQLite (2026-10-22), belum di-commit.** Konkurensi sebenarnya (row lock) belum dibuktikan di Postgres.
+- **File:** `app/services/worklist_sync_service.py`, `tests/test_worklist_snapshot.py`.
+- **API service:** `WorklistSyncService(company_id=..., settings=...).apply_snapshot(snapshot_version, items) -> WorklistSyncResult`. Hasil: `status` `applied` atau `stale`, plus `snapshot_version`.
+- **Urutan di dalamnya:**
+  1. Hanya di mode `managed` (selain itu `WorklistSyncError`); wajib punya `company_id`; versi harus integer ≥ 1 (bukan bool/float/string).
+  2. **Validasi murni dulu** (`_validate_items`, dipakai ulang oleh jalur pull) tanpa menyentuh DB. Gagal → `WorklistSnapshotInvalidError`; error dicatat di `worklist_sync_states.last_error` agar terlihat, **versi tidak terpakai**, worklist lama tetap.
+  3. Satu transaksi: kunci baris `companies` (`SELECT ... FOR UPDATE`; menyerialkan dua snapshot satu tenant walau sync state belum ada) → cek company ada, terhubung ke site (`onebox_site_id`), dan aktif (`WorklistTenantInactiveError`) → versi ≤ yang tersimpan ⇒ `stale` tanpa perubahan → tulis semua target (`_apply_items`, dipakai ulang oleh jalur pull) → set `snapshot_version`/`applied_at` → commit. Gagal di tengah ⇒ rollback total.
+- **Perilaku yang perlu diketahui OneBox:** `stale` (versi sama atau lebih lama) berarti **sukses, tidak perlu dikirim ulang** — termasuk saat OneBox mengirim ulang snapshot yang ternyata sudah diterapkan. Snapshot kosong (`items: []`) sah dan menonaktifkan (soft) semua target OneBox company itu.
+- **Refactor jalur pull:** `_validate_payload` → `_validate_items`, `_apply` → `_apply_items(session, ...)` (pemanggil yang commit). Perilaku pull tidak berubah (22 test lama lulus).
+- **Test (24):** target dibuat + versi tercatat; snapshot lebih baru memperbarui dan menonaktifkan yang hilang (tidak dihapus); snapshot kosong; target non-OneBox tidak disentuh; versi sama/lebih lama `stale`; versi bukan integer positif ditolak; snapshot invalid ditolak utuh dan versinya belum terpakai; duplikat/`kind` salah/item bukan objek; **rollback total saat gagal di tengah penulisan**; isolasi antar company (place id sama); butuh mode managed; company tanpa site; company tak dikenal; tenant nonaktif; tanpa company. Mutation check: tanpa cek versi dan cek aktif, 3 test kunci gagal.
+- **Belum dibuktikan:** dua `apply_snapshot` bersamaan di Postgres (T13). Di SQLite `FOR UPDATE` tidak berefek.
+- **Terbuka:** hanya error pertama yang dikembalikan (fail-fast, sama seperti validasi jalur pull), bukan daftar error per item seperti yang tertulis di kontrak awal.
 
 ---
 
 ## Fase 2 — API crawler untuk control panel OneBox
 
 ### MT-20 — Provisioning tenant
-- **File baru:** `apps/api/app_api/routers/integration_tenants.py`, `app/services/tenant_registry_service.py`; auth kunci provisioning di `apps/api/app_api/service_auth.py` (hash dari `ONEBOX_PROVISIONING_KEY_HASH`, scope `tenants:write`).
-- **Endpoint:** `POST /api/integration/v1/tenants` (idempoten per `site_id`), `PATCH /api/integration/v1/tenants/{site_id}` (`active`, `site_name`; `weight` dan `settings` ditambah bersama MT-40/MT-44), `GET /api/integration/v1/tenants/{site_id}` (status + `worklist.snapshot_version` untuk cek ketinggalan), `POST /api/integration/v1/tenants/{site_id}/token:rotate`.
-- **Token:** `ApiClientService.issue`, scope `reviews:read`, `crawl:read`, `crawl:write`, `analysis:write`, `worklist:write`. Secret mentah hanya di respons create/rotate.
-- **Test:** create → company + token; create kedua → 200, token tidak bertambah; PATCH nonaktif → efek MT-23; token tenant tidak bisa memanggil `/tenants`; kunci provisioning tidak bisa membaca `/reviews` atau `PUT /worklist`.
+- **Status: `done` di SQLite (2026-10-22), belum di-commit.** 37 test; mutation check: tanpa pemeriksaan kunci dan tanpa idempotensi token, 5 test kunci gagal.
+- **File:** `app/services/tenant_registry_service.py`, `apps/api/app_api/routers/integration_tenants.py`, `apps/api/app_api/integration_tenant_schemas.py`, `require_provisioning_key` di `apps/api/app_api/service_auth.py`, `scripts/generate_provisioning_key.py`, `tests/test_tenant_provisioning.py`; perubahan kecil di `ApiClientService.issue` (opsi `session=` agar company + token commit atomik), `app/config.py` (`onebox_provisioning_key_hash`), `.env.example`, `apps/api/main.py`.
+- **Endpoint** (semua butuh kunci provisioning, bukan token tenant):
+  - `POST /api/integration/v1/tenants` `{site_id, site_name}` → `201` baru / `200` sudah ada. Idempoten: company dibuat bila belum ada, site nonaktif diaktifkan kembali, **token hanya diterbitkan bila company belum punya token tenant yang aktif**. Nama company tidak diubah oleh panggilan ulang. Field lain (`weight`, `settings`) diabaikan dulu.
+  - `GET /tenants/{site_id}` → status, versi snapshot worklist (`worklist.snapshot_version`, `applied_at`, `items`, `last_error`), info kredensial (`key_id`, `last_used_at`, `expires_at`). **Tidak pernah memuat token.**
+  - `PATCH /tenants/{site_id}` `{active?, site_name?}` → menandai aktif/nonaktif (`deactivated_at` dicatat sekali). **Hanya menandai**: pembatalan job menunggu dan penolakan crawl/push untuk tenant nonaktif adalah **MT-23**.
+  - `POST /tenants/{site_id}/token:rotate` `{overlap_hours: 0..168, default 24}` → token baru; token tenant lama kedaluwarsa pada `now + overlap` (tidak pernah diperpanjang bila sudah dijadwalkan lebih cepat), atau langsung dicabut bila overlap 0.
+- **Respons:** envelope `{data, meta:{api_version, request_id}}`. Token mentah hanya ada di respons POST (saat baru) dan rotate: `token: {key_id, value, scopes}`, dengan `value` = string bearer utuh (`voc_<env>_<key_id>.<secret>`).
+- **Error:** `401 INVALID_PROVISIONING_KEY`, `503 PROVISIONING_NOT_CONFIGURED` (hash belum diset), `409 TENANT_MODE_NOT_MANAGED`, `404 TENANT_NOT_FOUND`, `400 INVALID_PARAMETER` (body/parameter salah — sesuai kontrak `/api/integration/`, bukan 422).
+- **Kunci provisioning:** bukan `ApiClient` (tidak terikat company). Crawler menyimpan HMAC-nya (`ONEBOX_PROVISIONING_KEY_HASH`, memakai `SERVICE_TOKEN_PEPPER`); kunci mentah hanya di OneBox. Tidak bisa dipakai sebagai token tenant dan sebaliknya. Dibuat sekali per environment: `python -m scripts.generate_provisioning_key` (hash hanya valid dengan pepper environment itu).
+- **Token tenant:** nama `onebox-tenant`, scope `analysis:write`, `crawl:enqueue`, `crawl:read`, `reviews:read`, `worklist:write`. Token lain milik company yang sama (mis. dari CLI) tidak disentuh oleh rotate.
+- **Koreksi dokumen:** nama scope yang benar `crawl:enqueue` (sebelumnya tertulis `crawl:write`, dan `tenants:write` untuk kunci provisioning tidak dipakai).
+- **Hanya tersedia di mode `managed`.** Di mode lain `409`.
+- **Belum dibuktikan:** pendaftaran bersamaan untuk site baru yang sama di Postgres (jalur `IntegrityError` → memakai company pemenang). Di SQLite tidak bisa dipicu.
+- **Catatan pelaksanaan:** `ApiClientService.rotate(overlap_hours>0)` yang sudah ada **tidak** mengatur kedaluwarsa token lama (hanya tidak mencabutnya). Rotasi tenant memasang kedaluwarsa nyata; perilaku CLI tidak diubah.
 
 ### MT-21 — `PUT /worklist` *(diubah: opsi D)*
 - **File baru:** `apps/api/app_api/routers/integration_worklist.py`.
-- Tenant dari token (scope `worklist:write`); memanggil `apply_snapshot` (MT-13).
-- Respons: `200 applied` · `200 stale` · `422` dengan error per item · `409 TENANT_INACTIVE` · `401/403`. Kontrak lengkap: [[02-DESIGN#3.4 Worklist push (opsi D)]].
+- Tenant dari token (scope `worklist:write` — sudah termasuk di token tenant dari MT-20); memanggil `apply_snapshot` (MT-13).
+- Respons: `200 applied` · `200 stale` · `400` (kode `INVALID_SNAPSHOT`, dari `WorklistSnapshotInvalidError`; satu pesan, fail-fast — kontrak `/api/integration/` memakai 400, bukan 422) · `409 TENANT_INACTIVE` (dari `WorklistTenantInactiveError`) · `401/403`. Error lain dari service (mode bukan managed, company tak terhubung ke site) → `409`/`500` sesuai yang disepakati saat MT-21. Kontrak lengkap: [[02-DESIGN#3.4 Worklist push (opsi D)]].
 - Batas ukuran body (mis. 2 MB / 5.000 item) supaya kiriman rusak tidak membebani worker API.
 - **Test:** T4, T12, T13 di matrix.
 
@@ -241,6 +260,8 @@ Isi utama: "aktifkan paket VoC di OneBox". Ditambah: membaca status & versi di S
 |---|---|---|---|
 | 2026-10-21 | — | Dokumen dibuat | — |
 | 2026-10-21 | semua | Dinomori ulang ke model provisioning paket VoC + weighted round robin | — |
+| 2026-10-22 | MT-20 | `POST/GET/PATCH /tenants`, `token:rotate`, kunci provisioning ber-HMAC, `ApiClientService.issue(session=)`, skrip pembuat kunci. 37 test | belum di-commit |
+| 2026-10-22 | MT-13 | `apply_snapshot`: validasi murni → satu transaksi dengan kunci company → cek versi → tulis → commit; `_validate_items`/`_apply_items` dipakai bersama jalur pull. 24 test | belum di-commit |
 | 2026-10-22 | MT-11 | `ONEBOX_TENANT_MODE=single\|managed`; managed mematikan jalur pull, menolak SITE_ID/COMPANY_ID, memperingatkan kredensial tersisa. 15 test | belum di-commit |
 | 2026-10-22 | MT-10 | Migration `0012` + model + 12 test (SQLite). Scope dikecilkan: tanpa `weight`, `settings`, `cancel_reason`, index `crawl_jobs`. Backfill tidak menebak site yang ambigu | belum di-commit |
 | 2026-10-21 | MT-02 | Guard `WorklistTenantMismatchError` + perbaikan settings di `_refresh_worklist_once` + skip di fetch + log di analysis. 5 test baru, 0 regresi (249 lulus) | belum di-commit |

@@ -347,6 +347,7 @@ dropped_count: 2
 - **Usulan:** counter integer per site di OneBox yang naik setiap kali cabang/kompetitor site itu berubah. Lebih aman daripada timestamp (jam server bisa berbeda; dua perubahan bisa di detik yang sama).
 - **Alternatif:** `generated_at` + hash isi snapshot (tanpa kolom baru; hash sama → crawler balas `unchanged`).
 - **Aturan crawler:** versi ≤ versi tersimpan → `200 {"status": "stale"}` tanpa perubahan.
+- **Sudah terimplementasi (MT-13):** crawler mensyaratkan **integer positif yang naik terus** (`bigint`). Opsi counter per site cocok langsung. Opsi alternatif `generated_at` + hash **tidak** didukung oleh implementasi ini; bila dipilih, perlu perubahan di `apply_snapshot` dan migration (menyimpan hash, bukan integer).
 - **Jawaban:** _menunggu konfirmasi usulan_
 
 ### Q-34

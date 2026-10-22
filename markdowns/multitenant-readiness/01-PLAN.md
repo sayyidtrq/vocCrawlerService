@@ -127,7 +127,7 @@ flowchart TD
 | Fase | Isi | Task | Prasyarat | Status |
 |---|---|---|---|---|
 | **0** | ADR-0006, guard refresh lintas tenant, inventaris kode OneBox | MT-01 – MT-03 | — | MT-02 `done`, MT-03 `wip`, MT-01 `todo` |
-| **1** | Migration registry tenant + `snapshot_version`, mode config, `apply_snapshot` | MT-10, MT-11, MT-13 (MT-12 `dropped`) | — | MT-10 `done` (SQLite), MT-11 `done`, MT-13 `todo` |
+| **1** | Migration registry tenant + `snapshot_version`, mode config, `apply_snapshot` | MT-10, MT-11, MT-13 (MT-12 `dropped`) | — | MT-10 `done` (SQLite), MT-11 `done`, MT-13 `done` (SQLite) |
 | **2** | Endpoint provisioning, `PUT /worklist`, tenant nonaktif; hapus jalur pull di akhir transisi | MT-20 – MT-23 | Fase 1 | `todo` |
 | **3** | Hook paket VoC, Setup Parameter, builder snapshot + counter versi, job push (queue/retry/debounce), scheduled push + cek versi | MT-30 – MT-33, MT-35 (MT-34 `dropped`) | MT-03, Fase 2, G2, G3 | `blocked` (MT-03) |
 | **4** | Weighted round robin, atribusi Apify, observability, setting tenant | MT-40 – MT-42, MT-44 (MT-43 `dropped`) | Fase 2, G4 | sebagian `todo` |
@@ -176,6 +176,8 @@ flowchart TD
 |---|---|---|
 | 2026-10-21 | 0 | Plan dibuat dari spec Opsi C + audit kode crawler. |
 | 2026-10-21 | 0 | Plan ditulis ulang setelah jawaban Sayyid: model provisioning paket VoC, weighted round robin, nol setup manual. 13 pertanyaan terjawab. |
+| 2026-10-22 | 2 | MT-20 selesai di SQLite: OneBox bisa mendaftarkan tenant dan mendapat token tanpa CLI. Token tenant sudah membawa scope `worklist:write`. Endpoint pembaca snapshot (MT-21) berikutnya. |
+| 2026-10-22 | 1 | MT-13 selesai di SQLite: crawler bisa menerapkan snapshot worklist secara atomik dan berversi. Belum ada endpoint yang memanggilnya (MT-21). Fase 1 tuntas kecuali bukti di Postgres. |
 | 2026-10-22 | 1 | MT-11 selesai: `ONEBOX_TENANT_MODE` (default `single`, perilaku lama utuh). Mode `managed` belum boleh dipakai sampai `PUT /worklist` (MT-21) ada. |
 | 2026-10-22 | 1 | MT-10 selesai di SQLite: `companies` bisa mencerminkan site OneBox dan nonaktif; sync state menyimpan versi snapshot. Postgres belum diuji. |
 | 2026-10-21 | 0 | MT-02 selesai: company asing tidak bisa lagi memicu refresh yang menyalin worklist site lain. Site 177 aman diberi company & token di crawler. |
