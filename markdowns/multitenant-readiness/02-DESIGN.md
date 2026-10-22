@@ -53,7 +53,7 @@ related:
 | P6 | **Panggilan satu arah OneBox → crawler** | Q-03 (opsi D) |
 | P7 | **Setiap query ter-scope `company_id`**; tenant diturunkan dari token, tidak pernah dari parameter request | SPEC §6 |
 | P8 | **Kegagalan satu tenant tidak menular** | SPEC §4.3 |
-| P9 | **Tenant nonaktif → data tetap**; job `pending` dibatalkan, job `claimed` selesai | Q-09 |
+| P9 | **Tenant nonaktif → data tetap**; job yang belum jalan (`queued` / `retry_wait` / `awaiting_source`) dibatalkan, job `running` selesai | Q-09 |
 | P10 | **Weighted round robin** antar tenant di crawler | Q-12 |
 | P11 | **Satu akun Apify milik platform**; tenant anonim terhadap engine (tanpa akun/rotasi/top-up per tenant). Biaya tetap **teratribusi per tenant** | Q-11 |
 
@@ -207,8 +207,8 @@ stateDiagram-v2
     inactive --> active: paket VoC diaktifkan lagi (POST /tenants, idempoten)
     note right of inactive
         data tetap
-        job pending dibatalkan
-        job claimed dibiarkan selesai
+        job menunggu dibatalkan
+        job running dibiarkan selesai
         PUT /worklist dan enqueue ditolak
         token masih bisa membaca hasil lama
     end note
@@ -218,8 +218,8 @@ stateDiagram-v2
 |---|---|---|
 | Paket VoC aktif (pertama kali) | `POST /tenants`, lalu `PUT /worklist` | Buat company cermin + token; terapkan snapshot |
 | Paket VoC aktif lagi | `POST /tenants` (idempoten), lalu `PUT /worklist` | `is_active=true`; token lama tetap; lanjut dari cursor terakhir |
-| Paket VoC dimatikan | `PATCH /tenants/{site_id}` `{active:false}` | `is_active=false`, `deactivated_at`; job `pending` → `cancelled` (`tenant_inactive`); enqueue & push → `409 TENANT_INACTIVE` |
-| Bobot / setting diubah | `PATCH /tenants/{site_id}` | Simpan `weight` / `settings` |
+| Paket VoC dimatikan | `PATCH /tenants/{site_id}` `{active:false}` | `is_active=false`, `deactivated_at`; job `queued` / `retry_wait` / `awaiting_source` → `cancelled` (`last_error_code=tenant_inactive`); enqueue & push → `409 TENANT_INACTIVE` |
+| Bobot / setting diubah | `PATCH /tenants/{site_id}` | Simpan `weight` / setting (kolomnya ditambah di MT-40 / MT-44) |
 | Tombol Regenerate | `POST /tenants/{site_id}/token:rotate` | Token baru; token lama berlaku sampai masa tumpang tindih habis |
 | Cabang/kompetitor berubah, tombol Refresh, scheduled push | `PUT /worklist` | Terapkan snapshot bila versinya lebih baru |
 
@@ -360,17 +360,23 @@ Beban (Q-13): tenant terbesar ± 100 lokasi × ± 1.000 review = ± 100.000 revi
 
 ### 3.7 Model data (crawler)
 
+**Sudah ada (MT-10, `20261022_0012`)**
+
 | Perubahan | Detail |
 |---|---|
-| `companies.onebox_site_id` | `integer`, **unik**, nullable (company lama non-OneBox) — Q-18 |
+| `companies.onebox_site_id` | `integer`, **unik** (unique index `uq_companies_onebox_site`), nullable (company non-OneBox) — Q-18 |
 | `companies.is_active` / `deactivated_at` | `boolean not null default true` / `timestamptz null` |
-| `companies.weight` | `integer not null default 1` — Q-26 |
-| `companies.settings` | `JSON not null default '{}'` — setting dari OneBox (AI, prompt profile, nanti kategori ML) — Q-30 |
-| `worklist_sync_states.snapshot_version` | `bigint null` + `applied_at` — versi snapshot terakhir yang diterapkan (tabel sudah satu baris per company) |
-| `crawl_jobs` | status `cancelled` + `cancel_reason`; index `(company_id, status, available_at)` |
-| Atribusi Apify | kolom/tabel pemakaian per `company_id` (hanya internal; tidak diekspos ke tenant) |
-| Backfill | company Hermina → `onebox_site_id` dari `worklist_sync_states.site_id` — Q-21 |
-| Flag lama | `ai_enable_flag`, `analyze_competitor_flag`, `total_enable_review` diisi dari `settings`; tidak dihapus dulu |
+| `worklist_sync_states.snapshot_version` / `applied_at` | `bigint null` / `timestamptz null` — versi snapshot terakhir yang diterapkan (tabel sudah satu baris per company) |
+| Backfill | `onebox_site_id` dari `worklist_sync_states.site_id`, hanya bila tidak ambigu dan belum dipakai company lain; sisanya dibiarkan kosong dan dicatat |
+
+**Menyusul (sengaja belum, bentuknya belum pasti)**
+
+| Perubahan | Di task | Menunggu |
+|---|---|---|
+| `companies.weight` (`integer not null default 1`, `> 0`) + index `crawl_jobs (company_id, status, available_at)` | MT-40 | Q-26 |
+| Kolom setting tenant/lokasi (AI, prompt profile, nanti kategori ML); flag lama `ai_enable_flag`, `analyze_competitor_flag`, `total_enable_review` diisi darinya | MT-44 | Q-30 dan rencana taksonomi per lokasi |
+| Atribusi Apify per `company_id` | MT-41 | — |
+| Status job `cancelled` | MT-23 | tanpa migration (`status` tanpa constraint); butuh kode di `crawl_queue`/`crawl_batch_view` |
 
 ### 3.8 Konfigurasi crawler
 

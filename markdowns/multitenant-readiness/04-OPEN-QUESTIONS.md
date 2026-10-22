@@ -160,6 +160,7 @@ dropped_count: 2
 **Tenant menjadi nonaktif: job dan data diperlakukan bagaimana?**
 
 - **Jawaban (Sayyid, 2026-10-21):** job `pending` dibatalkan, job yang sudah `claimed` dibiarkan selesai, data tidak dihapus.
+- **Terjemahan ke kode (2026-10-22):** status job asli adalah `queued` / `retry_wait` / `awaiting_source` (menunggu) dan `running`; tidak ada `pending`/`claimed`. Jadi: yang menunggu → `cancelled`, yang `running` dibiarkan selesai.
 - **Turunan desain:** enqueue baru untuk tenant nonaktif ditolak (`TENANT_INACTIVE`); token baca tetap aktif supaya OneBox masih bisa menarik sisa hasil — kecuali OneBox meminta revoke.
 
 ### Q-10
