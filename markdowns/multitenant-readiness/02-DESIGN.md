@@ -383,7 +383,7 @@ Beban (Q-13): tenant terbesar ± 100 lokasi × ± 1.000 review = ± 100.000 revi
 | Env | Sekarang | Target |
 |---|---|---|
 | `ONEBOX_BASE_URL`, `ONEBOX_SVC_EMAIL`, `ONEBOX_SVC_PASSWORD`, `ONEBOX_SITE_ID`, `ONEBOX_COMPANY_ID`, `ONEBOX_WORKLIST_PATH` | Wajib untuk pull | **Dihapus** setelah transisi (hanya dipakai mode `single`) |
-| `ONEBOX_TENANT_MODE` | — | Baru, transisi: `single` (pull lama, satu tenant) / `managed` (push + provisioning) |
+| `ONEBOX_TENANT_MODE` | — | **Ada (MT-11).** `single` (default; pull lama, satu tenant) / `managed` (push + provisioning). `managed` menolak `ONEBOX_SITE_ID`/`ONEBOX_COMPANY_ID` saat boot dan hanya memperingatkan sisa `ONEBOX_BASE_URL`/`SVC_*` |
 | `ONEBOX_PROVISIONING_KEY_HASH` | — | Baru — hash kunci provisioning |
 
 Akhir transisi: crawler **tidak punya satu pun kredensial OneBox**.

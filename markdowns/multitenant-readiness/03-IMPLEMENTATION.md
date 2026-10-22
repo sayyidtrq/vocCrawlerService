@@ -38,7 +38,7 @@ Konvensi: satu task = satu PR ke `dev` (atau turunan `feature/multitenant-readin
 | MT-02 | Guard interim: refresh on-demand tidak boleh lintas tenant | Crawler | 0 | — | `done` (belum di-commit) |
 | MT-03 | Inventaris kode OneBox (paket VoC, Connection, queue, Setup Parameter) | OneBox (baca) | 0 | repo OneBox ter-clone | `wip` (putaran 1 selesai) |
 | MT-10 | Migration `companies` (`onebox_site_id`, `is_active`, `deactivated_at`) + `worklist_sync_states` (`snapshot_version`, `applied_at`) | Crawler | 1 | — | `done` (SQLite; Postgres belum diuji) |
-| MT-11 | Mode config `ONEBOX_TENANT_MODE=single\|managed` | Crawler | 1 | MT-10 | `todo` |
+| MT-11 | Mode config `ONEBOX_TENANT_MODE=single\|managed` | Crawler | 1 | MT-10 | `done` (belum di-commit) |
 | MT-12 | ~~Client pull per site~~ | Crawler | 1 | — | `dropped` (opsi D) |
 | MT-13 | `WorklistSyncService.apply_snapshot` + `snapshot_version` *(diubah: opsi D)* | Crawler | 1 | MT-10, Q-33 | `todo` |
 | MT-20 | Endpoint provisioning tenant (`POST/PATCH/GET /tenants`, rotate) | Crawler | 2 | MT-10 | `todo` |
@@ -108,10 +108,15 @@ Konvensi: satu task = satu PR ke `dev` (atau turunan `feature/multitenant-readin
 - **Belum dibuktikan:** `upgrade`/`downgrade` di Postgres (SQLite dan Postgres berbeda soal `ALTER TABLE`, tipe boolean, dan `DROP COLUMN`). Lakukan di Postgres sebelum dirilis ke staging.
 
 ### MT-11 — Mode config
-- `app/config.py`: `onebox_tenant_mode: Literal["single", "managed"] = "single"`.
-  - `single` → perilaku hari ini (pull, `ONEBOX_SITE_ID`/`ONEBOX_COMPANY_ID`/`ONEBOX_SVC_*` wajib).
-  - `managed` → env pull dilarang diisi; tenant dari registry; worklist hanya dari `PUT /worklist`.
-- `.env.example` diperbarui; `WorklistSyncService.is_configured` (L155) sadar-mode.
+- **Status: `done` (2026-10-22), belum di-commit.** 15 test baru; mutation check: tanpa pengaman managed, 3 test kunci gagal.
+- **File:** `app/config.py` (`onebox_tenant_mode`, `onebox_managed`, validator), `app/services/worklist_sync_service.py`, `app/services/crawl_queue.py`, `apps/api/app_api/routers/integration_analysis.py`, `.env.example`, `tests/test_tenant_mode_config.py`.
+- **Aturan:**
+  - `ONEBOX_TENANT_MODE` default `single` → perilaku sekarang **tidak berubah** (env dev yang ada tidak perlu disentuh). Nilai di-trim dan huruf kecil; kosong = `single`; nilai asing **gagal saat boot** (tidak memilih diam-diam).
+  - `managed` + `ONEBOX_SITE_ID` atau `ONEBOX_COMPANY_ID` terisi → **ditolak saat boot** (dua-duanya menyatakan satu tenant, bertentangan dengan tenant dari OneBox).
+  - `managed` + `ONEBOX_BASE_URL` / `ONEBOX_SVC_EMAIL` / `ONEBOX_SVC_PASSWORD` tertinggal → **hanya warning** (nama variabelnya, tanpa nilai). Jalur pull mati di mode ini, jadi sisa env tidak berbahaya; memblokir boot hanya karena itu merepotkan deploy. Berbeda dari rencana awal ("dilarang diisi"); kredensial benar-benar hilang di MT-22.
+  - `managed`: `WorklistSyncService.is_configured` selalu `False`; `refresh()` menolak dengan pesan jelas; refresh otomatis di `crawl_queue` tidak berjalan dan mencatat pesan yang benar (bukan "belum dikonfigurasi"); lookup lokasi di `integration_analysis` tidak lagi mencoba refresh bila pull tidak terkonfigurasi (sebelumnya mencoba lalu gagal-diam).
+- **Catatan konstruksi:** `ONEBOX_SVC_EMAIL`/`ONEBOX_SVC_PASSWORD` hanya bisa diisi lewat alias saat `Settings(...)`/`_EnvSettings(...)` dikonstruksi (`model_copy` memakai nama field).
+- **Belum:** mode `managed` belum punya jalur masuk worklist — itu `PUT /worklist` (MT-21). Sampai itu ada, jangan set `managed` di environment mana pun.
 
 ### MT-12 — ~~Client pull per site~~ — `dropped`
 Tidak dibutuhkan: di opsi D crawler tidak menarik worklist dari OneBox.
@@ -236,6 +241,7 @@ Isi utama: "aktifkan paket VoC di OneBox". Ditambah: membaca status & versi di S
 |---|---|---|---|
 | 2026-10-21 | — | Dokumen dibuat | — |
 | 2026-10-21 | semua | Dinomori ulang ke model provisioning paket VoC + weighted round robin | — |
+| 2026-10-22 | MT-11 | `ONEBOX_TENANT_MODE=single\|managed`; managed mematikan jalur pull, menolak SITE_ID/COMPANY_ID, memperingatkan kredensial tersisa. 15 test | belum di-commit |
 | 2026-10-22 | MT-10 | Migration `0012` + model + 12 test (SQLite). Scope dikecilkan: tanpa `weight`, `settings`, `cancel_reason`, index `crawl_jobs`. Backfill tidak menebak site yang ambigu | belum di-commit |
 | 2026-10-21 | MT-02 | Guard `WorklistTenantMismatchError` + perbaikan settings di `_refresh_worklist_once` + skip di fetch + log di analysis. 5 test baru, 0 regresi (249 lulus) | belum di-commit |
 | 2026-10-21 | MT-03 | Putaran 1: builder `VocWorklist::forSite` ada; tidak ada outbox; 6 benefit (bukan 1 paket); token per Connection; Q-35, Q-36 ditambah | — |

@@ -120,3 +120,4 @@ Dokumen yang **tidak dipakai** (superseded): `integrations/implementation-plan-o
 | 2026-10-21 | MT-03 putaran 1 (baca kode OneBox): `VocWorklist::forSite` siap dipakai ulang, **tidak ada outbox** untuk panggilan keluar, "paket VoC" = 6 benefit terpisah, token per Connection. Q-31/Q-32 partial; Q-35, Q-36 ditambah. | Q-31, Q-32, Q-35, Q-36, MT-03 |
 | 2026-10-21 | **MT-02 selesai** (kode): guard `WorklistTenantMismatchError`; 5 test baru; full suite 249 lulus, 2 gagal pra-ada, 0 regresi. Belum di-commit. | MT-02, T9 |
 | 2026-10-22 | **MT-10 selesai** (SQLite): migration `20261022_0012`, kolom `onebox_site_id`/`is_active`/`deactivated_at` dan `snapshot_version`/`applied_at`, 12 test. Scope dikecilkan (tanpa `weight`, `settings`, `cancel_reason`). Status job di dokumen dikoreksi ke nama asli kode. | MT-10, MT-23, MT-40, MT-44 |
+| 2026-10-22 | **MT-11 selesai**: `ONEBOX_TENANT_MODE=single\|managed`, 15 test. Default `single` tidak mengubah perilaku. | MT-11 |
