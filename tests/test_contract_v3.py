@@ -38,7 +38,10 @@ def test_a_taxonomy_analysis_passes_its_slug_through_as_v3():
         analysis(
             taxonomy_version="6285c2fa",
             risk_flags={"risiko_viral": False, "risiko_kebakaran": True},
-            tags=[{"slug": "takaran_bbm", "p": 0.9}, {"slug": "waktu_tunggu", "p": None}],
+            tags=[
+                {"slug": "takaran_bbm", "p": 0.9, "sentiment": "negative"},
+                {"slug": "waktu_tunggu", "p": None, "sentiment": "positive"},
+            ],
         )
     )
 
@@ -48,7 +51,14 @@ def test_a_taxonomy_analysis_passes_its_slug_through_as_v3():
 
     validated = IntegrationReviewItem(**item)
     assert validated.tags[1].slug == "waktu_tunggu" and validated.tags[1].p is None
+    assert (validated.tags[0].sentiment, validated.tags[1].sentiment) == ("negative", "positive")
     assert validated.risk_flags["risiko_kebakaran"] is True
+
+
+def test_tags_stored_before_per_tag_sentiment_still_serve_with_a_null_sentiment():
+    item = project(analysis(taxonomy_version="6285c2fa", risk_flags={}, tags=[{"slug": "takaran_bbm", "p": 0.9}]))
+    validated = IntegrationReviewItem(**item)
+    assert validated.tags[0].sentiment is None
 
 
 def test_a_legacy_analysis_is_unchanged_v2_with_null_taxonomy_fields():
@@ -71,7 +81,7 @@ def test_an_unanalysed_review_is_v2_with_null_taxonomy_fields():
 def test_the_item_schema_stays_closed():
     item = project(analysis(taxonomy_version="x", risk_flags={}, tags=[{"slug": "a", "p": 0.5, "extra": 1}]))
     with pytest.raises(ValidationError):
-        IntegrationReviewItem(**item)  # tags may carry only slug and p
+        IntegrationReviewItem(**item)  # tags may carry only slug, p and sentiment
 
 
 def test_the_pull_endpoint_serves_a_taxonomy_analysis(tx_session_factory):
@@ -95,7 +105,7 @@ def test_the_pull_endpoint_serves_a_taxonomy_analysis(tx_session_factory):
                 review_id=review.id, sentiment="negative", sentiment_score=0.9, issue_category="takaran_bbm",
                 urgency="high", summary="s", recommended_action="a", keywords=[], is_potential_viral=False,
                 is_safety_issue=False, taxonomy_version="6285c2fa", risk_flags={"risiko_viral": False},
-                tags=[{"slug": "takaran_bbm", "p": 0.9}],
+                tags=[{"slug": "takaran_bbm", "p": 0.9, "sentiment": "negative"}],
             )
         )
         session.commit()
@@ -111,4 +121,4 @@ def test_the_pull_endpoint_serves_a_taxonomy_analysis(tx_session_factory):
     assert response.status_code == 200, response.text
     item = response.json()["data"][0]
     assert item["issue_category"] == "takaran_bbm" and item["output_schema_version"] == "v3"
-    assert item["tags"] == [{"slug": "takaran_bbm", "p": 0.9}]
+    assert item["tags"] == [{"slug": "takaran_bbm", "p": 0.9, "sentiment": "negative"}]

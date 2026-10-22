@@ -33,8 +33,9 @@ class Recorder:
         )
 
 
-def answers(*, sentiment="negative", category="takaran_bbm", conf=0.9, noul=None, usage=(100, 20)):
+def answers(*, sentiment="negative", category="takaran_bbm", conf=0.9, noul=None, usage=(100, 20), tag_sentiments=None):
     noul = noul or {}
+    tag_sentiments = tag_sentiments or {}
 
     def make(questions):
         out = {
@@ -44,6 +45,8 @@ def answers(*, sentiment="negative", category="takaran_bbm", conf=0.9, noul=None
         for key in questions:
             if key.startswith(("flag_", "tag_")):
                 out[key] = {"noul": noul.get(key, 0.0)}
+            elif key.startswith("sent_") and key[5:] in tag_sentiments:
+                out[key] = {"choice": tag_sentiments[key[5:]], "confidence": 0.8}
         return {"answers": {k: v for k, v in out.items() if k in questions}, "usage": {"input_tokens": usage[0], "output_tokens": usage[1]}}
 
     return make
@@ -108,11 +111,77 @@ def test_tag_questions_are_asked_only_when_tagging_is_on(tx_spbu, tx_tagged):
     assert {k for k in questions if k.startswith("tag_")} == {f"tag_{a['slug']}" for a in tagged["aspects"]}
     # waktu_tunggu .91 and kebersihan .55 clear the default 0.5, parkir .3 does not;
     # the primary category is appended with its choice confidence
-    assert result["tags"] == [
-        {"slug": "waktu_tunggu", "p": 0.91},
-        {"slug": "kebersihan", "p": 0.55},
-        {"slug": "takaran_bbm", "p": 0.9},
+    assert [(t["slug"], t["p"]) for t in result["tags"]] == [
+        ("waktu_tunggu", 0.91),
+        ("kebersihan", 0.55),
+        ("takaran_bbm", 0.9),
     ]
+
+
+def test_each_tag_is_judged_in_one_extra_request(tx_spbu, tx_tagged):
+    tagged = tx_tagged(tx_spbu, max_tags=3)
+    rec = Recorder(
+        answers(
+            noul={"tag_waktu_tunggu": 0.91, "tag_kebersihan": 0.8},
+            tag_sentiments={"waktu_tunggu": "negative", "kebersihan": "positive", "takaran_bbm": "mixed"},
+        )
+    )
+    client = rec.client()
+    result = client.analyze_review({**REVIEW, "taxonomy": tagged})
+
+    assert len(rec.requests) == 2  # core + tag questions, then the per-tag sentiments
+    asked = rec.requests[1]["questions"]
+    assert set(asked) == {"sent_waktu_tunggu", "sent_kebersihan", "sent_takaran_bbm"}  # exactly the tagged aspects
+    question = asked["sent_waktu_tunggu"]
+    assert question["type"] == "choice" and set(question["criteria"]) == {"positive", "negative", "neutral", "mixed"}
+    waktu_tunggu = next(a for a in tagged["aspects"] if a["slug"] == "waktu_tunggu")
+    assert waktu_tunggu["criteria"] in question["instructions"]
+    assert {t["slug"]: t["sentiment"] for t in result["tags"]} == {
+        "waktu_tunggu": "negative", "kebersihan": "positive", "takaran_bbm": "mixed",
+    }
+    # both requests are paid for, and the raw answers keep the sentiments for audit
+    assert client.last_usage["total_tokens"] == 2 * 120
+    assert result["jev"]["sent_kebersihan"]["choice"] == "positive"
+
+
+def test_an_unanswered_tag_sentiment_is_left_for_the_review_sentiment(tx_spbu, tx_tagged):
+    tagged = tx_tagged(tx_spbu, max_tags=3)
+    rec = Recorder(answers(noul={"tag_waktu_tunggu": 0.91}, tag_sentiments={"waktu_tunggu": "not-a-sentiment"}))
+    result = rec.client().analyze_review({**REVIEW, "taxonomy": tagged})
+    assert all(t["sentiment"] is None for t in result["tags"])  # AnalysisService fills these in
+
+
+def test_the_fallback_tag_is_judged_too_and_tagging_off_asks_nothing(tx_spbu, tx_tagged):
+    rec = Recorder(answers(category="lainnya", conf=0.9))
+    rec.client().analyze_review({**REVIEW, "taxonomy": tx_tagged(tx_spbu)})
+    # lainnya is the tag when nothing else passed, so it gets its own sentiment question
+    assert set(rec.requests[-1]["questions"]) == {"sent_lainnya"}
+    rec_off = Recorder(answers())
+    rec_off.client().analyze_review({**REVIEW, "taxonomy": tx_spbu})
+    assert len(rec_off.requests) == 1  # tagging off: nothing to judge
+
+
+def test_lainnya_is_not_added_next_to_real_tags(tx_spbu, tx_tagged):
+    rec = Recorder(answers(category="mystery", noul={"tag_waktu_tunggu": 0.9}))
+    result = rec.client().analyze_review({**REVIEW, "taxonomy": tx_tagged(tx_spbu)})
+    assert [t["slug"] for t in result["tags"]] == ["waktu_tunggu"]
+    assert result["issue_category"] == "lainnya"
+
+
+def test_a_failed_sentiment_request_fails_the_analysis_instead_of_dropping_sentiments(tx_spbu, tx_tagged):
+    calls = []
+
+    def handler(request):
+        calls.append(json.loads(request.content)["questions"])
+        if len(calls) == 2:
+            return httpx.Response(500, text="boom")
+        return httpx.Response(200, json=answers(noul={"tag_waktu_tunggu": 0.9})(calls[-1]))
+
+    client = JevAiClient(
+        settings(), http_client=httpx.Client(base_url="https://api.typesafe.test", transport=httpx.MockTransport(handler))
+    )
+    with pytest.raises(RuntimeError, match="HTTP 500"):
+        client.analyze_review({**REVIEW, "taxonomy": tx_tagged(tx_spbu)})
 
 
 def test_a_per_aspect_threshold_beats_the_default(tx_spbu, tx_tagged):

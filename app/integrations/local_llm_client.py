@@ -194,8 +194,11 @@ class LocalLLMClient(GeminiClientBase):
             lines += [f"- {flag['slug']}: {flag['question']}" for flag in taxonomy.risk_flags]
         if taxonomy.tagging_enabled:
             lines.append(
-                f"Also add `tags`: a JSON array with the slugs of EVERY aspect above the review "
-                f"mentions (at most {taxonomy.max_tags}), most prominent first."
+                f"Also add `tags`: a JSON array with one object for EVERY aspect above the review "
+                f"mentions (at most {taxonomy.max_tags}), most prominent first. Each object is "
+                '{"slug": <aspect slug>, "sentiment": <positive|negative|neutral|mixed>}, where '
+                "sentiment is what the review says about THAT aspect only (a review can praise one "
+                "aspect and criticise another)."
             )
         return "\n".join(lines)
 

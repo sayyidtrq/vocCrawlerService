@@ -69,6 +69,9 @@ class _Base(BaseModel):
 class IntegrationTag(_Base):
     slug: str
     p: float | None = None
+    # What the review says about this aspect: positive | negative | neutral | mixed. None only on
+    # analyses made before per-tag sentiment existed.
+    sentiment: str | None = None
 
 
 class IntegrationReviewItem(_Base):

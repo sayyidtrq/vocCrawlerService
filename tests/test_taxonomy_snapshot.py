@@ -8,10 +8,12 @@ from app.db.models import Company, TaxonomySnapshot
 from app.services.taxonomy_service import (
     DEFAULT_TAG_THRESHOLD,
     LEGACY_CATEGORIES,
+    TAG_SENTIMENTS,
     Taxonomy,
     company_aliases,
     load_taxonomies,
     merge_issue_counts,
+    merge_tag_sentiments,
     upsert_snapshots,
     validate_body,
 )
@@ -125,9 +127,9 @@ def test_pick_tags_keeps_passing_aspects_most_likely_first_capped(tx_spbu, tx_ta
 def test_finalize_tags_rules(tx_spbu, tx_tagged):
     taxonomy = Taxonomy(tx_tagged(tx_spbu, max_tags=3))
 
-    # nothing passed: lainnya, or pujian_umum for a positive review
-    assert taxonomy.finalize_tags([], "lainnya", "negative") == [{"slug": "lainnya", "p": None}]
-    assert taxonomy.finalize_tags([], "pujian_umum", "positive") == [{"slug": "pujian_umum", "p": None}]
+    # nothing passed: lainnya, or pujian_umum for a positive review; the tag takes the review's sentiment
+    assert taxonomy.finalize_tags([], "lainnya", "negative") == [{"slug": "lainnya", "p": None, "sentiment": "negative"}]
+    assert taxonomy.finalize_tags([], "pujian_umum", "positive") == [{"slug": "pujian_umum", "p": None, "sentiment": "positive"}]
 
     # the primary category is always present; unknown slugs and duplicates are dropped
     tags = taxonomy.finalize_tags(
@@ -146,6 +148,66 @@ def test_finalize_tags_rules(tx_spbu, tx_tagged):
     crowded = [{"slug": s, "p": 0.9 - i / 100} for i, s in enumerate(["parkir", "kebersihan", "fasilitas", "waktu_tunggu"])]
     capped = taxonomy.finalize_tags(crowded, "takaran_bbm", "negative")
     assert len(capped) == 3 and "takaran_bbm" in {t["slug"] for t in capped}
+
+
+def test_lainnya_only_stands_alone(tx_spbu, tx_tagged):
+    taxonomy = Taxonomy(tx_tagged(tx_spbu))
+
+    # a model that lists lainnya next to real aspects does not get it kept
+    mixed = taxonomy.finalize_tags([{"slug": "lainnya", "p": 0.9}, {"slug": "parkir", "p": 0.8}], "lainnya", "negative")
+    assert [t["slug"] for t in mixed] == ["parkir"]
+    assert [t["slug"] for t in taxonomy.finalize_tags([{"slug": "lainnya", "p": 0.9}], "lainnya", "negative")] == ["lainnya"]
+
+    # the primary-category helper follows the same rule
+    assert taxonomy.add_primary([], "lainnya", 0.3) == [{"slug": "lainnya", "p": 0.3}]
+    parkir = [{"slug": "parkir", "p": 0.8}]
+    assert taxonomy.add_primary(parkir, "lainnya", 0.3) == parkir
+    assert taxonomy.add_primary(parkir, "parkir", 0.3) == parkir
+    assert taxonomy.add_primary(parkir, "takaran_bbm", 0.3)[-1] == {"slug": "takaran_bbm", "p": 0.3}
+
+
+def test_every_tag_gets_a_sentiment(tx_spbu, tx_tagged):
+    taxonomy = Taxonomy(tx_tagged(tx_spbu, max_tags=6))
+    tags = taxonomy.finalize_tags(
+        [
+            {"slug": "waktu_tunggu", "p": 0.9, "sentiment": "Negative"},  # case is normalised
+            {"slug": "kebersihan", "p": 0.8, "sentiment": "positive"},
+            {"slug": "parkir", "p": 0.7},  # the engine gave none
+            {"slug": "fasilitas", "p": 0.6, "sentiment": "angry"},  # not a sentiment
+            "layanan_pelanggan",  # a bare slug
+        ],
+        "takaran_bbm",
+        "mixed",
+    )
+    by_slug = {t["slug"]: t["sentiment"] for t in tags}
+    assert by_slug["waktu_tunggu"] == "negative" and by_slug["kebersihan"] == "positive"
+    # missing or invalid: the review's own sentiment
+    assert by_slug["parkir"] == by_slug["fasilitas"] == by_slug["layanan_pelanggan"] == by_slug["takaran_bbm"] == "mixed"
+    assert all(t["sentiment"] in TAG_SENTIMENTS for t in tags)
+    # a review-level 'unknown' is not a tag sentiment
+    assert {t["sentiment"] for t in taxonomy.finalize_tags([], "lainnya", "unknown")} == {"neutral"}
+
+
+def test_a_duplicate_tag_that_disagrees_with_itself_is_mixed(tx_spbu, tx_tagged):
+    taxonomy = Taxonomy(tx_tagged(tx_spbu))
+    tags = taxonomy.clean_tags(
+        [{"slug": "waktu_tunggu", "p": 0.9, "sentiment": "positive"}, {"slug": "waiting_time", "p": 0.8, "sentiment": "negative"}]
+    )
+    assert tags == [{"slug": "waktu_tunggu", "p": 0.9, "sentiment": "mixed"}]
+    assert taxonomy.clean_tags([{"slug": "parkir", "sentiment": "negative"}, {"slug": "parkir", "p": 0.4}]) == [
+        {"slug": "parkir", "p": 0.4, "sentiment": "negative"}
+    ]
+
+
+def test_merge_tag_sentiments():
+    assert merge_tag_sentiments([]) is None
+    assert merge_tag_sentiments(["", "angry"]) is None
+    assert merge_tag_sentiments(["negative", "negative"]) == "negative"
+    assert merge_tag_sentiments(["positive", "negative"]) == "mixed"
+    assert merge_tag_sentiments(["mixed", "positive"]) == "mixed"
+    assert merge_tag_sentiments(["neutral", "positive"]) == "positive"
+    assert merge_tag_sentiments(["neutral", "negative"]) == "negative"
+    assert merge_tag_sentiments(["Neutral"]) == "neutral"
 
 
 def test_company_aliases_and_issue_count_merge(tx_session_factory, tx_company_id, tx_fixture):

@@ -4,7 +4,7 @@ import httpx
 
 from app.config import Settings
 from app.integrations.gemini_client import GeminiClientBase
-from app.services.taxonomy_service import Taxonomy
+from app.services.taxonomy_service import Taxonomy, merge_tag_sentiments
 
 TAXONOMY_CATEGORIES = {
     "doctor": "professional_service",
@@ -158,6 +158,7 @@ class AbsaClient(GeminiClientBase):
         if taxonomy is not None and taxonomy.tagging_enabled:
             # Every aspect ABSA found that the pack can name is a candidate tag.
             probabilities: dict[str, float] = {}
+            judged: dict[str, list[str]] = {}
             for item in aspects:
                 slug = taxonomy.absa_map.get(
                     str(item.get("complaint_taxonomy") or item.get("taxonomy") or "").lower()
@@ -166,7 +167,14 @@ class AbsaClient(GeminiClientBase):
                     probabilities[slug] = max(
                         probabilities.get(slug, 0.0), float(item.get("confidence") or 0)
                     )
-            extra["tags"] = taxonomy.pick_tags(probabilities)
+                    judged.setdefault(slug, []).append(str(item.get("sentiment") or ""))
+            tags = taxonomy.add_primary(
+                taxonomy.pick_tags(probabilities), category, round(float(primary.get("confidence") or 0), 4)
+            )
+            # ABSA already judges each aspect: several hits on one slug that disagree become `mixed`.
+            for tag in tags:
+                tag["sentiment"] = merge_tag_sentiments(judged.get(tag["slug"], ()))
+            extra["tags"] = tags
         return {
             **extra,
             "sentiment": sentiment,

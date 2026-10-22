@@ -31,13 +31,22 @@ def read_rows(path: str) -> list[dict]:
     with open(path, newline="", encoding="utf-8") as handle:
         rows = []
         for raw in csv.DictReader(handle):
-            tags = {t for t in (raw.get("expected_tags") or "").split("|") if t.strip()}
+            # expected_tags: `slug|slug=negative|...`; `=sentiment` is optional per tag.
+            tags: set[str] = set()
+            sentiments: dict[str, str] = {}
+            for token in (raw.get("expected_tags") or "").split("|"):
+                slug, _, sentiment = token.strip().partition("=")
+                if slug:
+                    tags.add(slug)
+                    if sentiment.strip():
+                        sentiments[slug] = sentiment.strip().lower()
             rating = (raw.get("rating") or "").strip()
             rows.append(
                 {
                     "review_text": raw["review_text"],
                     "expected_slug": raw["expected_slug"].strip(),
                     "expected_tags": tags,
+                    "expected_tag_sentiments": sentiments,
                     "rating": int(rating) if rating.isdigit() else None,
                 }
             )
@@ -96,6 +105,19 @@ def evaluate(results: list[dict], fallback: str = "lainnya") -> dict:
                 len(labelled),
             ),
         }
+        # per-tag sentiment, scored where the label gave one and the tag was predicted
+        judged = [
+            (want, (r.get("predicted_tag_sentiments") or {}).get(slug))
+            for r in labelled
+            for slug, want in (r.get("expected_tag_sentiments") or {}).items()
+            if slug in r["predicted_tags"]
+        ]
+        if judged:
+            report["tags"]["sentiment"] = {
+                "judged": len(judged),
+                "accuracy": _ratio(sum(want == got for want, got in judged), len(judged)),
+                "confusions": dict(Counter(f"{want}->{got}" for want, got in judged if want != got)),
+            }
     return report
 
 
@@ -122,6 +144,7 @@ def run(args: argparse.Namespace) -> dict:
                 **row,
                 "predicted_slug": cleaned["issue_category"],
                 "predicted_tags": [t["slug"] for t in cleaned.get("tags") or []],
+                "predicted_tag_sentiments": {t["slug"]: t.get("sentiment") for t in cleaned.get("tags") or []},
                 "corrected": corrected,
             }
         )

@@ -22,6 +22,8 @@ LEGACY_KEY = "legacy"
 # Used when a pack leaves a tag threshold and min_confidence unset (0.0).
 DEFAULT_TAG_THRESHOLD = 0.5
 MAX_TAGS_CAP = 10
+# What the review says about ONE aspect (a review can praise one and criticise another).
+TAG_SENTIMENTS = ("positive", "negative", "neutral", "mixed")
 REQUIRED_SLUGS = ("lainnya", "pujian_umum")
 
 # The vocabulary this build shipped with, kept as a constant (not a file) so it
@@ -138,9 +140,19 @@ class Taxonomy:
         ]
         return sorted(passing, key=lambda tag: -tag["p"])[: self.max_tags]
 
+    def add_primary(self, tags: list[dict], category: str, p: float | None) -> list[dict]:
+        """The primary category is always a tag (at its own confidence), except the fallback next to real tags."""
+        if category in {tag["slug"] for tag in tags} or (category == self.fallback and tags):
+            return tags
+        return [*tags, {"slug": category, "p": p}]
+
     def clean_tags(self, raw: Any) -> list[dict]:
-        """Closed-list tags: canonical slugs only, no duplicates, best probability kept."""
+        """Closed-list tags: canonical slugs only, no duplicates, best probability kept.
+
+        Each tag carries the sentiment the review expresses about that aspect (None when the
+        engine gave none); duplicates that disagree become `mixed`."""
         best: dict[str, dict] = {}
+        seen: dict[str, set[str]] = {}
         for item in raw if isinstance(raw, list) else []:
             slug = self.canonical(item.get("slug") if isinstance(item, dict) else item)
             if slug not in self.aspects:
@@ -148,26 +160,54 @@ class Taxonomy:
             p = item.get("p") if isinstance(item, dict) else None
             p = round(_clamp(p, 0.0, 1.0, -1.0), 4) if p is not None else None
             p = None if p is not None and p < 0 else p
+            tag_sentiment = tag_sentiment_of(item.get("sentiment") if isinstance(item, dict) else None)
+            if tag_sentiment:
+                seen.setdefault(slug, set()).add(tag_sentiment)
             current = best.get(slug)
             if current is None or (p is not None and (current["p"] is None or p > current["p"])):
-                best[slug] = {"slug": slug, "p": p}
+                best[slug] = {"slug": slug, "p": p, "sentiment": None}
+        for slug, tag in best.items():
+            tag["sentiment"] = merge_tag_sentiments(seen.get(slug, ()))
         return _rank(list(best.values()))
 
     def finalize_tags(self, raw: Any, primary: str, sentiment: str) -> list[dict]:
         """Part 3 rules: closed list, `lainnya` only when nothing else passed (praise when
-        positive), the primary category always present, at most max_tags."""
+        positive), the primary category always present, at most max_tags, and every tag with
+        a sentiment (the review's own when the engine gave none for that aspect)."""
         tags = self.clean_tags(raw)
         if not tags:
-            tags = [{"slug": self.praise if sentiment == "positive" else self.fallback, "p": None}]
+            tags = [{"slug": self.praise if sentiment == "positive" else self.fallback, "p": None, "sentiment": None}]
+        # `lainnya` only when nothing else passed.
+        tags = [tag for tag in tags if tag["slug"] != self.fallback] or tags
         present = {tag["slug"] for tag in tags}
         if primary not in present and not (primary == self.fallback and tags):
-            tags.append({"slug": primary, "p": None})
+            tags.append({"slug": primary, "p": None, "sentiment": None})
         tags = _rank(tags)
         keep = tags[: self.max_tags]
         primary_tag = next((tag for tag in tags if tag["slug"] == primary), None)
         if primary_tag is not None and primary_tag not in keep:
             keep[-1] = primary_tag  # the cap never pushes the primary category out
+        default = tag_sentiment_of(sentiment) or "neutral"
+        for tag in keep:
+            tag["sentiment"] = tag.get("sentiment") or default
         return keep
+
+
+def tag_sentiment_of(value: Any) -> str | None:
+    """A valid per-aspect sentiment, or None."""
+    value = str(value or "").strip().lower()
+    return value if value in TAG_SENTIMENTS else None
+
+
+def merge_tag_sentiments(values: Iterable[str]) -> str | None:
+    """One sentiment for an aspect that was judged more than once (several ABSA hits, duplicates)."""
+    found = {v for v in (tag_sentiment_of(v) for v in values) if v}
+    if "mixed" in found or {"positive", "negative"} <= found:
+        return "mixed"
+    for value in ("negative", "positive", "neutral"):
+        if value in found:
+            return value
+    return None
 
 
 def _rank(tags: list[dict]) -> list[dict]:
