@@ -160,6 +160,9 @@ class WorklistSyncService:
 
     @classmethod
     def is_configured(cls, settings: Settings) -> bool:
+        # Mode managed: worklist dikirim OneBox, tidak ada yang ditarik.
+        if settings.onebox_managed:
+            return False
         return all(
             value is not None and (not isinstance(value, str) or bool(value.strip()))
             for value in (
@@ -172,6 +175,10 @@ class WorklistSyncService:
         )
 
     def refresh(self) -> WorklistSyncResult:
+        if self.settings.onebox_managed:
+            raise WorklistSyncError(
+                "ONEBOX_TENANT_MODE=managed: the worklist is pushed by OneBox; pulling it is disabled."
+            )
         company_id = self._require_company_id()
         site_id = self._require_site_id()
         self._require_company_owns_site(company_id, site_id)

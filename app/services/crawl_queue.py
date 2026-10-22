@@ -623,6 +623,14 @@ class CrawlQueue:
             WorklistSyncService,
         )
 
+        if self.settings.onebox_managed:
+            logger.warning(
+                "crawl target %s tidak dikenal; mode managed: worklist dikirim OneBox, "
+                "minta OneBox mengirim ulang snapshot (Refresh di Setup Parameter)",
+                missing,
+            )
+            return False
+
         if not WorklistSyncService.is_configured(self.settings):
             logger.warning(
                 "crawl target %s tidak dikenal dan worklist OneBox belum "

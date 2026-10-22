@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Any, Literal
@@ -7,6 +8,8 @@ from typing import Annotated, Any, Literal
 from dotenv import load_dotenv
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+
+logger = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env")
@@ -31,6 +34,7 @@ REVIEW_SOURCE_MODES = {
     "apify",
 }
 AnalysisProvider = Literal["absa", "openai", "jev"]
+OneBoxTenantMode = Literal["single", "managed"]
 
 # Fields that go through the old _as_int/_as_bool/_as_float/_as_optional_int/
 # _as_list helpers, all of which treat a blank env value as absent (use the
@@ -188,6 +192,10 @@ class Settings(BaseModel):
     )
     onebox_site_id: int | None = None
     onebox_company_id: int | None = None
+    # single : satu tenant dari ONEBOX_SITE_ID/ONEBOX_COMPANY_ID, worklist ditarik
+    #          dari OneBox (perilaku lama).
+    # managed: tenant didaftarkan OneBox; worklist dikirim OneBox, tidak ditarik.
+    onebox_tenant_mode: OneBoxTenantMode = "single"
     onebox_worklist_path: str = "/api/VocWorklist"
     onebox_timeout_seconds: int = 30
     onebox_max_retry: int = 3
@@ -218,6 +226,56 @@ class Settings(BaseModel):
     def ensure_export_dir(self) -> Path:
         self.export_dir.mkdir(parents=True, exist_ok=True)
         return self.export_dir
+
+    @property
+    def onebox_managed(self) -> bool:
+        return self.onebox_tenant_mode == "managed"
+
+    @field_validator("onebox_tenant_mode", mode="before")
+    @classmethod
+    def _normalize_tenant_mode(cls, value: Any) -> Any:
+        # Nilai asing sengaja tidak dikoreksi: salah ketik harus gagal saat boot,
+        # bukan diam-diam memilih salah satu mode.
+        if isinstance(value, str):
+            return value.strip().lower() or "single"
+        return value
+
+    @model_validator(mode="after")
+    def _validate_tenant_mode(self) -> Settings:
+        if not self.onebox_managed:
+            return self
+        identity = [
+            name
+            for name, value in (
+                ("ONEBOX_SITE_ID", self.onebox_site_id),
+                ("ONEBOX_COMPANY_ID", self.onebox_company_id),
+            )
+            if value is not None
+        ]
+        if identity:
+            raise ValueError(
+                ", ".join(identity)
+                + " must be unset when ONEBOX_TENANT_MODE=managed: they pin the crawler "
+                "to one tenant, while managed mode takes tenants from OneBox."
+            )
+        leftovers = [
+            name
+            for name, value in (
+                ("ONEBOX_BASE_URL", self.onebox_base_url),
+                ("ONEBOX_SVC_EMAIL", self.onebox_service_email),
+                ("ONEBOX_SVC_PASSWORD", self.onebox_service_password),
+            )
+            if value
+        ]
+        if leftovers:
+            # Hanya peringatan: jalur pull mati di mode ini, jadi sisa env tidak
+            # berbahaya; memblokir boot karena itu hanya merepotkan deploy.
+            logger.warning(
+                "ONEBOX_TENANT_MODE=managed ignores %s; remove it once the crawler no "
+                "longer needs to pull from OneBox.",
+                ", ".join(leftovers),
+            )
+        return self
 
 
 class _EnvSettings(Settings, BaseSettings):

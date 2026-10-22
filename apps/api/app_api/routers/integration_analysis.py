@@ -18,6 +18,7 @@ from app.integrations.analysis_client import create_analysis_client
 from app.services.analysis_service import AnalysisService
 from app.services.entitlement_service import EntitlementError, EntitlementService
 from app.services.integration_review_service import IntegrationRequestError
+from app.services.worklist_sync_service import WorklistSyncError, WorklistSyncService
 from apps.api.app_api.integration_schemas import API_VERSION, IntegrationErrorResponse
 from apps.api.app_api.serializers import to_jsonable
 from apps.api.app_api.service_auth import ServicePrincipal, require_service_principal
@@ -105,13 +106,8 @@ def _require_location(
                 or_(*clauses),
             )
         )
-        if loc_id is None:
+        if loc_id is None and WorklistSyncService.is_configured(get_settings()):
             try:
-                from app.services.worklist_sync_service import (
-                    WorklistSyncError,
-                    WorklistSyncService,
-                )
-
                 WorklistSyncService(
                     company_id=company_id, session_factory=session_factory
                 ).refresh()
