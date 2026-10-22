@@ -1,0 +1,1555 @@
+{
+    "_comment": "Fixture katalog per industri (snapshot + preset balasan tanpa teks). Salinan identik: hermina-crawler/scripts/data/industries.json. Dibuat ulang dengan: php tests/voc/voc_industries_fixture_check.php --write",
+    "industries": {
+        "asuransi": {
+            "snapshot": {
+                "key": "asuransi:a55e17fe",
+                "version": "a55e17fe",
+                "industry": "asuransi",
+                "persona": "nasabah asuransi",
+                "aspects": [
+                    {
+                        "slug": "pelayanan_petugas",
+                        "label": "Pelayanan Petugas",
+                        "criteria": "Sikap, keramahan, kesigapan, dan komunikasi petugas atau staf"
+                    },
+                    {
+                        "slug": "kualitas_layanan",
+                        "label": "Kualitas Layanan",
+                        "criteria": "Mutu dan keandalan layanan secara keseluruhan"
+                    },
+                    {
+                        "slug": "waktu_tunggu",
+                        "label": "Waktu Tunggu",
+                        "criteria": "Antrean, lama menunggu, keterlambatan, kecepatan layanan"
+                    },
+                    {
+                        "slug": "kebersihan",
+                        "label": "Kebersihan",
+                        "criteria": "Kebersihan ruangan, toilet, area, dan lingkungan"
+                    },
+                    {
+                        "slug": "fasilitas",
+                        "label": "Fasilitas",
+                        "criteria": "Sarana dan prasarana fisik: gedung, ruang, AC, toilet, peralatan"
+                    },
+                    {
+                        "slug": "parkir",
+                        "label": "Parkir",
+                        "criteria": "Area parkir, akses kendaraan, dan biaya parkir"
+                    },
+                    {
+                        "slug": "harga_biaya",
+                        "label": "Harga dan Biaya",
+                        "criteria": "Harga, tarif, biaya, dan kesesuaian dengan nilai yang didapat"
+                    },
+                    {
+                        "slug": "layanan_pelanggan",
+                        "label": "Layanan Pelanggan",
+                        "criteria": "Dukungan pelanggan, helpdesk, dan penanganan keluhan"
+                    },
+                    {
+                        "slug": "keamanan",
+                        "label": "Keamanan",
+                        "criteria": "Keamanan, keselamatan fisik, dan rasa aman"
+                    },
+                    {
+                        "slug": "pujian_umum",
+                        "label": "Pujian Umum",
+                        "criteria": "Pujian umum tanpa masalah atau aspek tertentu"
+                    },
+                    {
+                        "slug": "lainnya",
+                        "label": "Lainnya",
+                        "criteria": "Tidak cocok dengan tipe lain"
+                    },
+                    {
+                        "slug": "administrasi",
+                        "label": "Administrasi",
+                        "criteria": "Pendaftaran, berkas, verifikasi, klaim, BPJS atau asuransi"
+                    },
+                    {
+                        "slug": "tagihan_pembayaran",
+                        "label": "Tagihan dan Pembayaran",
+                        "criteria": "Tagihan, kasir, pembayaran, dan pengembalian dana"
+                    },
+                    {
+                        "slug": "layanan_digital",
+                        "label": "Layanan Digital",
+                        "criteria": "Aplikasi, situs, portal, pendaftaran atau pemesanan online"
+                    },
+                    {
+                        "slug": "penanganan_klaim",
+                        "label": "Penanganan Klaim",
+                        "criteria": "Proses, kecepatan, dan hasil pengajuan atau pencairan klaim"
+                    },
+                    {
+                        "slug": "perilaku_agen",
+                        "label": "Perilaku Agen",
+                        "criteria": "Sikap dan penjelasan agen atau tenaga pemasar"
+                    },
+                    {
+                        "slug": "jaringan_rekanan",
+                        "label": "Jaringan Rekanan",
+                        "criteria": "Bengkel, rumah sakit, atau mitra rekanan"
+                    }
+                ],
+                "risk_flags": [
+                    {
+                        "slug": "risiko_viral",
+                        "question": "Apakah penulis mengancam menyebarkan ke media sosial atau media massa, atau melapor ke pihak berwenang?",
+                        "severity": "high",
+                        "legacy_field": "is_potential_viral"
+                    },
+                    {
+                        "slug": "sengketa_klaim",
+                        "question": "Apakah ulasan menyebut klaim ditolak secara tidak adil, ancaman hukum, atau pengaduan ke regulator?",
+                        "severity": "high"
+                    },
+                    {
+                        "slug": "dugaan_penipuan",
+                        "question": "Apakah ulasan menuduh penipuan atau penyesatan oleh perusahaan atau agen?",
+                        "severity": "high"
+                    }
+                ],
+                "aliases": {
+                    "staff_service": "pelayanan_petugas",
+                    "staff_communication": "pelayanan_petugas",
+                    "staff_attitude": "pelayanan_petugas",
+                    "pelayanan": "pelayanan_petugas",
+                    "administration": "administrasi",
+                    "registration": "administrasi",
+                    "bpjs": "administrasi",
+                    "billing": "tagihan_pembayaran",
+                    "billing_payment": "tagihan_pembayaran",
+                    "waiting_time": "waktu_tunggu",
+                    "healthcare_queue": "waktu_tunggu",
+                    "service_speed": "waktu_tunggu",
+                    "cleanliness": "kebersihan",
+                    "facility": "fasilitas",
+                    "accessibility": "fasilitas",
+                    "parking": "parkir",
+                    "customer_service": "layanan_pelanggan",
+                    "booking_system": "layanan_digital",
+                    "booking_ordering": "layanan_digital",
+                    "digital_experience": "layanan_digital",
+                    "security": "keamanan",
+                    "safety_security": "keamanan",
+                    "price_value": "harga_biaya",
+                    "service_quality": "kualitas_layanan",
+                    "general_praise": "pujian_umum",
+                    "other": "lainnya",
+                    "product_quality": "lainnya",
+                    "delivery_fulfillment": "lainnya"
+                },
+                "absa_map": {
+                    "staff attitude": "pelayanan_petugas",
+                    "staff_communication": "pelayanan_petugas",
+                    "service quality": "kualitas_layanan",
+                    "waiting time": "waktu_tunggu",
+                    "waiting_time": "waktu_tunggu",
+                    "healthcare queue": "waktu_tunggu",
+                    "service speed": "waktu_tunggu",
+                    "cleanliness": "kebersihan",
+                    "facilities": "fasilitas",
+                    "facility": "fasilitas",
+                    "parking": "parkir",
+                    "price & value": "harga_biaya",
+                    "customer service": "layanan_pelanggan",
+                    "customer_service": "layanan_pelanggan",
+                    "security": "keamanan",
+                    "product quality": "lainnya",
+                    "delivery": "lainnya",
+                    "registration": "administrasi",
+                    "bpjs": "administrasi",
+                    "bpjs / insurance administration": "administrasi",
+                    "administration": "administrasi",
+                    "billing": "tagihan_pembayaran",
+                    "digital service": "layanan_digital",
+                    "booking_system": "layanan_digital"
+                },
+                "min_confidence": 0
+            },
+            "reply": {
+                "presets": [
+                    {
+                        "id": "terima_kasih_pujian",
+                        "when_to_use": "Ulasan positif tanpa keluhan; pujian umum atas pelayanan"
+                    },
+                    {
+                        "id": "terima_kasih_masukan",
+                        "when_to_use": "Masukan atau saran ringan yang bukan keluhan berat"
+                    },
+                    {
+                        "id": "mohon_maaf_umum",
+                        "when_to_use": "Keluhan umum yang tidak masuk kategori khusus dan tanpa isu keselamatan"
+                    },
+                    {
+                        "id": "mohon_maaf_waktu_tunggu",
+                        "when_to_use": "Keluhan antrean atau lama menunggu tanpa isu keselamatan"
+                    },
+                    {
+                        "id": "mohon_maaf_pelayanan_petugas",
+                        "when_to_use": "Keluhan sikap, keramahan, atau respons petugas tanpa tuduhan serius"
+                    },
+                    {
+                        "id": "mohon_maaf_kebersihan_fasilitas",
+                        "when_to_use": "Keluhan kebersihan, kenyamanan, atau fasilitas fisik"
+                    },
+                    {
+                        "id": "hubungi_kanal_resmi",
+                        "when_to_use": "Isu sensitif atau serius yang sebaiknya dibahas lewat kanal resmi, bukan di ruang publik"
+                    },
+                    {
+                        "id": "mohon_maaf_penanganan_klaim",
+                        "when_to_use": "Keluhan proses atau kecepatan klaim tanpa sengketa, ancaman hukum, atau pengaduan ke regulator"
+                    }
+                ],
+                "escalation_preset": "hubungi_kanal_resmi"
+            }
+        },
+        "kesehatan": {
+            "snapshot": {
+                "key": "kesehatan:0e20266e",
+                "version": "0e20266e",
+                "industry": "kesehatan",
+                "persona": "pasien rumah sakit",
+                "aspects": [
+                    {
+                        "slug": "pelayanan_petugas",
+                        "label": "Pelayanan Petugas",
+                        "criteria": "Sikap, keramahan, kesigapan, dan komunikasi petugas atau staf"
+                    },
+                    {
+                        "slug": "kualitas_layanan",
+                        "label": "Kualitas Layanan",
+                        "criteria": "Mutu dan keandalan layanan secara keseluruhan"
+                    },
+                    {
+                        "slug": "waktu_tunggu",
+                        "label": "Waktu Tunggu",
+                        "criteria": "Antrean, lama menunggu, keterlambatan, kecepatan layanan"
+                    },
+                    {
+                        "slug": "kebersihan",
+                        "label": "Kebersihan",
+                        "criteria": "Kebersihan ruangan, toilet, area, dan lingkungan"
+                    },
+                    {
+                        "slug": "fasilitas",
+                        "label": "Fasilitas",
+                        "criteria": "Sarana dan prasarana fisik: gedung, ruang, AC, toilet, peralatan"
+                    },
+                    {
+                        "slug": "parkir",
+                        "label": "Parkir",
+                        "criteria": "Area parkir, akses kendaraan, dan biaya parkir"
+                    },
+                    {
+                        "slug": "harga_biaya",
+                        "label": "Harga dan Biaya",
+                        "criteria": "Harga, tarif, biaya, dan kesesuaian dengan nilai yang didapat"
+                    },
+                    {
+                        "slug": "layanan_pelanggan",
+                        "label": "Layanan Pelanggan",
+                        "criteria": "Dukungan pelanggan, helpdesk, dan penanganan keluhan"
+                    },
+                    {
+                        "slug": "keamanan",
+                        "label": "Keamanan",
+                        "criteria": "Keamanan, keselamatan fisik, dan rasa aman"
+                    },
+                    {
+                        "slug": "pujian_umum",
+                        "label": "Pujian Umum",
+                        "criteria": "Pujian umum tanpa masalah atau aspek tertentu"
+                    },
+                    {
+                        "slug": "lainnya",
+                        "label": "Lainnya",
+                        "criteria": "Tidak cocok dengan tipe lain"
+                    },
+                    {
+                        "slug": "pelayanan_dokter",
+                        "label": "Pelayanan Dokter",
+                        "criteria": "Penjelasan, ketelitian, sikap, dan penanganan klinis oleh dokter"
+                    },
+                    {
+                        "slug": "pelayanan_perawat",
+                        "label": "Pelayanan Perawat",
+                        "criteria": "Sikap, kesigapan, dan perawatan oleh perawat atau bidan"
+                    },
+                    {
+                        "slug": "administrasi",
+                        "label": "Administrasi",
+                        "criteria": "Pendaftaran, berkas, verifikasi, klaim, BPJS atau asuransi"
+                    },
+                    {
+                        "slug": "tagihan_pembayaran",
+                        "label": "Tagihan dan Pembayaran",
+                        "criteria": "Tagihan, kasir, pembayaran, dan pengembalian dana"
+                    },
+                    {
+                        "slug": "farmasi",
+                        "label": "Farmasi",
+                        "criteria": "Apotek, ketersediaan dan penyerahan obat"
+                    },
+                    {
+                        "slug": "igd",
+                        "label": "IGD",
+                        "criteria": "Instalasi gawat darurat dan penanganan kasus darurat"
+                    },
+                    {
+                        "slug": "rawat_inap",
+                        "label": "Rawat Inap",
+                        "criteria": "Kamar, perawatan, dan pengalaman selama rawat inap"
+                    },
+                    {
+                        "slug": "makanan_minuman",
+                        "label": "Makanan dan Minuman",
+                        "criteria": "Makanan, minuman, atau katering: rasa, porsi, kualitas"
+                    },
+                    {
+                        "slug": "layanan_digital",
+                        "label": "Layanan Digital",
+                        "criteria": "Aplikasi, situs, portal, pendaftaran atau pemesanan online"
+                    }
+                ],
+                "risk_flags": [
+                    {
+                        "slug": "risiko_viral",
+                        "question": "Apakah penulis mengancam menyebarkan ke media sosial atau media massa, atau melapor ke pihak berwenang?",
+                        "severity": "high",
+                        "legacy_field": "is_potential_viral"
+                    },
+                    {
+                        "slug": "keselamatan_pasien",
+                        "question": "Apakah ulasan menyebut malpraktik, salah obat, cedera, atau kondisi darurat?",
+                        "severity": "critical",
+                        "legacy_field": "is_safety_issue"
+                    }
+                ],
+                "aliases": {
+                    "doctor_service": "pelayanan_dokter",
+                    "professional_service": "pelayanan_dokter",
+                    "doctor": "pelayanan_dokter",
+                    "medis": "pelayanan_dokter",
+                    "nurse_service": "pelayanan_perawat",
+                    "nurse": "pelayanan_perawat",
+                    "staff_service": "pelayanan_petugas",
+                    "staff_communication": "pelayanan_petugas",
+                    "staff_attitude": "pelayanan_petugas",
+                    "pelayanan": "pelayanan_petugas",
+                    "administration": "administrasi",
+                    "registration": "administrasi",
+                    "bpjs": "administrasi",
+                    "billing": "tagihan_pembayaran",
+                    "billing_payment": "tagihan_pembayaran",
+                    "waiting_time": "waktu_tunggu",
+                    "healthcare_queue": "waktu_tunggu",
+                    "service_speed": "waktu_tunggu",
+                    "cleanliness": "kebersihan",
+                    "facility": "fasilitas",
+                    "accessibility": "fasilitas",
+                    "parking": "parkir",
+                    "pharmacy": "farmasi",
+                    "availability": "farmasi",
+                    "emergency_room": "igd",
+                    "inpatient": "rawat_inap",
+                    "inpatient_care": "rawat_inap",
+                    "customer_service": "layanan_pelanggan",
+                    "booking_system": "layanan_digital",
+                    "booking_ordering": "layanan_digital",
+                    "digital_experience": "layanan_digital",
+                    "security": "keamanan",
+                    "safety_security": "keamanan",
+                    "food": "makanan_minuman",
+                    "food_beverage": "makanan_minuman",
+                    "price_value": "harga_biaya",
+                    "service_quality": "kualitas_layanan",
+                    "general_praise": "pujian_umum",
+                    "other": "lainnya",
+                    "product_quality": "lainnya",
+                    "delivery_fulfillment": "lainnya"
+                },
+                "absa_map": {
+                    "staff attitude": "pelayanan_petugas",
+                    "staff_communication": "pelayanan_petugas",
+                    "service quality": "kualitas_layanan",
+                    "waiting time": "waktu_tunggu",
+                    "waiting_time": "waktu_tunggu",
+                    "healthcare queue": "waktu_tunggu",
+                    "service speed": "waktu_tunggu",
+                    "cleanliness": "kebersihan",
+                    "facilities": "fasilitas",
+                    "facility": "fasilitas",
+                    "parking": "parkir",
+                    "price & value": "harga_biaya",
+                    "customer service": "layanan_pelanggan",
+                    "customer_service": "layanan_pelanggan",
+                    "security": "keamanan",
+                    "product quality": "lainnya",
+                    "delivery": "lainnya",
+                    "doctor": "pelayanan_dokter",
+                    "doctor service": "pelayanan_dokter",
+                    "doctor_service": "pelayanan_dokter",
+                    "medical": "pelayanan_dokter",
+                    "medical service": "pelayanan_dokter",
+                    "professionalism": "pelayanan_dokter",
+                    "nurse": "pelayanan_perawat",
+                    "nurse service": "pelayanan_perawat",
+                    "nurse_service": "pelayanan_perawat",
+                    "registration": "administrasi",
+                    "bpjs": "administrasi",
+                    "bpjs / insurance administration": "administrasi",
+                    "administration": "administrasi",
+                    "billing": "tagihan_pembayaran",
+                    "pharmacy": "farmasi",
+                    "availability": "farmasi",
+                    "emergency / er": "igd",
+                    "emergency_room": "igd",
+                    "inpatient": "rawat_inap",
+                    "inpatient care": "rawat_inap",
+                    "food": "makanan_minuman",
+                    "food quality": "makanan_minuman",
+                    "digital service": "layanan_digital",
+                    "booking_system": "layanan_digital"
+                },
+                "min_confidence": 0
+            },
+            "reply": {
+                "presets": [
+                    {
+                        "id": "terima_kasih_pujian",
+                        "when_to_use": "Ulasan positif tanpa keluhan; pujian umum atas pelayanan"
+                    },
+                    {
+                        "id": "terima_kasih_masukan",
+                        "when_to_use": "Masukan atau saran ringan yang bukan keluhan berat"
+                    },
+                    {
+                        "id": "mohon_maaf_umum",
+                        "when_to_use": "Keluhan umum yang tidak masuk kategori khusus dan tanpa isu keselamatan"
+                    },
+                    {
+                        "id": "mohon_maaf_waktu_tunggu",
+                        "when_to_use": "Keluhan antrean atau lama menunggu tanpa isu keselamatan"
+                    },
+                    {
+                        "id": "mohon_maaf_pelayanan_petugas",
+                        "when_to_use": "Keluhan sikap, keramahan, atau respons petugas tanpa tuduhan serius"
+                    },
+                    {
+                        "id": "mohon_maaf_kebersihan_fasilitas",
+                        "when_to_use": "Keluhan kebersihan, kenyamanan, atau fasilitas fisik"
+                    },
+                    {
+                        "id": "hubungi_kanal_resmi",
+                        "when_to_use": "Isu sensitif atau serius yang sebaiknya dibahas lewat kanal resmi, bukan di ruang publik"
+                    },
+                    {
+                        "id": "privasi_pasien_hubungi_kami",
+                        "when_to_use": "Ulasan yang menyinggung layanan atau kondisi tertentu dan perlu dibahas secara pribadi demi privasi"
+                    },
+                    {
+                        "id": "mohon_maaf_administrasi_klaim",
+                        "when_to_use": "Keluhan pendaftaran, berkas, verifikasi, BPJS atau klaim asuransi"
+                    },
+                    {
+                        "id": "mohon_maaf_tagihan",
+                        "when_to_use": "Keluhan tagihan, kasir, atau pembayaran tanpa tuduhan penipuan"
+                    }
+                ],
+                "escalation_preset": "privasi_pasien_hubungi_kami"
+            }
+        },
+        "kuliner": {
+            "snapshot": {
+                "key": "kuliner:e8b0851a",
+                "version": "e8b0851a",
+                "industry": "kuliner",
+                "persona": "pengunjung restoran atau kafe",
+                "aspects": [
+                    {
+                        "slug": "pelayanan_petugas",
+                        "label": "Pelayanan Petugas",
+                        "criteria": "Sikap, keramahan, kesigapan, dan komunikasi petugas atau staf"
+                    },
+                    {
+                        "slug": "kualitas_layanan",
+                        "label": "Kualitas Layanan",
+                        "criteria": "Mutu dan keandalan layanan secara keseluruhan"
+                    },
+                    {
+                        "slug": "waktu_tunggu",
+                        "label": "Waktu Tunggu",
+                        "criteria": "Antrean, lama menunggu, keterlambatan, kecepatan layanan"
+                    },
+                    {
+                        "slug": "kebersihan",
+                        "label": "Kebersihan",
+                        "criteria": "Kebersihan ruangan, toilet, area, dan lingkungan"
+                    },
+                    {
+                        "slug": "fasilitas",
+                        "label": "Fasilitas",
+                        "criteria": "Sarana dan prasarana fisik: gedung, ruang, AC, toilet, peralatan"
+                    },
+                    {
+                        "slug": "parkir",
+                        "label": "Parkir",
+                        "criteria": "Area parkir, akses kendaraan, dan biaya parkir"
+                    },
+                    {
+                        "slug": "harga_biaya",
+                        "label": "Harga dan Biaya",
+                        "criteria": "Harga, tarif, biaya, dan kesesuaian dengan nilai yang didapat"
+                    },
+                    {
+                        "slug": "layanan_pelanggan",
+                        "label": "Layanan Pelanggan",
+                        "criteria": "Dukungan pelanggan, helpdesk, dan penanganan keluhan"
+                    },
+                    {
+                        "slug": "keamanan",
+                        "label": "Keamanan",
+                        "criteria": "Keamanan, keselamatan fisik, dan rasa aman"
+                    },
+                    {
+                        "slug": "pujian_umum",
+                        "label": "Pujian Umum",
+                        "criteria": "Pujian umum tanpa masalah atau aspek tertentu"
+                    },
+                    {
+                        "slug": "lainnya",
+                        "label": "Lainnya",
+                        "criteria": "Tidak cocok dengan tipe lain"
+                    },
+                    {
+                        "slug": "makanan_minuman",
+                        "label": "Makanan dan Minuman",
+                        "criteria": "Makanan, minuman, atau katering: rasa, porsi, kualitas"
+                    },
+                    {
+                        "slug": "suasana_tempat",
+                        "label": "Suasana Tempat",
+                        "criteria": "Suasana, kenyamanan, desain, dan kebisingan tempat"
+                    },
+                    {
+                        "slug": "ketersediaan_menu",
+                        "label": "Ketersediaan Menu",
+                        "criteria": "Menu habis, menu tidak sesuai, atau pilihan terbatas"
+                    }
+                ],
+                "risk_flags": [
+                    {
+                        "slug": "risiko_viral",
+                        "question": "Apakah penulis mengancam menyebarkan ke media sosial atau media massa, atau melapor ke pihak berwenang?",
+                        "severity": "high",
+                        "legacy_field": "is_potential_viral"
+                    },
+                    {
+                        "slug": "keamanan_pangan",
+                        "question": "Apakah ulasan menyebut keracunan, benda asing, atau makanan basi?",
+                        "severity": "critical",
+                        "legacy_field": "is_safety_issue"
+                    }
+                ],
+                "aliases": {
+                    "staff_service": "pelayanan_petugas",
+                    "staff_communication": "pelayanan_petugas",
+                    "staff_attitude": "pelayanan_petugas",
+                    "pelayanan": "pelayanan_petugas",
+                    "waiting_time": "waktu_tunggu",
+                    "healthcare_queue": "waktu_tunggu",
+                    "service_speed": "waktu_tunggu",
+                    "cleanliness": "kebersihan",
+                    "facility": "fasilitas",
+                    "accessibility": "fasilitas",
+                    "parking": "parkir",
+                    "customer_service": "layanan_pelanggan",
+                    "security": "keamanan",
+                    "safety_security": "keamanan",
+                    "food": "makanan_minuman",
+                    "food_beverage": "makanan_minuman",
+                    "price_value": "harga_biaya",
+                    "service_quality": "kualitas_layanan",
+                    "general_praise": "pujian_umum",
+                    "other": "lainnya",
+                    "product_quality": "lainnya",
+                    "delivery_fulfillment": "lainnya"
+                },
+                "absa_map": {
+                    "staff attitude": "pelayanan_petugas",
+                    "staff_communication": "pelayanan_petugas",
+                    "service quality": "kualitas_layanan",
+                    "waiting time": "waktu_tunggu",
+                    "waiting_time": "waktu_tunggu",
+                    "healthcare queue": "waktu_tunggu",
+                    "service speed": "waktu_tunggu",
+                    "cleanliness": "kebersihan",
+                    "facilities": "fasilitas",
+                    "facility": "fasilitas",
+                    "parking": "parkir",
+                    "price & value": "harga_biaya",
+                    "customer service": "layanan_pelanggan",
+                    "customer_service": "layanan_pelanggan",
+                    "security": "keamanan",
+                    "product quality": "lainnya",
+                    "delivery": "lainnya",
+                    "food": "makanan_minuman",
+                    "food quality": "makanan_minuman",
+                    "availability": "ketersediaan_menu"
+                },
+                "min_confidence": 0
+            },
+            "reply": {
+                "presets": [
+                    {
+                        "id": "terima_kasih_pujian",
+                        "when_to_use": "Ulasan positif tanpa keluhan; pujian umum atas pelayanan"
+                    },
+                    {
+                        "id": "terima_kasih_masukan",
+                        "when_to_use": "Masukan atau saran ringan yang bukan keluhan berat"
+                    },
+                    {
+                        "id": "mohon_maaf_umum",
+                        "when_to_use": "Keluhan umum yang tidak masuk kategori khusus dan tanpa isu keselamatan"
+                    },
+                    {
+                        "id": "mohon_maaf_waktu_tunggu",
+                        "when_to_use": "Keluhan antrean atau lama menunggu tanpa isu keselamatan"
+                    },
+                    {
+                        "id": "mohon_maaf_pelayanan_petugas",
+                        "when_to_use": "Keluhan sikap, keramahan, atau respons petugas tanpa tuduhan serius"
+                    },
+                    {
+                        "id": "mohon_maaf_kebersihan_fasilitas",
+                        "when_to_use": "Keluhan kebersihan, kenyamanan, atau fasilitas fisik"
+                    },
+                    {
+                        "id": "hubungi_kanal_resmi",
+                        "when_to_use": "Isu sensitif atau serius yang sebaiknya dibahas lewat kanal resmi, bukan di ruang publik"
+                    },
+                    {
+                        "id": "mohon_maaf_menu_habis",
+                        "when_to_use": "Keluhan menu habis, menu tidak sesuai, atau pilihan terbatas"
+                    },
+                    {
+                        "id": "terima_kasih_pujian_suasana",
+                        "when_to_use": "Pujian atas suasana, kenyamanan, atau desain tempat"
+                    }
+                ],
+                "escalation_preset": "hubungi_kanal_resmi"
+            }
+        },
+        "lapangan_udara": {
+            "snapshot": {
+                "key": "lapangan_udara:b555ca5b",
+                "version": "b555ca5b",
+                "industry": "lapangan_udara",
+                "persona": "pengunjung lapangan udara",
+                "aspects": [
+                    {
+                        "slug": "pelayanan_petugas",
+                        "label": "Pelayanan Petugas",
+                        "criteria": "Sikap, keramahan, kesigapan, dan komunikasi petugas atau staf"
+                    },
+                    {
+                        "slug": "kualitas_layanan",
+                        "label": "Kualitas Layanan",
+                        "criteria": "Mutu dan keandalan layanan secara keseluruhan"
+                    },
+                    {
+                        "slug": "waktu_tunggu",
+                        "label": "Waktu Tunggu",
+                        "criteria": "Antrean, lama menunggu, keterlambatan, kecepatan layanan"
+                    },
+                    {
+                        "slug": "kebersihan",
+                        "label": "Kebersihan",
+                        "criteria": "Kebersihan ruangan, toilet, area, dan lingkungan"
+                    },
+                    {
+                        "slug": "fasilitas",
+                        "label": "Fasilitas",
+                        "criteria": "Sarana dan prasarana fisik: gedung, ruang, AC, toilet, peralatan"
+                    },
+                    {
+                        "slug": "parkir",
+                        "label": "Parkir",
+                        "criteria": "Area parkir, akses kendaraan, dan biaya parkir"
+                    },
+                    {
+                        "slug": "harga_biaya",
+                        "label": "Harga dan Biaya",
+                        "criteria": "Harga, tarif, biaya, dan kesesuaian dengan nilai yang didapat"
+                    },
+                    {
+                        "slug": "layanan_pelanggan",
+                        "label": "Layanan Pelanggan",
+                        "criteria": "Dukungan pelanggan, helpdesk, dan penanganan keluhan"
+                    },
+                    {
+                        "slug": "keamanan",
+                        "label": "Keamanan",
+                        "criteria": "Keamanan, keselamatan fisik, dan rasa aman"
+                    },
+                    {
+                        "slug": "pujian_umum",
+                        "label": "Pujian Umum",
+                        "criteria": "Pujian umum tanpa masalah atau aspek tertentu"
+                    },
+                    {
+                        "slug": "lainnya",
+                        "label": "Lainnya",
+                        "criteria": "Tidak cocok dengan tipe lain"
+                    },
+                    {
+                        "slug": "prosedur_akses",
+                        "label": "Prosedur Akses",
+                        "criteria": "Gerbang masuk, pemeriksaan identitas, dan izin berkunjung"
+                    },
+                    {
+                        "slug": "kegiatan_pengunjung",
+                        "label": "Kegiatan Pengunjung",
+                        "criteria": "Acara, kunjungan, wisata, atau pemanfaatan area oleh publik"
+                    }
+                ],
+                "risk_flags": [
+                    {
+                        "slug": "risiko_viral",
+                        "question": "Apakah penulis mengancam menyebarkan ke media sosial atau media massa, atau melapor ke pihak berwenang?",
+                        "severity": "high",
+                        "legacy_field": "is_potential_viral"
+                    },
+                    {
+                        "slug": "keselamatan_penerbangan",
+                        "question": "Apakah ulasan menyebut kecelakaan, bahaya penerbangan, atau pelanggaran keselamatan?",
+                        "severity": "critical",
+                        "legacy_field": "is_safety_issue"
+                    },
+                    {
+                        "slug": "insiden_keamanan",
+                        "question": "Apakah ulasan menyebut insiden keamanan, pelanggaran akses, atau ancaman fisik?",
+                        "severity": "critical",
+                        "legacy_field": "is_safety_issue"
+                    }
+                ],
+                "aliases": {
+                    "staff_service": "pelayanan_petugas",
+                    "staff_communication": "pelayanan_petugas",
+                    "staff_attitude": "pelayanan_petugas",
+                    "pelayanan": "pelayanan_petugas",
+                    "waiting_time": "waktu_tunggu",
+                    "healthcare_queue": "waktu_tunggu",
+                    "service_speed": "waktu_tunggu",
+                    "cleanliness": "kebersihan",
+                    "facility": "fasilitas",
+                    "accessibility": "fasilitas",
+                    "parking": "parkir",
+                    "customer_service": "layanan_pelanggan",
+                    "security": "keamanan",
+                    "safety_security": "keamanan",
+                    "price_value": "harga_biaya",
+                    "service_quality": "kualitas_layanan",
+                    "general_praise": "pujian_umum",
+                    "other": "lainnya",
+                    "product_quality": "lainnya",
+                    "delivery_fulfillment": "lainnya"
+                },
+                "absa_map": {
+                    "staff attitude": "pelayanan_petugas",
+                    "staff_communication": "pelayanan_petugas",
+                    "service quality": "kualitas_layanan",
+                    "waiting time": "waktu_tunggu",
+                    "waiting_time": "waktu_tunggu",
+                    "healthcare queue": "waktu_tunggu",
+                    "service speed": "waktu_tunggu",
+                    "cleanliness": "kebersihan",
+                    "facilities": "fasilitas",
+                    "facility": "fasilitas",
+                    "parking": "parkir",
+                    "price & value": "harga_biaya",
+                    "customer service": "layanan_pelanggan",
+                    "customer_service": "layanan_pelanggan",
+                    "security": "keamanan",
+                    "product quality": "lainnya",
+                    "delivery": "lainnya"
+                },
+                "min_confidence": 0
+            },
+            "reply": {
+                "presets": [
+                    {
+                        "id": "terima_kasih_pujian",
+                        "when_to_use": "Ulasan positif tanpa keluhan; pujian umum atas pelayanan"
+                    },
+                    {
+                        "id": "terima_kasih_masukan",
+                        "when_to_use": "Masukan atau saran ringan yang bukan keluhan berat"
+                    },
+                    {
+                        "id": "mohon_maaf_umum",
+                        "when_to_use": "Keluhan umum yang tidak masuk kategori khusus dan tanpa isu keselamatan"
+                    },
+                    {
+                        "id": "mohon_maaf_waktu_tunggu",
+                        "when_to_use": "Keluhan antrean atau lama menunggu tanpa isu keselamatan"
+                    },
+                    {
+                        "id": "mohon_maaf_pelayanan_petugas",
+                        "when_to_use": "Keluhan sikap, keramahan, atau respons petugas tanpa tuduhan serius"
+                    },
+                    {
+                        "id": "mohon_maaf_kebersihan_fasilitas",
+                        "when_to_use": "Keluhan kebersihan, kenyamanan, atau fasilitas fisik"
+                    },
+                    {
+                        "id": "hubungi_kanal_resmi",
+                        "when_to_use": "Isu sensitif atau serius yang sebaiknya dibahas lewat kanal resmi, bukan di ruang publik"
+                    },
+                    {
+                        "id": "informasi_prosedur_akses",
+                        "when_to_use": "Pertanyaan atau keluhan seputar gerbang masuk, pemeriksaan identitas, atau izin berkunjung"
+                    }
+                ],
+                "escalation_preset": "hubungi_kanal_resmi"
+            }
+        },
+        "layanan_publik": {
+            "snapshot": {
+                "key": "layanan_publik:4b68fa4a",
+                "version": "4b68fa4a",
+                "industry": "layanan_publik",
+                "persona": "pemohon layanan instansi pemerintah",
+                "aspects": [
+                    {
+                        "slug": "pelayanan_petugas",
+                        "label": "Pelayanan Petugas",
+                        "criteria": "Sikap, keramahan, kesigapan, dan komunikasi petugas atau staf"
+                    },
+                    {
+                        "slug": "kualitas_layanan",
+                        "label": "Kualitas Layanan",
+                        "criteria": "Mutu dan keandalan layanan secara keseluruhan"
+                    },
+                    {
+                        "slug": "waktu_tunggu",
+                        "label": "Waktu Tunggu",
+                        "criteria": "Antrean, lama menunggu, keterlambatan, kecepatan layanan"
+                    },
+                    {
+                        "slug": "kebersihan",
+                        "label": "Kebersihan",
+                        "criteria": "Kebersihan ruangan, toilet, area, dan lingkungan"
+                    },
+                    {
+                        "slug": "fasilitas",
+                        "label": "Fasilitas",
+                        "criteria": "Sarana dan prasarana fisik: gedung, ruang, AC, toilet, peralatan"
+                    },
+                    {
+                        "slug": "parkir",
+                        "label": "Parkir",
+                        "criteria": "Area parkir, akses kendaraan, dan biaya parkir"
+                    },
+                    {
+                        "slug": "harga_biaya",
+                        "label": "Harga dan Biaya",
+                        "criteria": "Harga, tarif, biaya, dan kesesuaian dengan nilai yang didapat"
+                    },
+                    {
+                        "slug": "layanan_pelanggan",
+                        "label": "Layanan Pelanggan",
+                        "criteria": "Dukungan pelanggan, helpdesk, dan penanganan keluhan"
+                    },
+                    {
+                        "slug": "keamanan",
+                        "label": "Keamanan",
+                        "criteria": "Keamanan, keselamatan fisik, dan rasa aman"
+                    },
+                    {
+                        "slug": "pujian_umum",
+                        "label": "Pujian Umum",
+                        "criteria": "Pujian umum tanpa masalah atau aspek tertentu"
+                    },
+                    {
+                        "slug": "lainnya",
+                        "label": "Lainnya",
+                        "criteria": "Tidak cocok dengan tipe lain"
+                    },
+                    {
+                        "slug": "urusan_dokumen",
+                        "label": "Urusan Dokumen",
+                        "criteria": "Pengurusan dokumen, izin, persyaratan, dan penerbitan"
+                    },
+                    {
+                        "slug": "kejelasan_informasi",
+                        "label": "Kejelasan Informasi",
+                        "criteria": "Kejelasan informasi, persyaratan, dan alur layanan"
+                    },
+                    {
+                        "slug": "prosedur_birokrasi",
+                        "label": "Prosedur Birokrasi",
+                        "criteria": "Prosedur berbelit, bolak-balik, atau tidak konsisten"
+                    },
+                    {
+                        "slug": "layanan_digital",
+                        "label": "Layanan Digital",
+                        "criteria": "Aplikasi, situs, portal, pendaftaran atau pemesanan online"
+                    }
+                ],
+                "risk_flags": [
+                    {
+                        "slug": "risiko_viral",
+                        "question": "Apakah penulis mengancam menyebarkan ke media sosial atau media massa, atau melapor ke pihak berwenang?",
+                        "severity": "high",
+                        "legacy_field": "is_potential_viral"
+                    },
+                    {
+                        "slug": "dugaan_pungli",
+                        "question": "Apakah ulasan menuduh pungutan liar, suap, atau biaya tidak resmi?",
+                        "severity": "high"
+                    }
+                ],
+                "aliases": {
+                    "staff_service": "pelayanan_petugas",
+                    "staff_communication": "pelayanan_petugas",
+                    "staff_attitude": "pelayanan_petugas",
+                    "pelayanan": "pelayanan_petugas",
+                    "waiting_time": "waktu_tunggu",
+                    "healthcare_queue": "waktu_tunggu",
+                    "service_speed": "waktu_tunggu",
+                    "cleanliness": "kebersihan",
+                    "facility": "fasilitas",
+                    "accessibility": "fasilitas",
+                    "parking": "parkir",
+                    "customer_service": "layanan_pelanggan",
+                    "booking_system": "layanan_digital",
+                    "booking_ordering": "layanan_digital",
+                    "digital_experience": "layanan_digital",
+                    "security": "keamanan",
+                    "safety_security": "keamanan",
+                    "price_value": "harga_biaya",
+                    "service_quality": "kualitas_layanan",
+                    "general_praise": "pujian_umum",
+                    "other": "lainnya",
+                    "product_quality": "lainnya",
+                    "delivery_fulfillment": "lainnya"
+                },
+                "absa_map": {
+                    "staff attitude": "pelayanan_petugas",
+                    "staff_communication": "pelayanan_petugas",
+                    "service quality": "kualitas_layanan",
+                    "waiting time": "waktu_tunggu",
+                    "waiting_time": "waktu_tunggu",
+                    "healthcare queue": "waktu_tunggu",
+                    "service speed": "waktu_tunggu",
+                    "cleanliness": "kebersihan",
+                    "facilities": "fasilitas",
+                    "facility": "fasilitas",
+                    "parking": "parkir",
+                    "price & value": "harga_biaya",
+                    "customer service": "layanan_pelanggan",
+                    "customer_service": "layanan_pelanggan",
+                    "security": "keamanan",
+                    "product quality": "lainnya",
+                    "delivery": "lainnya",
+                    "digital service": "layanan_digital",
+                    "booking_system": "layanan_digital"
+                },
+                "min_confidence": 0
+            },
+            "reply": {
+                "presets": [
+                    {
+                        "id": "terima_kasih_pujian",
+                        "when_to_use": "Ulasan positif tanpa keluhan; pujian umum atas pelayanan"
+                    },
+                    {
+                        "id": "terima_kasih_masukan",
+                        "when_to_use": "Masukan atau saran ringan yang bukan keluhan berat"
+                    },
+                    {
+                        "id": "mohon_maaf_umum",
+                        "when_to_use": "Keluhan umum yang tidak masuk kategori khusus dan tanpa isu keselamatan"
+                    },
+                    {
+                        "id": "mohon_maaf_waktu_tunggu",
+                        "when_to_use": "Keluhan antrean atau lama menunggu tanpa isu keselamatan"
+                    },
+                    {
+                        "id": "mohon_maaf_pelayanan_petugas",
+                        "when_to_use": "Keluhan sikap, keramahan, atau respons petugas tanpa tuduhan serius"
+                    },
+                    {
+                        "id": "mohon_maaf_kebersihan_fasilitas",
+                        "when_to_use": "Keluhan kebersihan, kenyamanan, atau fasilitas fisik"
+                    },
+                    {
+                        "id": "hubungi_kanal_resmi",
+                        "when_to_use": "Isu sensitif atau serius yang sebaiknya dibahas lewat kanal resmi, bukan di ruang publik"
+                    },
+                    {
+                        "id": "mohon_maaf_prosedur_birokrasi",
+                        "when_to_use": "Keluhan prosedur berbelit, persyaratan tidak jelas, atau bolak-balik; bukan tuduhan pungutan liar"
+                    }
+                ],
+                "escalation_preset": "hubungi_kanal_resmi"
+            }
+        },
+        "spbu": {
+            "snapshot": {
+                "key": "spbu:6285c2fa",
+                "version": "6285c2fa",
+                "industry": "spbu",
+                "persona": "pelanggan SPBU",
+                "aspects": [
+                    {
+                        "slug": "pelayanan_petugas",
+                        "label": "Pelayanan Petugas",
+                        "criteria": "Sikap, keramahan, kesigapan, dan komunikasi petugas atau staf"
+                    },
+                    {
+                        "slug": "kualitas_layanan",
+                        "label": "Kualitas Layanan",
+                        "criteria": "Mutu dan keandalan layanan secara keseluruhan"
+                    },
+                    {
+                        "slug": "waktu_tunggu",
+                        "label": "Waktu Tunggu",
+                        "criteria": "Antrean, lama menunggu, keterlambatan, kecepatan layanan"
+                    },
+                    {
+                        "slug": "kebersihan",
+                        "label": "Kebersihan",
+                        "criteria": "Kebersihan ruangan, toilet, area, dan lingkungan"
+                    },
+                    {
+                        "slug": "fasilitas",
+                        "label": "Fasilitas",
+                        "criteria": "Sarana dan prasarana fisik: gedung, ruang, AC, toilet, peralatan"
+                    },
+                    {
+                        "slug": "parkir",
+                        "label": "Parkir",
+                        "criteria": "Area parkir, akses kendaraan, dan biaya parkir"
+                    },
+                    {
+                        "slug": "harga_biaya",
+                        "label": "Harga dan Biaya",
+                        "criteria": "Harga, tarif, biaya, dan kesesuaian dengan nilai yang didapat"
+                    },
+                    {
+                        "slug": "layanan_pelanggan",
+                        "label": "Layanan Pelanggan",
+                        "criteria": "Dukungan pelanggan, helpdesk, dan penanganan keluhan"
+                    },
+                    {
+                        "slug": "keamanan",
+                        "label": "Keamanan",
+                        "criteria": "Keamanan, keselamatan fisik, dan rasa aman"
+                    },
+                    {
+                        "slug": "pujian_umum",
+                        "label": "Pujian Umum",
+                        "criteria": "Pujian umum tanpa masalah atau aspek tertentu"
+                    },
+                    {
+                        "slug": "lainnya",
+                        "label": "Lainnya",
+                        "criteria": "Tidak cocok dengan tipe lain"
+                    },
+                    {
+                        "slug": "takaran_bbm",
+                        "label": "Takaran BBM",
+                        "criteria": "Takaran kurang, meteran pompa, atau selisih dengan yang dibayar"
+                    },
+                    {
+                        "slug": "kualitas_bbm",
+                        "label": "Kualitas BBM",
+                        "criteria": "BBM tercampur, kotor, atau mesin bermasalah setelah mengisi"
+                    },
+                    {
+                        "slug": "ketersediaan_bbm",
+                        "label": "Ketersediaan BBM",
+                        "criteria": "BBM atau produk tertentu habis, pompa tidak berfungsi"
+                    },
+                    {
+                        "slug": "pembayaran_digital",
+                        "label": "Pembayaran Digital",
+                        "criteria": "QRIS, EDC, kartu, aplikasi pembayaran, atau pembayaran nontunai"
+                    },
+                    {
+                        "slug": "produk_toko",
+                        "label": "Toko dan Produk",
+                        "criteria": "Minimarket, kafe, atau produk yang dijual di lokasi"
+                    }
+                ],
+                "risk_flags": [
+                    {
+                        "slug": "risiko_viral",
+                        "question": "Apakah penulis mengancam menyebarkan ke media sosial atau media massa, atau melapor ke pihak berwenang?",
+                        "severity": "high",
+                        "legacy_field": "is_potential_viral"
+                    },
+                    {
+                        "slug": "kecurangan_bbm",
+                        "question": "Apakah ulasan menuduh takaran dikurangi, BBM dicampur, atau pompa dimanipulasi?",
+                        "severity": "high"
+                    },
+                    {
+                        "slug": "risiko_kebakaran",
+                        "question": "Apakah ulasan menyebut api, percikan, tumpahan, atau bahaya fisik lain di lokasi?",
+                        "severity": "critical",
+                        "legacy_field": "is_safety_issue"
+                    }
+                ],
+                "aliases": {
+                    "staff_service": "pelayanan_petugas",
+                    "staff_communication": "pelayanan_petugas",
+                    "staff_attitude": "pelayanan_petugas",
+                    "pelayanan": "pelayanan_petugas",
+                    "waiting_time": "waktu_tunggu",
+                    "healthcare_queue": "waktu_tunggu",
+                    "service_speed": "waktu_tunggu",
+                    "cleanliness": "kebersihan",
+                    "facility": "fasilitas",
+                    "accessibility": "fasilitas",
+                    "parking": "parkir",
+                    "customer_service": "layanan_pelanggan",
+                    "security": "keamanan",
+                    "safety_security": "keamanan",
+                    "price_value": "harga_biaya",
+                    "service_quality": "kualitas_layanan",
+                    "general_praise": "pujian_umum",
+                    "other": "lainnya",
+                    "product_quality": "lainnya",
+                    "delivery_fulfillment": "lainnya"
+                },
+                "absa_map": {
+                    "staff attitude": "pelayanan_petugas",
+                    "staff_communication": "pelayanan_petugas",
+                    "service quality": "kualitas_layanan",
+                    "waiting time": "waktu_tunggu",
+                    "waiting_time": "waktu_tunggu",
+                    "healthcare queue": "waktu_tunggu",
+                    "service speed": "waktu_tunggu",
+                    "cleanliness": "kebersihan",
+                    "facilities": "fasilitas",
+                    "facility": "fasilitas",
+                    "parking": "parkir",
+                    "price & value": "harga_biaya",
+                    "customer service": "layanan_pelanggan",
+                    "customer_service": "layanan_pelanggan",
+                    "security": "keamanan",
+                    "product quality": "lainnya",
+                    "delivery": "lainnya",
+                    "availability": "ketersediaan_bbm"
+                },
+                "min_confidence": 0
+            },
+            "reply": {
+                "presets": [
+                    {
+                        "id": "terima_kasih_pujian",
+                        "when_to_use": "Ulasan positif tanpa keluhan; pujian umum atas pelayanan"
+                    },
+                    {
+                        "id": "terima_kasih_masukan",
+                        "when_to_use": "Masukan atau saran ringan yang bukan keluhan berat"
+                    },
+                    {
+                        "id": "mohon_maaf_umum",
+                        "when_to_use": "Keluhan umum yang tidak masuk kategori khusus dan tanpa isu keselamatan"
+                    },
+                    {
+                        "id": "mohon_maaf_waktu_tunggu",
+                        "when_to_use": "Keluhan antrean atau lama menunggu tanpa isu keselamatan"
+                    },
+                    {
+                        "id": "mohon_maaf_pelayanan_petugas",
+                        "when_to_use": "Keluhan sikap, keramahan, atau respons petugas tanpa tuduhan serius"
+                    },
+                    {
+                        "id": "mohon_maaf_kebersihan_fasilitas",
+                        "when_to_use": "Keluhan kebersihan, kenyamanan, atau fasilitas fisik"
+                    },
+                    {
+                        "id": "hubungi_kanal_resmi",
+                        "when_to_use": "Isu sensitif atau serius yang sebaiknya dibahas lewat kanal resmi, bukan di ruang publik"
+                    },
+                    {
+                        "id": "mohon_maaf_takaran_bbm",
+                        "when_to_use": "Keluhan takaran BBM atau selisih meteran pompa, tanpa tuduhan kebakaran atau bahaya"
+                    },
+                    {
+                        "id": "mohon_maaf_ketersediaan_bbm",
+                        "when_to_use": "Keluhan BBM atau produk habis, atau pompa tidak berfungsi"
+                    },
+                    {
+                        "id": "mohon_maaf_pembayaran_digital",
+                        "when_to_use": "Keluhan QRIS, EDC, kartu, atau pembayaran nontunai yang bermasalah"
+                    }
+                ],
+                "escalation_preset": "hubungi_kanal_resmi"
+            }
+        },
+        "telekomunikasi": {
+            "snapshot": {
+                "key": "telekomunikasi:715d869c",
+                "version": "715d869c",
+                "industry": "telekomunikasi",
+                "persona": "pelanggan layanan internet dan telekomunikasi",
+                "aspects": [
+                    {
+                        "slug": "pelayanan_petugas",
+                        "label": "Pelayanan Petugas",
+                        "criteria": "Sikap, keramahan, kesigapan, dan komunikasi petugas atau staf"
+                    },
+                    {
+                        "slug": "kualitas_layanan",
+                        "label": "Kualitas Layanan",
+                        "criteria": "Mutu dan keandalan layanan secara keseluruhan"
+                    },
+                    {
+                        "slug": "waktu_tunggu",
+                        "label": "Waktu Tunggu",
+                        "criteria": "Antrean, lama menunggu, keterlambatan, kecepatan layanan"
+                    },
+                    {
+                        "slug": "kebersihan",
+                        "label": "Kebersihan",
+                        "criteria": "Kebersihan ruangan, toilet, area, dan lingkungan"
+                    },
+                    {
+                        "slug": "fasilitas",
+                        "label": "Fasilitas",
+                        "criteria": "Sarana dan prasarana fisik: gedung, ruang, AC, toilet, peralatan"
+                    },
+                    {
+                        "slug": "parkir",
+                        "label": "Parkir",
+                        "criteria": "Area parkir, akses kendaraan, dan biaya parkir"
+                    },
+                    {
+                        "slug": "harga_biaya",
+                        "label": "Harga dan Biaya",
+                        "criteria": "Harga, tarif, biaya, dan kesesuaian dengan nilai yang didapat"
+                    },
+                    {
+                        "slug": "layanan_pelanggan",
+                        "label": "Layanan Pelanggan",
+                        "criteria": "Dukungan pelanggan, helpdesk, dan penanganan keluhan"
+                    },
+                    {
+                        "slug": "keamanan",
+                        "label": "Keamanan",
+                        "criteria": "Keamanan, keselamatan fisik, dan rasa aman"
+                    },
+                    {
+                        "slug": "pujian_umum",
+                        "label": "Pujian Umum",
+                        "criteria": "Pujian umum tanpa masalah atau aspek tertentu"
+                    },
+                    {
+                        "slug": "lainnya",
+                        "label": "Lainnya",
+                        "criteria": "Tidak cocok dengan tipe lain"
+                    },
+                    {
+                        "slug": "tagihan_pembayaran",
+                        "label": "Tagihan dan Pembayaran",
+                        "criteria": "Tagihan, kasir, pembayaran, dan pengembalian dana"
+                    },
+                    {
+                        "slug": "layanan_digital",
+                        "label": "Layanan Digital",
+                        "criteria": "Aplikasi, situs, portal, pendaftaran atau pemesanan online"
+                    },
+                    {
+                        "slug": "stabilitas_jaringan",
+                        "label": "Stabilitas Jaringan",
+                        "criteria": "Koneksi putus, gangguan, atau sinyal tidak stabil"
+                    },
+                    {
+                        "slug": "kecepatan_internet",
+                        "label": "Kecepatan Internet",
+                        "criteria": "Kecepatan tidak sesuai paket atau janji"
+                    },
+                    {
+                        "slug": "pemasangan_aktivasi",
+                        "label": "Pemasangan dan Aktivasi",
+                        "criteria": "Pemasangan baru, aktivasi, pindah alamat, atau pemutusan layanan"
+                    },
+                    {
+                        "slug": "kunjungan_teknisi",
+                        "label": "Kunjungan Teknisi",
+                        "criteria": "Kedatangan, sikap, dan hasil kerja teknisi"
+                    }
+                ],
+                "risk_flags": [
+                    {
+                        "slug": "risiko_viral",
+                        "question": "Apakah penulis mengancam menyebarkan ke media sosial atau media massa, atau melapor ke pihak berwenang?",
+                        "severity": "high",
+                        "legacy_field": "is_potential_viral"
+                    },
+                    {
+                        "slug": "gangguan_massal",
+                        "question": "Apakah ulasan menyebut gangguan yang dialami banyak pelanggan sekaligus?",
+                        "severity": "high"
+                    },
+                    {
+                        "slug": "ancaman_berhenti_langganan",
+                        "question": "Apakah penulis mengancam berhenti berlangganan atau pindah operator?",
+                        "severity": "high"
+                    }
+                ],
+                "aliases": {
+                    "staff_service": "pelayanan_petugas",
+                    "staff_communication": "pelayanan_petugas",
+                    "staff_attitude": "pelayanan_petugas",
+                    "pelayanan": "pelayanan_petugas",
+                    "billing": "tagihan_pembayaran",
+                    "billing_payment": "tagihan_pembayaran",
+                    "waiting_time": "waktu_tunggu",
+                    "healthcare_queue": "waktu_tunggu",
+                    "service_speed": "waktu_tunggu",
+                    "cleanliness": "kebersihan",
+                    "facility": "fasilitas",
+                    "accessibility": "fasilitas",
+                    "parking": "parkir",
+                    "customer_service": "layanan_pelanggan",
+                    "booking_system": "layanan_digital",
+                    "booking_ordering": "layanan_digital",
+                    "digital_experience": "layanan_digital",
+                    "security": "keamanan",
+                    "safety_security": "keamanan",
+                    "price_value": "harga_biaya",
+                    "service_quality": "kualitas_layanan",
+                    "general_praise": "pujian_umum",
+                    "other": "lainnya",
+                    "product_quality": "lainnya",
+                    "delivery_fulfillment": "lainnya"
+                },
+                "absa_map": {
+                    "staff attitude": "pelayanan_petugas",
+                    "staff_communication": "pelayanan_petugas",
+                    "service quality": "kualitas_layanan",
+                    "waiting time": "waktu_tunggu",
+                    "waiting_time": "waktu_tunggu",
+                    "healthcare queue": "waktu_tunggu",
+                    "service speed": "waktu_tunggu",
+                    "cleanliness": "kebersihan",
+                    "facilities": "fasilitas",
+                    "facility": "fasilitas",
+                    "parking": "parkir",
+                    "price & value": "harga_biaya",
+                    "customer service": "layanan_pelanggan",
+                    "customer_service": "layanan_pelanggan",
+                    "security": "keamanan",
+                    "product quality": "lainnya",
+                    "delivery": "lainnya",
+                    "billing": "tagihan_pembayaran",
+                    "digital service": "layanan_digital",
+                    "booking_system": "layanan_digital"
+                },
+                "min_confidence": 0
+            },
+            "reply": {
+                "presets": [
+                    {
+                        "id": "terima_kasih_pujian",
+                        "when_to_use": "Ulasan positif tanpa keluhan; pujian umum atas pelayanan"
+                    },
+                    {
+                        "id": "terima_kasih_masukan",
+                        "when_to_use": "Masukan atau saran ringan yang bukan keluhan berat"
+                    },
+                    {
+                        "id": "mohon_maaf_umum",
+                        "when_to_use": "Keluhan umum yang tidak masuk kategori khusus dan tanpa isu keselamatan"
+                    },
+                    {
+                        "id": "mohon_maaf_waktu_tunggu",
+                        "when_to_use": "Keluhan antrean atau lama menunggu tanpa isu keselamatan"
+                    },
+                    {
+                        "id": "mohon_maaf_pelayanan_petugas",
+                        "when_to_use": "Keluhan sikap, keramahan, atau respons petugas tanpa tuduhan serius"
+                    },
+                    {
+                        "id": "mohon_maaf_kebersihan_fasilitas",
+                        "when_to_use": "Keluhan kebersihan, kenyamanan, atau fasilitas fisik"
+                    },
+                    {
+                        "id": "hubungi_kanal_resmi",
+                        "when_to_use": "Isu sensitif atau serius yang sebaiknya dibahas lewat kanal resmi, bukan di ruang publik"
+                    },
+                    {
+                        "id": "mohon_maaf_gangguan_jaringan",
+                        "when_to_use": "Keluhan koneksi putus, sinyal tidak stabil, atau kecepatan tidak sesuai paket"
+                    },
+                    {
+                        "id": "mohon_maaf_kunjungan_teknisi",
+                        "when_to_use": "Keluhan kedatangan, sikap, atau hasil kerja teknisi, atau proses pemasangan"
+                    }
+                ],
+                "escalation_preset": "hubungi_kanal_resmi"
+            }
+        },
+        "umum": {
+            "snapshot": {
+                "key": "umum:f16cdb65",
+                "version": "f16cdb65",
+                "industry": "umum",
+                "persona": "pelanggan",
+                "aspects": [
+                    {
+                        "slug": "pelayanan_petugas",
+                        "label": "Pelayanan Petugas",
+                        "criteria": "Sikap, keramahan, kesigapan, dan komunikasi petugas atau staf"
+                    },
+                    {
+                        "slug": "kualitas_layanan",
+                        "label": "Kualitas Layanan",
+                        "criteria": "Mutu dan keandalan layanan secara keseluruhan"
+                    },
+                    {
+                        "slug": "waktu_tunggu",
+                        "label": "Waktu Tunggu",
+                        "criteria": "Antrean, lama menunggu, keterlambatan, kecepatan layanan"
+                    },
+                    {
+                        "slug": "kebersihan",
+                        "label": "Kebersihan",
+                        "criteria": "Kebersihan ruangan, toilet, area, dan lingkungan"
+                    },
+                    {
+                        "slug": "fasilitas",
+                        "label": "Fasilitas",
+                        "criteria": "Sarana dan prasarana fisik: gedung, ruang, AC, toilet, peralatan"
+                    },
+                    {
+                        "slug": "parkir",
+                        "label": "Parkir",
+                        "criteria": "Area parkir, akses kendaraan, dan biaya parkir"
+                    },
+                    {
+                        "slug": "harga_biaya",
+                        "label": "Harga dan Biaya",
+                        "criteria": "Harga, tarif, biaya, dan kesesuaian dengan nilai yang didapat"
+                    },
+                    {
+                        "slug": "layanan_pelanggan",
+                        "label": "Layanan Pelanggan",
+                        "criteria": "Dukungan pelanggan, helpdesk, dan penanganan keluhan"
+                    },
+                    {
+                        "slug": "keamanan",
+                        "label": "Keamanan",
+                        "criteria": "Keamanan, keselamatan fisik, dan rasa aman"
+                    },
+                    {
+                        "slug": "pujian_umum",
+                        "label": "Pujian Umum",
+                        "criteria": "Pujian umum tanpa masalah atau aspek tertentu"
+                    },
+                    {
+                        "slug": "lainnya",
+                        "label": "Lainnya",
+                        "criteria": "Tidak cocok dengan tipe lain"
+                    }
+                ],
+                "risk_flags": [
+                    {
+                        "slug": "risiko_viral",
+                        "question": "Apakah penulis mengancam menyebarkan ke media sosial atau media massa, atau melapor ke pihak berwenang?",
+                        "severity": "high",
+                        "legacy_field": "is_potential_viral"
+                    }
+                ],
+                "aliases": {
+                    "staff_service": "pelayanan_petugas",
+                    "staff_communication": "pelayanan_petugas",
+                    "staff_attitude": "pelayanan_petugas",
+                    "pelayanan": "pelayanan_petugas",
+                    "waiting_time": "waktu_tunggu",
+                    "healthcare_queue": "waktu_tunggu",
+                    "service_speed": "waktu_tunggu",
+                    "cleanliness": "kebersihan",
+                    "facility": "fasilitas",
+                    "accessibility": "fasilitas",
+                    "parking": "parkir",
+                    "customer_service": "layanan_pelanggan",
+                    "security": "keamanan",
+                    "safety_security": "keamanan",
+                    "price_value": "harga_biaya",
+                    "service_quality": "kualitas_layanan",
+                    "general_praise": "pujian_umum",
+                    "other": "lainnya",
+                    "product_quality": "lainnya",
+                    "delivery_fulfillment": "lainnya"
+                },
+                "absa_map": {
+                    "staff attitude": "pelayanan_petugas",
+                    "staff_communication": "pelayanan_petugas",
+                    "service quality": "kualitas_layanan",
+                    "waiting time": "waktu_tunggu",
+                    "waiting_time": "waktu_tunggu",
+                    "healthcare queue": "waktu_tunggu",
+                    "service speed": "waktu_tunggu",
+                    "cleanliness": "kebersihan",
+                    "facilities": "fasilitas",
+                    "facility": "fasilitas",
+                    "parking": "parkir",
+                    "price & value": "harga_biaya",
+                    "customer service": "layanan_pelanggan",
+                    "customer_service": "layanan_pelanggan",
+                    "security": "keamanan",
+                    "product quality": "lainnya",
+                    "delivery": "lainnya"
+                },
+                "min_confidence": 0
+            },
+            "reply": {
+                "presets": [
+                    {
+                        "id": "terima_kasih_pujian",
+                        "when_to_use": "Ulasan positif tanpa keluhan; pujian umum atas pelayanan"
+                    },
+                    {
+                        "id": "terima_kasih_masukan",
+                        "when_to_use": "Masukan atau saran ringan yang bukan keluhan berat"
+                    },
+                    {
+                        "id": "mohon_maaf_umum",
+                        "when_to_use": "Keluhan umum yang tidak masuk kategori khusus dan tanpa isu keselamatan"
+                    },
+                    {
+                        "id": "mohon_maaf_waktu_tunggu",
+                        "when_to_use": "Keluhan antrean atau lama menunggu tanpa isu keselamatan"
+                    },
+                    {
+                        "id": "mohon_maaf_pelayanan_petugas",
+                        "when_to_use": "Keluhan sikap, keramahan, atau respons petugas tanpa tuduhan serius"
+                    },
+                    {
+                        "id": "mohon_maaf_kebersihan_fasilitas",
+                        "when_to_use": "Keluhan kebersihan, kenyamanan, atau fasilitas fisik"
+                    },
+                    {
+                        "id": "hubungi_kanal_resmi",
+                        "when_to_use": "Isu sensitif atau serius yang sebaiknya dibahas lewat kanal resmi, bukan di ruang publik"
+                    }
+                ],
+                "escalation_preset": "hubungi_kanal_resmi"
+            }
+        }
+    }
+}
