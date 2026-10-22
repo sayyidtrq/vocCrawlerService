@@ -6,9 +6,16 @@ import httpx
 
 from app.config import Settings
 from app.integrations.gemini_client import GeminiClientBase
-from app.services.taxonomy_service import Taxonomy
+from app.services.taxonomy_service import Taxonomy, tag_sentiment_of
 
 logger = logging.getLogger(__name__)
+
+TAG_SENTIMENT_CRITERIA = {
+    "positive": "The review speaks well of this aspect.",
+    "negative": "The review complains about or criticises this aspect.",
+    "neutral": "The review mentions this aspect without praise or criticism.",
+    "mixed": "The review both praises and criticises this aspect.",
+}
 
 # A request carries the core questions plus up to this many in total; extra tag
 # questions go in further requests (fallback ladder of the multi-tagging plan).
@@ -148,7 +155,36 @@ class JevAiClient(GeminiClientBase):
                 }
 
         answers = self._ask(text, core, extra)
-        return self._to_taxonomy_analysis(answers, review, taxonomy)
+        result = self._to_taxonomy_analysis(answers, review, taxonomy)
+        if result.get("tags"):
+            self._add_tag_sentiments(text, taxonomy, result)
+        return result
+
+    def _add_tag_sentiments(self, text: str, taxonomy: Taxonomy, result: dict) -> None:
+        """What the review says about each tagged aspect: one more request, one choice per tag.
+
+        An answer that is missing or invalid leaves the sentiment None; AnalysisService then
+        gives the tag the review's own sentiment, so no tag ever leaves without one.
+        """
+        tags = result["tags"]
+        questions = {
+            f"sent_{tag['slug']}": {
+                "type": "choice",
+                "instructions": (
+                    "What does the review say about this aspect: "
+                    f"{taxonomy.aspects[tag['slug']].get('criteria') or tag['slug']}? "
+                    "Judge only what is said about this aspect."
+                ),
+                "criteria": TAG_SENTIMENT_CRITERIA,
+            }
+            for tag in tags
+        }
+        payload = self._post(text, questions)
+        self._add_usage(payload.get("usage", {}))
+        answers = payload.get("answers", {})
+        for tag in tags:
+            tag["sentiment"] = tag_sentiment_of((answers.get(f"sent_{tag['slug']}") or {}).get("choice"))
+        result["jev"] = {**result["jev"], **answers}
 
     def _to_taxonomy_analysis(self, answers: dict, review: dict, taxonomy: Taxonomy) -> dict:
         sentiment_ans = answers.get("sentiment", {})
@@ -195,10 +231,9 @@ class JevAiClient(GeminiClientBase):
             probabilities = {
                 slug: self._probability(answers.get(f"tag_{slug}")) for slug in taxonomy.aspects
             }
-            tags = taxonomy.pick_tags(probabilities)
-            if category not in {tag["slug"] for tag in tags}:
-                tags.append({"slug": category, "p": round(float(category_ans.get("confidence", 0.0)), 4)})
-            result["tags"] = tags
+            result["tags"] = taxonomy.add_primary(
+                taxonomy.pick_tags(probabilities), category, round(float(category_ans.get("confidence", 0.0)), 4)
+            )
         return result
 
     def suggest_reply(self, review_text: str, presets: list[dict], risk_flags: list[dict]) -> dict:

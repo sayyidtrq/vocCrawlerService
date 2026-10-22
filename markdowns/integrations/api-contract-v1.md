@@ -122,7 +122,9 @@ Hanya untuk review yang dianalisis di bawah taksonomi dari OneBox (worklist memb
 |---|---|---|---|
 | `taxonomy_version` | string | **ya** | 8 hex dari OneBox. Null = analisis tanpa taksonomi industri. |
 | `risk_flags` | object slug → boolean | **ya** | Satu kunci per risk flag milik pack industri. |
-| `tags` | array `{slug, p}` | **ya** | Hanya bila multi-tag menyala di site; `p` null bila penyedia tidak memberi probabilitas. |
+| `tags` | array `{slug, p, sentiment}` | **ya** | Hanya bila multi-tag menyala di site; `p` null bila penyedia tidak memberi probabilitas. |
+
+`tags[].sentiment` adalah **sentimen ulasan terhadap aspek itu saja** (satu ulasan bisa memuji satu aspek dan mengeluh soal aspek lain, mis. `pelayanan_dokter` = `positive`, `parkir` = `negative`): salah satu `positive`, `negative`, `neutral`, `mixed`. Analisis baru selalu mengisinya untuk setiap tag; bila penyedia tidak memberi sentimen untuk sebuah aspek, nilainya sentimen ulasan itu sendiri. Hanya tag dari analisis sebelum field ini ada yang bernilai `null`, jadi konsumen yang belum membacanya tidak terpengaruh (field bertambah, tidak ada yang berubah arti).
 
 Di v3 `issue_category` adalah **slug milik taksonomi lokasi itu** (mis. `takaran_bbm`), bukan salah satu enum di atas; nilai di luar daftar sudah diganti `lainnya` oleh Crawler. `is_safety_issue` = ada risk flag berseverity `critical`.
 

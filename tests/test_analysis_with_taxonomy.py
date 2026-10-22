@@ -175,7 +175,8 @@ def test_a_review_that_mentions_nothing_gets_lainnya_as_its_tag(
 
     run(tx_session_factory, tx_settings, tx_company_id, client)
 
-    assert analyses(tx_session_factory)[0].tags == [{"slug": "lainnya", "p": None}]
+    row = analyses(tx_session_factory)[0]
+    assert row.tags == [{"slug": "lainnya", "p": None, "sentiment": row.sentiment}]
 
 
 def test_a_rating_only_review_uses_the_taxonomy_fallback(
@@ -190,7 +191,33 @@ def test_a_rating_only_review_uses_the_taxonomy_fallback(
     assert client.seen == [] and result["rating_fallback"] == 1
     row = analyses(tx_session_factory)[0]
     assert (row.issue_category, row.taxonomy_version) == ("lainnya", "6285c2fa")
-    assert row.tags == [{"slug": "lainnya", "p": None}]
+    assert row.tags == [{"slug": "lainnya", "p": None, "sentiment": row.sentiment}]
+
+
+def test_every_stored_tag_carries_the_sentiment_about_its_own_aspect(
+    tx_session_factory, tx_settings, tx_company_id, tx_fixture, tx_tagged
+):
+    fixture = {"taxonomies": {k: tx_tagged(v, max_tags=5) for k, v in tx_fixture["taxonomies"].items()}}
+    seed(tx_session_factory, tx_company_id, fixture, keys=["spbu:6285c2fa"])
+    client = RecordingClient(
+        {
+            "sentiment": "mixed",
+            "issue_category": "takaran_bbm",
+            "tags": [
+                {"slug": "waktu_tunggu", "p": 0.9, "sentiment": "negative"},
+                {"slug": "kebersihan", "p": 0.8, "sentiment": "positive"},
+                {"slug": "parkir", "p": 0.7},  # the engine gave no sentiment for this one
+            ],
+        }
+    )
+
+    run(tx_session_factory, tx_settings, tx_company_id, client)
+
+    row = analyses(tx_session_factory)[0]
+    by_slug = {t["slug"]: t["sentiment"] for t in row.tags}
+    assert by_slug["waktu_tunggu"] == "negative" and by_slug["kebersihan"] == "positive"
+    assert by_slug["parkir"] == by_slug["takaran_bbm"] == "mixed"  # the review's own sentiment
+    assert all(t["sentiment"] in {"positive", "negative", "neutral", "mixed"} for t in row.tags)
 
 
 def test_two_locations_in_one_run_each_get_their_own_taxonomy(

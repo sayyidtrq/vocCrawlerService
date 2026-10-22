@@ -41,6 +41,8 @@ def test_openai_prompt_names_the_location_vocabulary_and_flags(tx_spbu, tx_tagge
     assert "TAXONOMY OVERRIDE" in system and "pelanggan SPBU" in system
     assert "- takaran_bbm: " in system and "- risiko_kebakaran: " in system
     assert "`tags`" in system  # tagging is on for this site
+    # every tag is asked with the sentiment about THAT aspect
+    assert '"sentiment": <positive|negative|neutral|mixed>' in system and "THAT aspect" in system
     assert result["issue_category"] == "takaran_bbm"
     assert result["risk_flags"] == {"kecurangan_bbm": True} and result["tags"] == ["takaran_bbm"]
 
@@ -81,7 +83,33 @@ def test_absa_maps_its_labels_through_the_pack(tx_spbu, tx_tagged):
     result = absa(ABSA_RESULTS, {"review_text": "Pompa habis, antre lama", "rating": 2, "taxonomy": tx_tagged(tx_spbu)})
 
     assert result["issue_category"] == "ketersediaan_bbm"  # availability -> the SPBU aspect
-    assert result["tags"] == [{"slug": "ketersediaan_bbm", "p": 0.9}, {"slug": "waktu_tunggu", "p": 0.7}]
+    # ABSA judges every aspect itself, so each tag brings its own sentiment
+    assert result["tags"] == [
+        {"slug": "ketersediaan_bbm", "p": 0.9, "sentiment": "negative"},
+        {"slug": "waktu_tunggu", "p": 0.7, "sentiment": "negative"},
+    ]
+
+
+def test_absa_gives_each_tag_the_sentiment_of_its_own_aspect(tx_spbu, tx_tagged):
+    results = [
+        {"aspect": "kasir", "opinion": "ramah", "sentiment": "positive", "taxonomy": "Customer Service", "confidence": 0.8},
+        {"aspect": "pompa", "opinion": "habis", "sentiment": "negative", "taxonomy": "Availability", "confidence": 0.9},
+        {"aspect": "toilet", "opinion": "bersih", "sentiment": "positive", "taxonomy": "Cleanliness", "confidence": 0.7},
+    ]
+    result = absa(results, {"review_text": "x", "rating": 3, "taxonomy": tx_tagged(tx_spbu)})
+    assert {t["slug"]: t["sentiment"] for t in result["tags"]} == {
+        "layanan_pelanggan": "positive", "ketersediaan_bbm": "negative", "kebersihan": "positive",
+    }
+    assert result["sentiment"] == "mixed"  # the review as a whole is unchanged
+
+
+def test_absa_aspects_that_map_to_one_slug_and_disagree_become_mixed(tx_spbu, tx_tagged):
+    results = [
+        {"aspect": "antrean", "opinion": "cepat", "sentiment": "positive", "taxonomy": "Waiting Time", "confidence": 0.7},
+        {"aspect": "pompa", "opinion": "lambat", "sentiment": "negative", "taxonomy": "Service Speed", "confidence": 0.8},
+    ]
+    result = absa(results, {"review_text": "x", "rating": 3, "taxonomy": tx_tagged(tx_spbu)})
+    assert [(t["slug"], t["sentiment"]) for t in result["tags"] if t["slug"] == "waktu_tunggu"] == [("waktu_tunggu", "mixed")]
 
 
 def test_absa_unknown_label_falls_back_and_praise_becomes_pujian_umum(tx_spbu):

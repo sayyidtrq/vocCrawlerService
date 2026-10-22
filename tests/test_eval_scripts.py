@@ -49,6 +49,45 @@ def test_tag_metrics_cover_multi_label_quality():
     assert tags["per_aspect"]["pelayanan_petugas"]["recall"] == 1.0
 
 
+def test_tag_sentiment_is_scored_only_where_the_label_gave_one_and_the_tag_was_predicted():
+    report = eval_taxonomy.evaluate(
+        [
+            result("waktu_tunggu", "waktu_tunggu",
+                   expected_tags={"waktu_tunggu", "kebersihan"},
+                   expected_tag_sentiments={"waktu_tunggu": "negative", "kebersihan": "positive"},
+                   predicted_tags=["waktu_tunggu", "kebersihan"],
+                   predicted_tag_sentiments={"waktu_tunggu": "negative", "kebersihan": "negative"}),
+            result("parkir", "parkir",
+                   expected_tags={"parkir", "fasilitas"},
+                   expected_tag_sentiments={"parkir": "negative", "fasilitas": "positive"},
+                   predicted_tags=["parkir"],  # fasilitas was missed: a tag problem, not a sentiment one
+                   predicted_tag_sentiments={"parkir": "negative"}),
+            result("takaran_bbm", "takaran_bbm", expected_tags={"takaran_bbm"},  # no sentiment label
+                   predicted_tags=["takaran_bbm"], predicted_tag_sentiments={"takaran_bbm": "negative"}),
+        ]
+    )
+    sentiment = report["tags"]["sentiment"]
+    assert sentiment["judged"] == 3 and sentiment["accuracy"] == round(2 / 3, 4)
+    assert sentiment["confusions"] == {"positive->negative": 1}
+
+
+def test_tag_sentiment_is_absent_when_nothing_was_labelled_with_one():
+    report = eval_taxonomy.evaluate(
+        [result("parkir", "parkir", expected_tags={"parkir"}, predicted_tags=["parkir"])]
+    )
+    assert "sentiment" not in report["tags"]
+
+
+def test_the_csv_reader_accepts_slug_equals_sentiment(tmp_path):
+    path = tmp_path / "labelled.csv"
+    path.write_text(
+        "review_text,expected_slug,expected_tags\nx,parkir,parkir=Negative|kebersihan=positive|fasilitas\n", encoding="utf-8"
+    )
+    row = eval_taxonomy.read_rows(str(path))[0]
+    assert row["expected_tags"] == {"parkir", "kebersihan", "fasilitas"}
+    assert row["expected_tag_sentiments"] == {"parkir": "negative", "kebersihan": "positive"}
+
+
 def test_reply_metrics_precision_coverage_and_safety_recall():
     rows = [
         {"expected_preset": "a", "critical": False, "mode": "preset", "preset_id": "a", "tokens_used": 10},
