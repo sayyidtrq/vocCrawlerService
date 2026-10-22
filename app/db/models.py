@@ -5,6 +5,7 @@ from decimal import Decimal
 from typing import ClassVar
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     CheckConstraint,
     DateTime,
@@ -30,9 +31,21 @@ JsonType = JSON().with_variant(JSONB, "postgresql")
 
 class Company(Base):
     __tablename__ = "companies"
+    __table_args__ = (
+        # Satu site OneBox = satu company. Unique index (bukan constraint) karena
+        # ALTER TABLE ... ADD UNIQUE tidak ada di SQLite; NULL boleh berulang.
+        Index("uq_companies_onebox_site", "onebox_site_id", unique=True),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Cermin site OneBox. Kosong untuk company yang bukan berasal dari OneBox.
+    onebox_site_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Tenant nonaktif (paketnya dimatikan di OneBox): datanya tetap, crawl berhenti.
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default=text("true"), nullable=False
+    )
+    deactivated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     ai_enable_flag: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     total_enable_review: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     analyze_competitor_flag: Mapped[bool] = mapped_column(
@@ -115,6 +128,9 @@ class WorklistSyncState(Base):
     last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_error: Mapped[str | None] = mapped_column(Text)
     item_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # Versi snapshot yang diterapkan OneBox terakhir; versi yang tidak lebih baru ditolak.
+    snapshot_version: Mapped[int | None] = mapped_column(BigInteger)
+    applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     company: Mapped[Company] = relationship(back_populates="worklist_sync_states")
 
