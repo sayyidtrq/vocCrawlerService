@@ -44,6 +44,14 @@ class WorklistTenantMismatchError(WorklistSyncError):
     """The company asking for a refresh does not own the configured OneBox site."""
 
 
+class WorklistSnapshotInvalidError(WorklistSyncError):
+    """A pushed snapshot is malformed; none of it was applied."""
+
+
+class WorklistTenantInactiveError(WorklistSyncError):
+    """The tenant is switched off, so it does not accept worklist changes."""
+
+
 @dataclass(frozen=True)
 class WorklistSyncResult:
     status: str
@@ -55,6 +63,7 @@ class WorklistSyncResult:
     cache_age_seconds: int | None = None
     last_success_at: str | None = None
     warning: str | None = None
+    snapshot_version: int | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -67,6 +76,7 @@ class WorklistSyncResult:
             "cache_age_seconds": self.cache_age_seconds,
             "last_success_at": self.last_success_at,
             "warning": self.warning,
+            "snapshot_version": self.snapshot_version,
         }
 
 
@@ -197,6 +207,101 @@ class WorklistSyncService:
             self._record_error(company_id, site_id, str(exc))
             raise
 
+    def apply_snapshot(self, snapshot_version: Any, items: Any) -> WorklistSyncResult:
+        """Terapkan snapshot worklist lengkap yang dikirim OneBox.
+
+        Semua atau tidak sama sekali: snapshot divalidasi lebih dulu tanpa
+        menyentuh DB, lalu versi diperiksa dan semua target ditulis dalam satu
+        transaksi. Versi yang tidak lebih baru dari yang sudah diterapkan
+        dikembalikan sebagai "stale" tanpa mengubah apa pun (OneBox menganggap
+        itu sukses: tidak ada yang perlu dikirim ulang).
+        """
+        if not self.settings.onebox_managed:
+            raise WorklistSyncError(
+                "Applying a pushed worklist snapshot requires ONEBOX_TENANT_MODE=managed."
+            )
+        if self.company_id is None:
+            raise WorklistSyncError("A company is required to apply a worklist snapshot.")
+        company_id = int(self.company_id)
+        version = self._require_snapshot_version(snapshot_version)
+        try:
+            valid_items = self._validate_items(items)
+        except WorklistSyncError as exc:
+            # Catat agar operator melihatnya, tetapi versi tidak terpakai dan
+            # worklist lama tetap berlaku.
+            site_id = self._linked_site_id(company_id)
+            if site_id is not None:
+                self._record_error(company_id, site_id, str(exc))
+            raise WorklistSnapshotInvalidError(str(exc)) from exc
+
+        now = _now()
+        with self.session_factory() as session:
+            # Kunci baris company: dua snapshot untuk tenant yang sama diserialkan,
+            # termasuk saat sync state-nya belum pernah dibuat.
+            company = session.scalar(
+                select(Company).where(Company.id == company_id).with_for_update()
+            )
+            if company is None:
+                raise WorklistSyncError(f"Company {company_id} does not exist.")
+            if company.onebox_site_id is None:
+                raise WorklistSyncError(
+                    f"Company {company_id} is not linked to a OneBox site."
+                )
+            if not company.is_active:
+                raise WorklistTenantInactiveError(
+                    f"Company {company_id} is inactive; it does not accept worklist changes."
+                )
+            site_id = int(company.onebox_site_id)
+            current = session.scalar(
+                select(WorklistSyncState).where(WorklistSyncState.company_id == company_id)
+            )
+            if (
+                current is not None
+                and current.snapshot_version is not None
+                and version <= current.snapshot_version
+            ):
+                return WorklistSyncResult(
+                    status="stale",
+                    company_id=company_id,
+                    site_id=site_id,
+                    snapshot_version=int(current.snapshot_version),
+                    last_success_at=(
+                        _utc(current.last_success_at).isoformat()
+                        if current.last_success_at
+                        else None
+                    ),
+                )
+            upserted, deactivated, state = self._apply_items(
+                session, company_id, site_id, valid_items, now
+            )
+            state.snapshot_version = version
+            state.applied_at = now
+            session.commit()
+        return WorklistSyncResult(
+            status="applied",
+            company_id=company_id,
+            site_id=site_id,
+            fetched=len(valid_items),
+            upserted=upserted,
+            deactivated=deactivated,
+            cache_age_seconds=0,
+            last_success_at=now.isoformat(),
+            snapshot_version=version,
+        )
+
+    @staticmethod
+    def _require_snapshot_version(value: Any) -> int:
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            raise WorklistSnapshotInvalidError("snapshot_version must be a positive integer.")
+        return value
+
+    def _linked_site_id(self, company_id: int) -> int | None:
+        with self.session_factory() as session:
+            site_id = session.scalar(
+                select(Company.onebox_site_id).where(Company.id == company_id)
+            )
+        return int(site_id) if site_id is not None else None
+
     def _require_company_id(self) -> int:
         if self.company_id is None:
             raise WorklistSyncError(
@@ -237,11 +342,16 @@ class WorklistSyncService:
             payload_site = meta.get("site_id")
         if payload_site is not None and _optional_int(payload_site, "site_id") != site_id:
             raise WorklistSyncError("OneBox worklist site_id does not match configuration.")
+        return self._validate_items(payload["data"])
 
+    def _validate_items(self, raw_items: Any) -> list[dict[str, Any]]:
+        """Validasi murni (tanpa DB), dipakai jalur pull dan push."""
+        if not isinstance(raw_items, list):
+            raise WorklistSyncError("Worklist items must be a list.")
         items: list[dict[str, Any]] = []
         seen: set[tuple[str, str]] = set()
         seen_target_ids: set[int] = set()
-        for index, raw in enumerate(payload["data"]):
+        for index, raw in enumerate(raw_items):
             if not isinstance(raw, dict):
                 raise WorklistSyncError(f"Worklist item {index} must be an object.")
             kind = str(raw.get("kind") or "").strip().lower()
@@ -317,81 +427,12 @@ class WorklistSyncService:
         self, company_id: int, site_id: int, items: list[dict[str, Any]]
     ) -> WorklistSyncResult:
         now = _now()
-        location_keys = {
-            item["external_place_id"] for item in items if item["kind"] == "location"
-        }
-        competitor_keys = {
-            item["external_place_id"]
-            for item in items
-            if item["kind"] == "competitor"
-        }
-        upserted = 0
-        deactivated = 0
         with self.session_factory() as session:
             if session.get(Company, company_id) is None:
                 raise WorklistSyncError(f"Company {company_id} does not exist.")
-            for item in items:
-                if item["kind"] == "location":
-                    entity = self._find_location(session, company_id, item["external_place_id"])
-                    if entity is None:
-                        entity = Location(
-                            company_id=company_id,
-                            source="onebox",
-                            external_place_id=item["external_place_id"],
-                            organization_name=item["organization_name"],
-                            branch_name=item["branch_name"],
-                        )
-                        session.add(entity)
-                    self._apply_location(entity, item, now)
-                else:
-                    entity = self._find_competitor(session, company_id, item["external_place_id"])
-                    if entity is None:
-                        entity = Competitor(
-                            company_id=company_id,
-                            source="onebox",
-                            external_place_id=item["external_place_id"],
-                            name=item["branch_name"],
-                        )
-                        session.add(entity)
-                    self._apply_competitor(entity, item, now)
-                upserted += 1
-            managed_locations = session.scalars(
-                select(Location).where(
-                    Location.company_id == company_id,
-                    onebox_managed_clause(Location),
-                )
-            ).all()
-            for entity in managed_locations:
-                if entity.external_place_id not in location_keys:
-                    if entity.is_active or entity.crawl_enabled:
-                        deactivated += 1
-                    entity.is_active = False
-                    entity.crawl_enabled = False
-                    entity.worklist_synced_at = now
-            managed_competitors = session.scalars(
-                select(Competitor).where(
-                    Competitor.company_id == company_id,
-                    onebox_managed_clause(Competitor),
-                )
-            ).all()
-            for entity in managed_competitors:
-                if entity.external_place_id not in competitor_keys:
-                    if entity.is_active or entity.crawl_enabled:
-                        deactivated += 1
-                    entity.is_active = False
-                    entity.crawl_enabled = False
-                    entity.worklist_synced_at = now
-            state = session.scalar(
-                select(WorklistSyncState).where(WorklistSyncState.company_id == company_id)
+            upserted, deactivated, _state = self._apply_items(
+                session, company_id, site_id, items, now
             )
-            if state is None:
-                state = WorklistSyncState(company_id=company_id, site_id=site_id)
-                session.add(state)
-            state.site_id = site_id
-            state.last_attempt_at = now
-            state.last_success_at = now
-            state.last_error = None
-            state.item_count = len(items)
             session.commit()
         return WorklistSyncResult(
             status="synced",
@@ -403,6 +444,93 @@ class WorklistSyncService:
             cache_age_seconds=0,
             last_success_at=now.isoformat(),
         )
+
+    def _apply_items(
+        self,
+        session: Session,
+        company_id: int,
+        site_id: int,
+        items: list[dict[str, Any]],
+        now: datetime,
+    ) -> tuple[int, int, WorklistSyncState]:
+        """Tulis worklist ke session yang diberikan; pemanggil yang commit.
+
+        Dipisah dari _apply supaya push snapshot bisa memeriksa versi dan
+        menulis dalam satu transaksi.
+        """
+        location_keys = {
+            item["external_place_id"] for item in items if item["kind"] == "location"
+        }
+        competitor_keys = {
+            item["external_place_id"]
+            for item in items
+            if item["kind"] == "competitor"
+        }
+        upserted = 0
+        deactivated = 0
+        for item in items:
+            if item["kind"] == "location":
+                entity = self._find_location(session, company_id, item["external_place_id"])
+                if entity is None:
+                    entity = Location(
+                        company_id=company_id,
+                        source="onebox",
+                        external_place_id=item["external_place_id"],
+                        organization_name=item["organization_name"],
+                        branch_name=item["branch_name"],
+                    )
+                    session.add(entity)
+                self._apply_location(entity, item, now)
+            else:
+                entity = self._find_competitor(session, company_id, item["external_place_id"])
+                if entity is None:
+                    entity = Competitor(
+                        company_id=company_id,
+                        source="onebox",
+                        external_place_id=item["external_place_id"],
+                        name=item["branch_name"],
+                    )
+                    session.add(entity)
+                self._apply_competitor(entity, item, now)
+            upserted += 1
+        managed_locations = session.scalars(
+            select(Location).where(
+                Location.company_id == company_id,
+                onebox_managed_clause(Location),
+            )
+        ).all()
+        for entity in managed_locations:
+            if entity.external_place_id not in location_keys:
+                if entity.is_active or entity.crawl_enabled:
+                    deactivated += 1
+                entity.is_active = False
+                entity.crawl_enabled = False
+                entity.worklist_synced_at = now
+        managed_competitors = session.scalars(
+            select(Competitor).where(
+                Competitor.company_id == company_id,
+                onebox_managed_clause(Competitor),
+            )
+        ).all()
+        for entity in managed_competitors:
+            if entity.external_place_id not in competitor_keys:
+                if entity.is_active or entity.crawl_enabled:
+                    deactivated += 1
+                entity.is_active = False
+                entity.crawl_enabled = False
+                entity.worklist_synced_at = now
+        state = session.scalar(
+            select(WorklistSyncState).where(WorklistSyncState.company_id == company_id)
+        )
+        if state is None:
+            state = WorklistSyncState(company_id=company_id, site_id=site_id)
+            session.add(state)
+        state.site_id = site_id
+        state.last_attempt_at = now
+        state.last_success_at = now
+        state.last_error = None
+        state.item_count = len(items)
+        return upserted, deactivated, state
 
     @staticmethod
     def _find_location(session: Session, company_id: int, external: str) -> Location | None:
