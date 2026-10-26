@@ -7,7 +7,7 @@ tags:
   - multitenant-readiness
   - plan
 status: fase-0
-updated: 2026-10-21
+updated: 2026-10-26
 owner: Sayyid
 decision: opsi-D-push-worklist
 related:
@@ -93,7 +93,7 @@ Satu deployment crawler melayani **banyak tenant OneBox** (satu site = satu comp
 | G1 — Istilah & ADR | Q-25 (proxy check), Q-23 | MT-01 | open |
 | G2 — Kondisi OneBox nyata | Q-31, Q-35 | Fase 3 | partial — putaran 1 selesai; definisi gerbang "paket VoC" (Q-35) terbuka |
 | G3 — Outbox OneBox (syarat opsi D) | Q-32 | MT-30, MT-33, MT-35 | partial — **belum ada outbox**, harus dibangun (tabel DB atau RabbitMQ); fallback opsi C bila terlalu mahal |
-| G4 — Bobot round robin | Q-26 | MT-40 | open |
+| G4 — Bobot round robin | Q-26 | MT-40 | partial — weight decided (Default 1, Plus 2); concurrency cap still open |
 | G5 — Usulan yang perlu dikonfirmasi | Q-28, Q-29, Q-33, Q-36 | MT-13, MT-30–33 | proposed |
 
 ## 6. Fase & urutan
@@ -155,7 +155,7 @@ flowchart TD
 | Review per lokasi (maks / rata-rata) | ± 1.000 / ± 500 | Q-13 |
 | Backfill tenant terbesar | ± 100.000 review | turunan |
 | Biaya Apify | $20 ≈ ± 100.000 review (perkiraan); satu akun platform | Q-11 |
-| Harga VoC | ± Rp200.000 per lokasi (perkiraan) | Q-11 |
+| Harga VoC | Rp2.000.000 / bulan untuk paket 10 lokasi; tambahan Rp200.000 / lokasi / bulan (proposal terbaru, COO, 2026-10-26) | Q-11 |
 | Jumlah tenant aktif, review baru per hari | **belum diketahui** | Q-13 |
 
 ## 9. Risiko program

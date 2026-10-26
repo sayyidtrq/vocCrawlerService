@@ -52,7 +52,7 @@ Konvensi: satu task = satu PR ke `dev` (atau turunan `feature/multitenant-readin
 | MT-34 | ~~Akses akun layanan ke site~~ | OneBox | 3 | — | `dropped` (Q-27) |
 | MT-35 | Scheduled push + cek ketinggalan versi & status paket | OneBox | 3 | MT-33 | `blocked` |
 | MT-40 | Weighted round robin di `claim_next` (+ kolom `companies.weight`, index `crawl_jobs`) | Crawler | 4 | MT-10, Q-26 | `blocked` (Q-26) |
-| MT-41 | Atribusi pemakaian Apify per tenant (akun Apify tunggal milik platform) | Crawler | 4 | MT-10 | `todo` |
+| MT-41 | Atribusi pemakaian Apify per tenant (akun Apify tunggal milik platform) | Crawler | 4 | MT-10 | `done` for the quota counters (SQLite; Postgres not run; belum di-commit); laporan biaya per run belum |
 | MT-42 | Observability per tenant | Crawler | 4 | Q-22 | `todo` |
 | MT-43 | ~~Refresh periodik di crawler~~ | Crawler | 4 | — | `dropped` (pindah ke MT-35) |
 | MT-44 | Setting tenant/lokasi dipakai analisa (+ kolom penyimpan setting; bentuknya ikut rencana taksonomi) | Crawler | 4 | MT-20, Q-30 | `blocked` (Q-30) |
@@ -215,6 +215,7 @@ Dikerjakan setelah mode `managed` terbukti di dev & staging.
 - Konteks: satu akun Apify milik platform, anonim bagi tenant ([[04-OPEN-QUESTIONS#Q-11]]). Tidak ada rotasi atau top-up per tenant; `APIFY_API_TOKENS` cukup satu token (tanpa perubahan kode). Logika *exhausted* di `ApifyTokenPool` dipertahankan supaya kegagalan akun tetap jadi error jelas.
 - `apify_review_client.py` / `apify_fetch_service.py`: catat `company_id`, review yang ditagih, perkiraan biaya per run. Laporan internal per tenant per bulan (tidak diekspos lewat API tenant).
 - Cek batas akun bersama dan alert: [[04-OPEN-QUESTIONS#Q-34]].
+- Quota counters ([[04-OPEN-QUESTIONS#Q-41]], decided 2026-10-26): sum `fetch_logs.total_fetched` per tenant by `metadata->>'coverage'` and expose two totals in `GET /api/integration/v1/tenants/{site_id}`: `backfill_fetched_total` (lifetime, `full_backfill`) and `operating_fetched_month` (current month, `delta` + `date_window`). Verify first that every run records `coverage` (older runs show none). The caps, alerts and pausing live in OneBox ([[04-OPEN-QUESTIONS#Q-38]]); the crawler only reports.
 
 ### MT-42 — Observability
 - Log provisioning, push worklist, dan worker membawa `company_id` + `site_id`. Metrik: snapshot diterapkan/ditolak/stale per tenant, umur snapshot terakhir per tenant, kedalaman antrean per tenant, review Apify per tenant. Alert → Q-22.

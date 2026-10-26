@@ -8,7 +8,7 @@ tags:
   - multitenant-readiness
   - index
 status: living
-updated: 2026-10-21
+updated: 2026-10-26
 owner: Sayyid
 decision: opsi-D-push-worklist
 branch: feature/multitenant-readiness
@@ -114,6 +114,11 @@ Dokumen yang **tidak dipakai** (superseded): `integrations/implementation-plan-o
 
 | Tanggal | Perubahan | Terkait |
 |---|---|---|
+| 2026-10-26 | **MT-41 quota counters done** (SQLite): `GET /tenants/{site_id}` now returns `usage` (`operating_period`, `backfill_fetched_total`, `operating_fetched_month`), one SQL aggregate per call, tenant-scoped, dry runs and legacy rows excluded. New `tests/test_tenant_usage.py`; full suite 538 passed, 4 failed (`test_tenant_mode_config`, pre-existing: local `.env` sets `ONEBOX_SITE_ID`/`ONEBOX_COMPANY_ID`). Postgres runtime not tested (the query compiles to `metadata ->> 'coverage'`). Apify plan facts and Jev check added to Q-34 and Q-43. | MT-41, Q-34, Q-38, Q-41, Q-43 |
+| 2026-10-26 | Q-41 answered with real HGA measurements: backfill cap `max(100,000, 2,500 × locations)` lifetime per tenant, operating cap `2,000 × locations` per month, alerts at 50% / 80%, pause at 100%. Q-38 updated (crawler reports two totals, OneBox enforces). Q-43 added (Jev budget does not scale with locations). MT-41 and the OneBox handoff updated. | Q-35, Q-38, Q-41, Q-43, MT-41 |
+| 2026-10-26 | COO pricing recorded (Q-11, 01-PLAN §8): Rp2,000,000 a month for 10 locations plus Rp200,000 a month per extra location. Q-41 allowance revised to 1,000 reviews × purchased locations; Q-42 added (do competitor targets count as locations). | Q-11, Q-41, Q-42 |
+| 2026-10-26 | Q-41: Sayyid decided the first backfill counts against the monthly Apify quota. Proposed a one-time 100,000-review onboarding allowance for the first 30 days (Default 200,000, then 100,000), pending confirmation. | Q-41, Q-38, Q-34 |
+| 2026-10-26 | Answers from Sayyid: Q-39 (crawler gets only a numeric weight) and Q-40 (Jev price) answered; Q-26 weight decided (Default 1, Plus 2), cap still open; Q-13 sized (about 100,000-review first pull, 5,000–10,000 a month per site, 10–15 sites, COO to confirm); Q-34 Apify on free plan moving to $19 (limits unread); Q-21 answered for dev (Hermina = company 3, site 169 linked, company 16 deactivated). Q-41 added (first backfill vs monthly Apify quota). | Q-13, Q-21, Q-26, Q-34, Q-37, Q-39, Q-40, Q-41 |
 | 2026-10-26 | Merged `origin/dev` (industry taxonomy, reply suggestion) into the branch. The one conflict (`worklist_sync_service.py`) is resolved so pull and push share `_apply_items`, and `PUT /worklist` now carries `taxonomies` like the pull worklist. Handoff updated: the contract is final. | MT-21, 05-ONEBOX-HANDOFF |
 | 2026-10-26 | Q-35 answered (packages Default/Plus with monthly quotas); Q-37–Q-40 added (quota unit, enforcement, package awareness, Jev price). **OneBox side handed off** to another developer: `05-ONEBOX-HANDOFF.md`. | Q-35, Q-37–Q-40, MT-30–35 |
 | 2026-10-21 | Folder dibuat. Sintesis brainstorm + spec + meeting Agung + audit kode `dev`. 24 pertanyaan terbuka dicatat. Bahaya laten refresh worklist lintas-tenant ditemukan. | semua |

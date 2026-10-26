@@ -66,7 +66,7 @@ sequenceDiagram
 | `PUT /worklist` | done, tested on SQLite | same branch |
 | `taxonomies` in `PUT /worklist` | done, tested with the `dev` taxonomy fixture | same branch |
 | Tenant inactive → cancel waiting jobs, refuse enqueue | **pending** (MT-23) | crawler owner |
-| Monthly usage in `GET /tenants/{site_id}` (for quotas) | **proposed** (Q-38, MT-41) | crawler owner |
+| Usage counters in `GET /tenants/{site_id}` (for quotas) | done on the branch (MT-41, SQLite-tested; Q-41 caps) | `data.usage`, see 3.3 |
 
 Until the branch is merged into `dev`, run the crawler from `feature/multitenant-readiness`.
 
@@ -109,6 +109,7 @@ Content-Type: application/json
     "is_active": true, "deactivated_at": null, "created": true,
     "worklist": {"snapshot_version": null, "applied_at": null, "items": 0, "last_error": null},
     "credential": {"key_id": "AbC...", "last_used_at": null, "expires_at": null},
+    "usage": {"operating_period": "2026-10", "backfill_fetched_total": 0, "operating_fetched_month": 0},
     "token": {"key_id": "AbC...", "value": "voc_dev_AbC....<secret>", "scopes": ["analysis:write", "crawl:enqueue", "crawl:read", "reviews:read", "worklist:write"]}
   },
   "meta": {"api_version": "v1", "request_id": "..."}
@@ -118,6 +119,8 @@ Content-Type: application/json
 ### 3.3 `GET /api/integration/v1/tenants/{site_id}` — read state
 
 Returns the same `data` without `token`/`created`. Use `worklist.snapshot_version` to detect that the crawler is behind (resend), and `worklist.last_error` to show why the last push was rejected. Never contains a token.
+
+`usage` feeds the quotas of Q-41 (OneBox enforces, the crawler only reports): `backfill_fetched_total` is the lifetime count of reviews fetched by `full_backfill` runs; `operating_fetched_month` is the count fetched by `delta` and `date_window` runs in the current UTC month (`operating_period`, `YYYY-MM`). Dry runs and runs from before the crawl-coverage contract are not counted. Compare them with `max(100,000, 2,500 × locations)` and `2,000 × locations`.
 
 ### 3.4 `PATCH /api/integration/v1/tenants/{site_id}` — switch off/on, rename
 
@@ -202,7 +205,9 @@ Task IDs match [[03-IMPLEMENTATION]]. Each needs tests in the OneBox repo.
 | Default | review, scrape, sched, comp (not built yet), ticket, AI analysis (Jev) | Jev $10 · Apify 100,000 |
 | Plus | Default + AI summary (OpenAI) + auto reply (soon) | Jev $20 · Apify 500,000 · AI credit |
 
-Values may change, so keep them in configuration. Units and enforcement details are still open: Q-37 (Apify unit, "AI credit"), Q-38 (who enforces), Q-40 (Jev price per token). The crawler already returns `tokens_used` / `token_usage` in every analysis response, so OneBox can meter Jev without crawler changes.
+Values may change, so keep them in configuration. Jev price is settled (Q-40): Jev 1.13 by TypeSafe, $0.042 per 1M input tokens, $0 output; keep it in configuration. The package sends the crawler only a numeric round-robin weight, Default 1 and Plus 2 (Q-26, Q-39). Still open: Q-37 (Apify unit, "AI credit"), Q-38 (who enforces), Q-41 (does the first backfill of about 100,000 reviews count against the Default quota). The crawler already returns `tokens_used` / `token_usage` in every analysis response, so OneBox can meter Jev without crawler changes.
+
+Apify quotas are decided (Q-41), and they replace the 100,000 / 500,000 above: a **backfill** bucket of `max(100,000, 2,500 × purchased locations)` fetched reviews, lifetime per tenant (+2,500 per location added later), and an **operating** bucket of `2,000 × purchased locations` per month. OneBox holds the caps: alert at 50% of operating and 80% of backfill, pause new crawls and notify an admin at 100%, with a manual raise. The crawler will report the two running totals in `GET /tenants/{site_id}` (MT-41). Send the purchased location count with each tenant update. Jev budget scaling is open (Q-43).
 
 ### 4.2 Where to start in the OneBox code
 
@@ -239,7 +244,7 @@ Details in [[04-OPEN-QUESTIONS]]. Proposed answers exist for most; confirm or ch
 | Q-36 | Store the tenant token per site or copy it to every branch Connection? | Once per site (e.g. a `Setting` row); `clientForSite()` reads it first, falls back to `Connection.Options.service_token` during transition |
 | Q-28 | Who can see/regenerate the token? | Shown once, masked afterwards; OneBox admins only |
 | Q-29 | Crawler down during activation? | Admin action completes immediately; outbox retries; status visible |
-| Q-37 / Q-38 / Q-40 | Quota units, enforcement, Jev price | See 4.1 |
+| Q-37 / Q-38 / Q-41 | Quota units, enforcement, backfill vs monthly quota | See 4.1 (Q-40 Jev price is answered) |
 
 ### 4.5 Pitfalls
 
