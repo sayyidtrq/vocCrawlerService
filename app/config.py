@@ -73,6 +73,7 @@ _BLANK_USES_DEFAULT_FIELDS = (
     "apify_run_timeout_seconds",
     "apify_poll_interval_seconds",
     "redis_url",
+    "crawler_api_token",
     "apify_account_exhausted_ttl_seconds",
     "analysis_batch_size",
     "page_size",
@@ -186,6 +187,7 @@ class Settings(BaseModel):
     integration_cursor_secret: str = LOCAL_CURSOR_SECRET_FALLBACK
     jwt_secret_key: str = LOCAL_JWT_SECRET_FALLBACK
     service_token_pepper: str = LOCAL_SERVICE_TOKEN_PEPPER_FALLBACK
+    crawler_api_token: str | None = None
     onebox_base_url: str | None = None
     # Env var abbreviates "service" to "svc" - the field name doesn't, so the
     # default FIELD_NAME.upper() alias would miss it without this.
