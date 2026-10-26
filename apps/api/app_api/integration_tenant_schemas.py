@@ -9,22 +9,26 @@ from pydantic import BaseModel, Field, StringConstraints
 from app.services.tenant_registry_service import (
     DEFAULT_ROTATION_OVERLAP_HOURS,
     MAX_ROTATION_OVERLAP_HOURS,
+    MAX_TENANT_WEIGHT,
 )
 
 SiteId = Annotated[int, Field(strict=True, gt=0)]
 SiteName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=255)]
+TenantWeight = Annotated[int, Field(strict=True, ge=1, le=MAX_TENANT_WEIGHT)]
 
 
 class TenantCreateRequest(BaseModel):
-    """Field lain (mis. weight, settings) diabaikan dulu; kolomnya menyusul."""
+    """Provision a tenant with its scheduling weight."""
 
     site_id: SiteId
     site_name: SiteName
+    weight: TenantWeight | None = None
 
 
 class TenantUpdateRequest(BaseModel):
     active: bool | None = None
     site_name: SiteName | None = None
+    weight: TenantWeight | None = None
 
 
 class TokenRotateRequest(BaseModel):
@@ -64,6 +68,7 @@ class TenantData(BaseModel):
     company_id: int
     site_id: int
     site_name: str
+    weight: int
     is_active: bool
     deactivated_at: str | None = None
     worklist: WorklistState

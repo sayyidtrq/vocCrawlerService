@@ -62,6 +62,7 @@ def _tenant_data(view: TenantView) -> dict:
         "company_id": view.company_id,
         "site_id": view.site_id,
         "site_name": view.site_name,
+        "weight": view.weight,
         "is_active": view.is_active,
         "deactivated_at": _iso(view.deactivated_at),
         "worklist": {
@@ -121,7 +122,7 @@ def register_tenant(
 ) -> dict:
     request_id = _request_id(request, x_request_id)
     try:
-        result = service.register(payload.site_id, payload.site_name)
+        result = service.register(payload.site_id, payload.site_name, weight=payload.weight)
     except ValueError as exc:
         raise _invalid(exc) from exc
     if not result.created:
@@ -177,7 +178,9 @@ def update_tenant(
 ) -> dict:
     request_id = _request_id(request, x_request_id)
     try:
-        view = service.update(site_id, active=payload.active, site_name=payload.site_name)
+        view = service.update(
+            site_id, active=payload.active, site_name=payload.site_name, weight=payload.weight
+        )
     except TenantNotFound as exc:
         raise _not_found(exc) from exc
     except ValueError as exc:

@@ -35,12 +35,16 @@ class Company(Base):
         # Satu site OneBox = satu company. Unique index (bukan constraint) karena
         # ALTER TABLE ... ADD UNIQUE tidak ada di SQLite; NULL boleh berulang.
         Index("uq_companies_onebox_site", "onebox_site_id", unique=True),
+        CheckConstraint("weight > 0", name="ck_companies_weight_positive"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     # Cermin site OneBox. Kosong untuk company yang bukan berasal dari OneBox.
     onebox_site_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    weight: Mapped[int] = mapped_column(
+        Integer, default=1, server_default="1", nullable=False
+    )
     # Tenant nonaktif (paketnya dimatikan di OneBox): datanya tetap, crawl berhenti.
     is_active: Mapped[bool] = mapped_column(
         Boolean, default=True, server_default=text("true"), nullable=False
@@ -224,6 +228,7 @@ class CrawlJob(Base):
         Index("idx_crawl_jobs_competitor", "competitor_id"),
         Index("idx_crawl_jobs_claim", "status", "available_at", "lease_expires_at"),
         Index("idx_crawl_jobs_company", "company_id"),
+        Index("idx_crawl_jobs_company_claim", "company_id", "status", "available_at"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)

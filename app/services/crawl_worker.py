@@ -5,8 +5,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Callable
 
-from sqlalchemy import and_, or_, select
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy import Float, and_, case, cast, func, or_, select
+from sqlalchemy.orm import Session, aliased, sessionmaker
 
 from app.config import Settings, get_settings
 from app.db.models import Company, Competitor, CrawlBatch, CrawlJob, Location
@@ -110,6 +110,8 @@ class CrawlWorker:
     def claim_next(self, *, worker_id: str) -> ClaimedCrawlJob | None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
+            supports_skip_locked = session.bind.dialect.name in {"postgresql", "mysql"}
+            cap = self.settings.crawl_max_concurrency_per_tenant
             due = or_(
                 and_(
                     CrawlJob.status.in_(WAITING_JOB_STATUSES),
@@ -118,18 +120,90 @@ class CrawlWorker:
                         select(Company.id).where(Company.is_active.is_(True))
                     ),
                 ),
+                # Inactive tenants still recover an existing run (MT-23).
                 and_(
                     CrawlJob.status == "running",
                     CrawlJob.lease_expires_at.is_not(None),
                     CrawlJob.lease_expires_at <= now,
                 ),
             )
-            statement = (
-                select(CrawlJob).where(due).order_by(CrawlJob.available_at, CrawlJob.id)
+            recent_claims = (
+                select(func.count(CrawlJob.id))
+                .where(
+                    CrawlJob.company_id == Company.id,
+                    CrawlJob.started_at
+                    >= now - timedelta(seconds=self.settings.crawl_fairness_window_seconds),
+                    CrawlJob.started_at <= now,
+                )
+                .correlate(Company)
+                .scalar_subquery()
             )
-            if session.bind.dialect.name in {"postgresql", "mysql"}:
-                statement = statement.with_for_update(skip_locked=True)
-            job = session.scalar(statement.limit(1))
+            live_running = and_(
+                CrawlJob.status == "running", CrawlJob.lease_expires_at > now
+            )
+            running_count = (
+                select(func.count(CrawlJob.id))
+                .where(CrawlJob.company_id == Company.id, live_running)
+                .correlate(Company)
+                .scalar_subquery()
+            )
+            oldest_due_id = (
+                select(CrawlJob.id)
+                .where(CrawlJob.company_id == Company.id, due)
+                .order_by(CrawlJob.available_at, CrawlJob.id)
+                .limit(1)
+                .correlate(Company)
+                .scalar_subquery()
+            )
+            oldest_due = aliased(CrawlJob)
+            candidates = (
+                select(Company.id)
+                .join(oldest_due, oldest_due.id == oldest_due_id)
+                .order_by(
+                    # Float: integer division would truncate 2 / 3 to 0 on PostgreSQL.
+                    cast(recent_claims, Float) / Company.weight,
+                    oldest_due.available_at,
+                    oldest_due.id,
+                )
+            )
+            if cap > 0:
+                candidates = candidates.where(running_count < cap)
+            company_ids = session.scalars(candidates).all()
+            backfill_priority = case(
+                (
+                    CrawlJob.result_json["request"]["crawl_mode"].as_string()
+                    == "initial_backfill",
+                    1,
+                ),
+                else_=0,
+            )
+            job = None
+            for company_id in company_ids:
+                if cap > 0:
+                    # Serialize the cap check with other claims for this tenant.
+                    tenant_lock = select(Company.id).where(Company.id == company_id)
+                    if supports_skip_locked:
+                        tenant_lock = tenant_lock.with_for_update(skip_locked=True)
+                    if session.scalar(tenant_lock) is None:
+                        continue
+                    running_jobs = select(CrawlJob.id).where(
+                        CrawlJob.company_id == company_id, live_running
+                    )
+                    if supports_skip_locked:
+                        # A current read on MySQL; skipping locks could undercount.
+                        running_jobs = running_jobs.with_for_update()
+                    if len(session.scalars(running_jobs.limit(cap)).all()) >= cap:
+                        continue
+                statement = (
+                    select(CrawlJob)
+                    .where(CrawlJob.company_id == company_id, due)
+                    .order_by(backfill_priority, CrawlJob.available_at, CrawlJob.id)
+                )
+                if supports_skip_locked:
+                    statement = statement.with_for_update(skip_locked=True)
+                job = session.scalar(statement.limit(1))
+                if job is not None:
+                    break
             if job is None:
                 return None
             batch = session.get(CrawlBatch, job.batch_id)

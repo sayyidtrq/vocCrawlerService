@@ -41,6 +41,7 @@ TENANT_TOKEN_SCOPES = (
 )
 DEFAULT_ROTATION_OVERLAP_HOURS = 24
 MAX_ROTATION_OVERLAP_HOURS = 168
+MAX_TENANT_WEIGHT = 100
 
 
 class TenantNotFound(LookupError):
@@ -62,6 +63,7 @@ class TenantView:
     company_id: int
     site_id: int
     site_name: str
+    weight: int
     is_active: bool
     deactivated_at: datetime | None
     worklist_snapshot_version: int | None
@@ -106,6 +108,16 @@ def _validated_name(name: object) -> str:
     return cleaned
 
 
+def _validated_weight(weight: object) -> int:
+    if (
+        isinstance(weight, bool)
+        or not isinstance(weight, int)
+        or not 1 <= weight <= MAX_TENANT_WEIGHT
+    ):
+        raise ValueError(f"weight must be an integer between 1 and {MAX_TENANT_WEIGHT}")
+    return weight
+
+
 class TenantRegistryService:
     def __init__(
         self,
@@ -118,7 +130,9 @@ class TenantRegistryService:
         self._tokens = ApiClientService(self.session_factory, self.settings)
         self._clock = clock or _now
 
-    def register(self, site_id: object, site_name: object) -> RegisteredTenant:
+    def register(
+        self, site_id: object, site_name: object, *, weight: object | None = None
+    ) -> RegisteredTenant:
         """Daftarkan site, idempoten. Dipanggil OneBox saat paket VoC diaktifkan.
 
         Company dan token dibuat dalam satu transaksi. Memanggil ulang untuk site
@@ -128,6 +142,7 @@ class TenantRegistryService:
         """
         site = _validated_site_id(site_id)
         name = _validated_name(site_name)
+        weight = _validated_weight(weight) if weight is not None else None
         with self.session_factory() as session:
             company = self._lock_company(session, site)
             created = False
@@ -147,6 +162,9 @@ class TenantRegistryService:
             elif not company.is_active:
                 company.is_active = True
                 company.deactivated_at = None
+
+            if weight is not None:
+                company.weight = weight
 
             issued = None
             if not self._active_tokens(session, company.id):
@@ -172,14 +190,18 @@ class TenantRegistryService:
         *,
         active: bool | None = None,
         site_name: object | None = None,
+        weight: object | None = None,
     ) -> TenantView:
         """Update the tenant and cancel waiting jobs when it is deactivated."""
         site = _validated_site_id(site_id)
         name = _validated_name(site_name) if site_name is not None else None
+        weight = _validated_weight(weight) if weight is not None else None
         with self.session_factory() as session:
             company = self._require_company(session, site, lock=True)
             if name is not None:
                 company.name = name
+            if weight is not None:
+                company.weight = weight
             if active is False and company.is_active:
                 now = datetime.now(timezone.utc)
                 company.is_active = False
@@ -328,6 +350,7 @@ class TenantRegistryService:
             company_id=company.id,
             site_id=int(company.onebox_site_id),
             site_name=company.name,
+            weight=company.weight,
             is_active=bool(company.is_active),
             deactivated_at=company.deactivated_at,
             worklist_snapshot_version=state.snapshot_version if state else None,
