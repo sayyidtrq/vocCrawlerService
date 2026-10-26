@@ -59,6 +59,7 @@ pekerjaan baru — **kecuali ADR**, yang tetap otoritas tertinggi (lihat `integr
 | [[02-DESIGN]] | Kondisi sekarang (as-is) vs target (to-be), kontrak API, model data, aturan, risiko | Mau tahu "bentuknya seperti apa & kenapa" |
 | [[03-IMPLEMENTATION]] | Task `MT-xx` per sisi, file yang disentuh, acceptance, test matrix | Mau mulai ngoding |
 | [[04-OPEN-QUESTIONS]] | Register pertanyaan terbuka `Q-xx` + jawaban | Mau menjawab / mengecek apa yang masih belum jelas |
+| [[05-ONEBOX-HANDOFF]] | Self-contained brief for the OneBox developer and their agent: crawler API contract, what to build in OneBox, pitfalls, UAT | Taking over the OneBox side |
 
 ## Penanda yang dipakai
 
@@ -113,6 +114,7 @@ Dokumen yang **tidak dipakai** (superseded): `integrations/implementation-plan-o
 
 | Tanggal | Perubahan | Terkait |
 |---|---|---|
+| 2026-10-26 | Q-35 answered (packages Default/Plus with monthly quotas); Q-37–Q-40 added (quota unit, enforcement, package awareness, Jev price). **OneBox side handed off** to another developer: `05-ONEBOX-HANDOFF.md`. | Q-35, Q-37–Q-40, MT-30–35 |
 | 2026-10-21 | Folder dibuat. Sintesis brainstorm + spec + meeting Agung + audit kode `dev`. 24 pertanyaan terbuka dicatat. Bahaya laten refresh worklist lintas-tenant ditemukan. | semua |
 | 2026-10-21 | Jawaban Sayyid: model diganti ke provisioning paket VoC + OneBox control panel + weighted round robin + nol setup manual. 13 Q terjawab, Q-06 di-drop, Q-25–Q-31 ditambah. Design/Plan/Implementation ditulis ulang; ID task MT dinomori ulang. | Q-01–Q-31 |
 | 2026-10-21 | Keputusan **opsi D**: OneBox push snapshot worklist (`PUT /worklist`, berversi, atomik), crawler tanpa kredensial OneBox — amandemen ADR-0003 D1. Q-07 & Q-16 terjawab oleh desain, Q-27 di-drop, Q-32 (queue OneBox) & Q-33 (`snapshot_version`) ditambah. MT-12/34/43 `dropped`, MT-35 baru. | Q-03, Q-07, Q-16, Q-27, Q-32, Q-33 |

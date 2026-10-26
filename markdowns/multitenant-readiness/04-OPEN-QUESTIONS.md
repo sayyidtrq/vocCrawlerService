@@ -8,10 +8,10 @@ tags:
   - multitenant-readiness
   - open-questions
 status: living
-updated: 2026-10-21
+updated: 2026-10-26
 owner: Sayyid
-open_count: 18
-answered_count: 16
+open_count: 21
+answered_count: 17
 dropped_count: 2
 ---
 
@@ -52,8 +52,11 @@ dropped_count: 2
 | [[#Q-32]] | 🔴 | Reliability | Outbox/queue OneBox untuk push worklist & provisioning: pakai apa (RabbitMQ, tabel DB)? | Sayyid | MT-33, MT-35 | partial |
 | [[#Q-33]] | 🟠 | Kontrak | `snapshot_version`: counter per site di OneBox, atau `generated_at` + hash? | Sayyid | MT-13, MT-32 | proposed |
 | [[#Q-34]] | 🟠 | Biaya | Batas akun Apify bersama (concurrent runs, plafon bulanan) & alert apa? | Sayyid (cek akun Apify) | MT-40, MT-41 | open |
-| [[#Q-35]] | 🔴 | Entitlement | Apa definisi "paket VoC aktif" — benefit yang mana yang jadi gerbang tenant? | Sayyid / product | MT-30, MT-32 | open |
 | [[#Q-36]] | 🟠 | Kredensial | Token tenant disimpan di level site (Setting) atau disalin ke tiap Connection cabang? | Sayyid | MT-30, MT-31 | proposed |
+| [[#Q-37]] | 🟠 | Quota | Apify quota unit: are 100,000 / 500,000 reviews per month? And what is the Plus "AI credit"? | Sayyid / product | MT-30, MT-41 | open |
+| [[#Q-38]] | 🔴 | Quota | Who enforces the per-tenant quotas, and when? | Sayyid | MT-30, MT-41 | proposed |
+| [[#Q-39]] | 🟠 | Package | Does the crawler need to know a tenant's package (Default / Plus)? | Sayyid | MT-20, MT-40 | proposed |
+| [[#Q-40]] | 🟠 | Quota | Jev price per token (to turn `tokens_used` into dollars): where is it configured? | Sayyid / product | MT-30 | open |
 
 ### Sudah terjawab
 
@@ -75,6 +78,7 @@ dropped_count: 2
 | [[#Q-11]] | Akun & biaya Apify | **Satu akun Apify milik platform**, anonim bagi tenant; tidak ada akun/rotasi/top-up per tenant. Biaya tetap **dicatat per tenant** (atribusi) untuk harga VoC | Sayyid (chat) | 2026-10-21 |
 | [[#Q-07]] | Gerbang paket VoC | Tidak ada lagi panggilan crawler → `VocWorklist`. OneBox hanya provisioning & push untuk site berpaket VoC aktif; paket mati → `PATCH active=false` | Desain opsi D | 2026-10-21 |
 | [[#Q-16]] | Pemicu pembaruan worklist | OneBox push snapshot saat paket aktif, cabang/kompetitor berubah, tombol Refresh, dan scheduled push; ketinggalan dicek lewat `GET /tenants/{site_id}` | Desain opsi D | 2026-10-21 |
+| [[#Q-35]] | Active VoC package | Active = the tenant has a VoC package, **Default** or **Plus**. Default: review, scrape, sched, comp (not built yet), ticket, AI analysis with Jev. Plus: Default + AI summary with OpenAI + auto reply (soon). Quotas per tenant per month: Default Jev $10 + Apify 100,000; Plus Jev $20 + Apify 500,000 + AI credit. Values may change. | Sayyid (chat) | 2026-10-26 |
 
 ### Di-drop
 
@@ -279,6 +283,7 @@ dropped_count: 2
 - **Pilihan sumber bobot:** tier paket VoC · jumlah lokasi aktif · diatur manual di Setup Parameter OneBox · kombinasi.
 - **Pertanyaan lanjutan:** perlukah **batas konkurensi per tenant** (mis. maks 2 job berjalan per tenant) supaya backfill satu tenant besar tidak mengambil semua worker? Perlukah job `regular_delta` didahulukan dari `initial_backfill`?
 - **Usulan default:** bobot `1` untuk semua tenant sampai ada aturan bisnis; batas konkurensi per tenant = `ceil(jumlah_worker / 2)`.
+- **New input (2026-10-26):** packages now exist ([[#Q-35]]). Option: weight from package, Default 1 and Plus 2, sent by OneBox as a number ([[#Q-39]]).
 - **Jawaban:** _belum_
 
 ### Q-27
@@ -361,13 +366,18 @@ dropped_count: 2
 
 ### Q-35
 
-**Apa definisi "paket VoC aktif" — benefit mana yang menjadi gerbang tenant?**
+**What defines an "active VoC package", i.e. which benefit gates a tenant?**
 
-- **Temuan (`[code]`):** di OneBox tidak ada satu "paket VoC". Yang ada enam benefit terpisah: `VOC_AI` (analisis review), `VOC_REVIEW` (review per bulan), `VOC_SCRAPE` (crawl per hari), `VOC_SCHED` (jadwal aktif), `VOC_COMP` (kompetitor, on/off), `VOC_TICKET` (tiket, on/off). Tiap benefit dibeli sebagai item bernilai kuota dan menambah kuota langsung (belum ada pembayaran).
-- **Pertanyaan:** event apa yang berarti "tenant aktif" untuk crawler? Usulan: **tenant aktif = `VOC_SCRAPE` aktif dan kuotanya > 0** (crawl adalah yang dilakukan crawler); `VOC_AI` hanya mengatur analisa, bukan keberadaan tenant. Dan "nonaktif" = `VOC_SCRAPE` habis/dicabut?
-- **Detail yang perlu diputuskan:** kuota harian habis (`VOC_SCRAPE` per hari) **bukan** nonaktif — hanya enqueue yang ditolak oleh OneBox; nonaktif ke crawler hanya saat benefit dicabut/kedaluwarsa. Dan: tenant yang baru membeli `VOC_SCRAPE` tapi belum punya cabang tetap didaftarkan (snapshot kosong).
-- **Jebakan:** gunakan `hasBenefit`, bukan `verifyBenefit()` yang menaikkan `SiteBenefit.Quantity` ([[ADR-0001-ownership-inversion]]).
-- **Jawaban:** _belum_
+- **Answer (Sayyid, 2026-10-26):** a tenant is active when it has a VoC package. There are two packages:
+
+| Package | Features | Monthly quota per tenant |
+|---|---|---|
+| **Default** | review, scrape, sched, comp (not built yet), ticket, AI analysis with Jev | Jev: **$10** · Apify: **100,000** |
+| **Plus** | everything in Default + AI summary with OpenAI + auto reply (soon) | Jev: **$20** · Apify: **500,000** · plus AI credit |
+
+- These values are the current target and may change, so they must be configuration in OneBox, not constants in code.
+- **Follow-ups:** unit of the Apify quota and meaning of "AI credit" → [[#Q-37]]; who enforces quotas → [[#Q-38]]; whether the crawler needs the package → [[#Q-39]]; Jev price per token → [[#Q-40]]. The package may also drive round-robin weights → [[#Q-26]].
+- **Earlier context:** OneBox implements this as six separate benefits (`VOC_AI`, `VOC_REVIEW`, `VOC_SCRAPE`, `VOC_SCHED`, `VOC_COMP`, `VOC_TICKET`); a package is a bundle of those. Gate checks must use `hasBenefit`, not `verifyBenefit()` (which increments `SiteBenefit.Quantity`).
 
 ### Q-36
 
@@ -376,3 +386,39 @@ dropped_count: 2
 - **Temuan (`[code]`):** token baca sekarang ada di `Connection.Options.service_token`, dan satu Connection = satu cabang. `VocCrawlQueue::clientForSite()` mengambil Connection cabang pertama yang layak, jadi secara efektif token diperlakukan sebagai milik site. Rotasi token berarti mengubah semua Connection site itu bila disalin.
 - **Usulan:** simpan satu token per site di tempat level site (mis. baris `Setting` per site, pola `VocKelompokScope`); `clientForSite()` membacanya dulu dan jatuh ke `Connection.Options.service_token` selama masa transisi. Regenerate dari Setup Parameter cukup mengubah satu tempat.
 - **Jawaban:** _menunggu konfirmasi usulan_
+
+### Q-37
+
+**What unit are the Apify quotas in, and what is the Plus "AI credit"?**
+
+- **Context:** Q-35 gives Apify quotas of 100,000 (Default) and 500,000 (Plus). The earlier estimate was "$20 ≈ 100,000 reviews", so the number most likely means **reviews fetched per month**, but it could also be read as a currency amount.
+- **Assumption until answered:** reviews fetched per tenant per calendar month.
+- **Also unclear:** "Plus ... with AI credit": is that an OpenAI budget for AI summary, separate from the Jev $20? Amount and unit?
+- **Answer:** _pending_
+
+### Q-38
+
+**Who enforces the per-tenant quotas, and when?**
+
+- **Proposal:** OneBox enforces, because it owns entitlements (ADR-0001/0002) and is the one that triggers crawls and analyses.
+  - **Jev budget:** the analysis API already returns `tokens_used` per run (`AnalysisService` result, passed through by `integration_analysis`). OneBox converts tokens to dollars ([[#Q-40]]), adds them to the tenant's monthly total, and refuses to trigger analysis once the budget is reached.
+  - **Apify quota:** OneBox refuses to enqueue a crawl once the tenant's reviews fetched this month reach the quota. The crawler already records `company_id` + `total_fetched` per run in `fetch_logs`; it would expose the monthly total in `GET /api/integration/v1/tenants/{site_id}` (small crawler change, MT-41) so OneBox does not need to aggregate it itself.
+  - **Accepted overshoot:** a batch that is already running is not cut off mid-way, so a tenant can exceed its quota by at most one batch.
+- **Alternative (not recommended):** the crawler enforces. It would need the quotas, the price list and the package, which duplicates entitlement outside OneBox.
+- **Answer:** _waiting for confirmation_
+
+### Q-39
+
+**Does the crawler need to know a tenant's package (Default / Plus)?**
+
+- **Proposal:** no, not for features. OneBox is the one calling AI summary and auto reply, so it gates those by package itself, and the crawler stays package-agnostic.
+- **Only exception:** if round-robin weights come from the package ([[#Q-26]], e.g. Default 1, Plus 2), OneBox sends the weight (not the package name) when registering or updating the tenant. The crawler stores a number, not business rules.
+- **Answer:** _waiting for confirmation_
+
+### Q-40
+
+**What is the Jev price per token, and where is it configured?**
+
+- **Context:** the Jev budget is in dollars ([[#Q-35]]), but the crawler reports tokens (`tokens_used`, `token_usage.prompt_tokens/completion_tokens`). Something must convert them.
+- **Proposal:** the price (per 1M input and output tokens) is OneBox configuration, next to the package quotas, so a price change needs no deploy. The repo already has a reference: `scripts/simulate_onebox_to_ai.py` / commit `f17ae22` ("correct Jev AI per-million token pricing formula").
+- **Answer:** _pending_

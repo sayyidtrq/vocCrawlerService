@@ -186,6 +186,9 @@ Dikerjakan setelah mode `managed` terbukti di dev & staging.
 
 ## Fase 3 — OneBox (`onecloud`, PHP)
 
+> [!info] Handed off (2026-10-26)
+> The OneBox side is handed to another developer, because OneBox does not run on this laptop yet. Their brief is [[05-ONEBOX-HANDOFF]] (contract, tasks, pitfalls, UAT). The rows below stay as the task list; status is tracked there.
+
 > Repo OneBox sedang diinstal di laptop cadangan (WSL `/var/www/html/onecloud`, lihat [[local-dev-setup-guide]]). Semua task di fase ini menunggu MT-03 — sebagian mungkin sudah ada.
 
 | Task | Isi | Catatan |

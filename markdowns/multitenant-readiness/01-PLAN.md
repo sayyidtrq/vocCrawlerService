@@ -144,7 +144,7 @@ flowchart TD
 | Sisi | Task | Catatan |
 |---|---|---|
 | Crawler (repo ini) | MT-02, MT-10, MT-11, MT-13, MT-20–23, MT-40–42, MT-44, MT-50 | |
-| OneBox (`onecloud`, PHP) | MT-03, MT-30–33, MT-35 | Repo OneBox belum ada di laptop cadangan — butuh setup dulu (sedang diinstal) |
+| OneBox (`onecloud`, PHP) — **handed off 2026-10-26**, see [[05-ONEBOX-HANDOFF]] | MT-03, MT-30–33, MT-35 | Repo OneBox belum ada di laptop cadangan — butuh setup dulu (sedang diinstal) |
 | Keputusan / non-kode | MT-01, MT-51, MT-52 | Ratifikasi Pak Agung untuk ADR-0006 (Q-23) |
 
 ## 8. Gambaran skala (untuk sizing)
