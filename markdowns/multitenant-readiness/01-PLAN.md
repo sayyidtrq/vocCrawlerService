@@ -128,9 +128,9 @@ flowchart TD
 |---|---|---|---|---|
 | **0** | ADR-0006, guard refresh lintas tenant, inventaris kode OneBox | MT-01 – MT-03 | — | MT-02 `done`, MT-03 `wip`, MT-01 `todo` |
 | **1** | Migration registry tenant + `snapshot_version`, mode config, `apply_snapshot` | MT-10, MT-11, MT-13 (MT-12 `dropped`) | — | MT-10 `done` (SQLite), MT-11 `done`, MT-13 `done` (SQLite) |
-| **2** | Endpoint provisioning, `PUT /worklist`, tenant nonaktif; hapus jalur pull di akhir transisi | MT-20 – MT-23 | Fase 1 | MT-20 `done`, MT-21 `done` (SQLite); MT-22, MT-23 `todo` |
+| **2** | Endpoint provisioning, `PUT /worklist`, tenant nonaktif; hapus jalur pull di akhir transisi | MT-20 – MT-23 | Fase 1 | MT-20 `done`, MT-21 `done` (SQLite); MT-23 `done`; MT-22 `todo` |
 | **3** | Hook paket VoC, Setup Parameter, builder snapshot + counter versi, job push (queue/retry/debounce), scheduled push + cek versi | MT-30 – MT-33, MT-35 (MT-34 `dropped`) | MT-03, Fase 2, G2, G3 | `blocked` (MT-03) |
-| **4** | Weighted round robin, atribusi Apify, observability, setting tenant | MT-40 – MT-42, MT-44 (MT-43 `dropped`) | Fase 2, G4 | sebagian `todo` |
+| **4** | Weighted round robin, atribusi Apify, observability, setting tenant | MT-40 – MT-42, MT-44 (MT-43 `dropped`) | Fase 2, G4 | MT-40 `done`; MT-41 `done` (quota counters); MT-42 `todo` (Q-22); MT-44 `blocked` (Q-30) |
 | **5** | Test matrix, UAT dev, runbook | MT-50 – MT-52 | Fase 3, Fase 4 (min. MT-40) | `todo` (test bertahap) |
 
 **Prinsip urutan**

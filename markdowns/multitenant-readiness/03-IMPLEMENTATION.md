@@ -44,14 +44,14 @@ Konvensi: satu task = satu PR ke `dev` (atau turunan `feature/multitenant-readin
 | MT-20 | Endpoint provisioning tenant (`POST/PATCH/GET /tenants`, rotate) | Crawler | 2 | MT-10 | `done` (SQLite; belum di-commit) |
 | MT-21 | Endpoint `PUT /worklist` *(diubah: opsi D)* | Crawler | 2 | MT-13, MT-20 | `done` (SQLite; belum di-commit) |
 | MT-22 | Hapus jalur pull & refresh on-demand, hapus kredensial OneBox dari crawler | Crawler | 2 | MT-21, transisi selesai | `todo` |
-| MT-23 | Tenant nonaktif: batalkan job yang belum jalan, tolak enqueue & push, ajari logika batch status `cancelled` | Crawler | 2 | MT-10 | `todo` |
+| MT-23 | Tenant nonaktif: batalkan job yang belum jalan, tolak enqueue & push, ajari logika batch status `cancelled` | Crawler | 2 | MT-10 | `done` (SQLite; Postgres tidak diuji; commit b388e19) |
 | MT-30 | Hook aktivasi/deaktivasi VoC → provisioning via outbox | OneBox | 3 | MT-20, Q-35, Q-36, Q-29, Q-32 | `blocked` (Q-35) |
 | MT-31 | Setup Parameter: status & versi sinkron, token ter-mask, Refresh, Regenerate, bobot (preseden UI: `locationResyncAction`) | OneBox | 3 | MT-30, Q-28 | `blocked` |
 | MT-32 | Builder snapshot worklist per site: bungkus `VocWorklist::forSite` + counter versi *(diubah: opsi D)* | OneBox | 3 | MT-03 ✔ putaran 1, Q-33 | `todo` |
 | MT-33 | **Outbox** push worklist (tabel DB + task cron, atau RabbitMQ): retry, debounce, status + hook simpan cabang/kompetitor; ganti jalur `provisionLocation` lama *(diubah: opsi D)* | OneBox | 3 | MT-21, MT-32, Q-32 | `blocked` (Q-32) |
 | MT-34 | ~~Akses akun layanan ke site~~ | OneBox | 3 | — | `dropped` (Q-27) |
 | MT-35 | Scheduled push + cek ketinggalan versi & status paket | OneBox | 3 | MT-33 | `blocked` |
-| MT-40 | Weighted round robin di `claim_next` (+ kolom `companies.weight`, index `crawl_jobs`) | Crawler | 4 | MT-10, Q-26 | `blocked` (Q-26) |
+| MT-40 | Weighted round robin di `claim_next` (+ kolom `companies.weight`, index `crawl_jobs`) | Crawler | 4 | MT-10, Q-26 | `done` (commit e18fc8e; SQLite + a throwaway PostgreSQL; cap default 0 = off, value still open in Q-26) |
 | MT-41 | Atribusi pemakaian Apify per tenant (akun Apify tunggal milik platform) | Crawler | 4 | MT-10 | `done` for the quota counters (SQLite; Postgres not run; belum di-commit); laporan biaya per run belum |
 | MT-42 | Observability per tenant | Crawler | 4 | Q-22 | `todo` |
 | MT-43 | ~~Refresh periodik di crawler~~ | Crawler | 4 | — | `dropped` (pindah ke MT-35) |

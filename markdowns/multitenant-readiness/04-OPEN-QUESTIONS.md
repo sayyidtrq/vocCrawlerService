@@ -295,7 +295,8 @@ dropped_count: 2
 - **Usulan default:** bobot `1` untuk semua tenant sampai ada aturan bisnis; batas konkurensi per tenant = `ceil(jumlah_worker / 2)`.
 - **New input (2026-10-26):** packages now exist ([[#Q-35]]). Option: weight from package, Default 1 and Plus 2, sent by OneBox as a number ([[#Q-39]]).
 - **Answer (Sayyid, 2026-10-26):** yes, weight comes from the package as a number: **Default 1, Plus 2**, set in OneBox config. The crawler stores the integer (`companies.weight`, MT-40).
-- **Still open:** per-tenant concurrency cap (proposal: `ceil(workers / 2)`) and whether `regular_delta` runs before `initial_backfill` (proposal: yes). With 10–15 tenants and a 100,000-review backfill per new site ([[#Q-13]]), the cap matters more than the weights.
+- **Implemented (MT-40, commit e18fc8e):** weight is stored on `companies.weight` and accepted on `POST/PATCH /tenants`; the cap is the setting `CRAWL_MAX_CONCURRENCY_PER_TENANT`, **default 0 = off**; delta runs before backfill inside a tenant. Under contention a worker may find no job and retries at its next poll.
+- **Still open:** the value of the per-tenant concurrency cap (proposal: `ceil(workers / 2)`) and whether `regular_delta` runs before `initial_backfill` (proposal: yes). With 10–15 tenants and a 100,000-review backfill per new site ([[#Q-13]]), the cap matters more than the weights.
 - **Jawaban:** _sebagian_
 
 ### Q-27

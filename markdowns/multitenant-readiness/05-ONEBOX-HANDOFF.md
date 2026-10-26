@@ -128,9 +128,12 @@ Returns the same `data` without `token`/`created`. Use `worklist.snapshot_versio
 {"active": false}
 {"active": true}
 {"site_name": "New name"}
+{"weight": 2}
 ```
 
-Deactivating only marks the tenant (data stays). After MT-23 the crawler also cancels its waiting jobs and refuses new crawls and pushes (`409 TENANT_INACTIVE`). The token keeps working for reads.
+`weight` (integer 1–100, optional on `POST` and `PATCH`, default 1) is the round-robin weight of the tenant: OneBox sends 1 for the Default package and 2 for Plus (Q-26, Q-39). The crawler stores only the number and returns it as `data.weight`. Deactivating (`{"active": false}`) cancels the tenant's waiting jobs (`cancelled`), lets running jobs finish and keeps all data; enqueue and `PUT /worklist` for an inactive tenant answer `409 TENANT_INACTIVE`, and reactivating does not bring cancelled jobs back, so OneBox must enqueue again.
+
+Deactivating keeps the data. The crawler cancels the tenant's waiting jobs and refuses new crawls and pushes (`409 TENANT_INACTIVE`) (MT-23, done). The token keeps working for reads.
 
 ### 3.5 `POST /api/integration/v1/tenants/{site_id}/token:rotate` — regenerate
 
