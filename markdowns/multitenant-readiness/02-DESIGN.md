@@ -229,7 +229,7 @@ Karena tidak ada self-healing dari crawler, **deaktivasi bergantung pada retry q
 
 `ApiClientService.issue/rotate/revoke` sudah ada di crawler; yang ditambahkan hanya endpoint yang dipanggil OneBox, sehingga CLI `manage_api_client.py` tidak dibutuhkan.
 
-**Kunci provisioning.** Endpoint `/tenants` tidak bisa memakai token tenant (tenantnya belum ada). Dibutuhkan **satu kunci platform** OneBox → crawler dengan scope `tenants:write`:
+**Kunci provisioning.** Endpoint `/tenants` tidak bisa memakai token tenant (tenantnya belum ada). Dibutuhkan **satu kunci platform** OneBox → crawler (bukan `ApiClient`; tidak terikat company):
 - Kunci mentah disimpan di config OneBox (P5); crawler menyimpan **hash**-nya di env (`ONEBOX_PROVISIONING_KEY_HASH`) — satu-satunya secret terkait OneBox di crawler, dan itu pun hanya hash.
 - Kunci ini **tidak** bisa membaca review atau mengirim worklist tenant mana pun.
 
@@ -248,10 +248,14 @@ Authorization: Bearer <kunci provisioning>
 
 201 Created (baru) / 200 OK (sudah ada)
 {
-  "company_id": 12,
-  "site_id": 177,
-  "is_active": true,
-  "token": {"key_id": "vocak_…", "secret": "vocsk_…"}     ← hanya saat dibuat atau rotate
+  "data": {
+    "company_id": 12, "site_id": 177, "site_name": "Site Testing",
+    "is_active": true, "deactivated_at": null, "created": true,
+    "worklist": {"snapshot_version": null, "applied_at": null, "items": 0, "last_error": null},
+    "credential": {"key_id": "…", "last_used_at": null, "expires_at": null},
+    "token": {"key_id": "…", "value": "voc_<env>_<key_id>.<secret>", "scopes": ["…"]}   ← hanya saat token baru terbit (POST pertama / rotate); selain itu null
+  },
+  "meta": {"api_version": "v1", "request_id": "…"}
 }
 ```
 
@@ -259,12 +263,15 @@ Authorization: Bearer <kunci provisioning>
 GET /api/integration/v1/tenants/177
 Authorization: Bearer <kunci provisioning>
 
-200 {"site_id": 177, "company_id": 12, "is_active": true, "weight": 1,
-     "worklist": {"snapshot_version": 42, "applied_at": "...", "items": 12},
-     "token": {"key_id": "vocak_…", "last_used_at": "..."}}
+200 {"data": {"site_id": 177, "company_id": 12, "is_active": true, ...,
+              "worklist": {"snapshot_version": 42, "applied_at": "...", "items": 12, "last_error": null},
+              "credential": {"key_id": "…", "last_used_at": "...", "expires_at": null}},
+     "meta": {...}}          ← tidak pernah memuat token mentah
 ```
 
-Scope token tenant: `reviews:read`, `crawl:read`, `crawl:write`, `analysis:write`, `worklist:write`.
+Scope token tenant: `reviews:read`, `crawl:read`, `crawl:enqueue`, `analysis:write`, `worklist:write` (nama sesuai scope yang sudah dipakai router; `worklist:write` baru).
+
+Error: `401 INVALID_PROVISIONING_KEY` · `503 PROVISIONING_NOT_CONFIGURED` · `409 TENANT_MODE_NOT_MANAGED` · `404 TENANT_NOT_FOUND` · `400 INVALID_PARAMETER`.
 
 **Di Setup Parameter OneBox** (usulan, Q-28): token mentah tampil sekali, setelah itu ter-mask + status; tombol Regenerate (rotasi dengan masa tumpang tindih) dan Refresh; status sinkron `menunggu crawler` / `tersinkron (versi N)` / `gagal — mencoba lagi` (Q-29).
 
@@ -292,16 +299,17 @@ Authorization: Bearer <token tenant site 177>
 
 | Respons | Kapan |
 |---|---|
-| `200 {"status":"applied","snapshot_version":42,"upserted":2,"deactivated":0}` | Snapshot diterapkan |
-| `200 {"status":"stale","current_version":43}` | Versi ≤ yang tersimpan — tidak diproses |
-| `422 {"errors":[{"index":1,"field":"external_place_id","code":"required"}]}` | Snapshot invalid — **seluruhnya** ditolak, worklist lama tetap |
-| `409 {"code":"TENANT_INACTIVE"}` | Tenant nonaktif |
-| `401/403` | Token invalid / tanpa scope `worklist:write` |
+| `200 {"data":{"status":"applied","snapshot_version":42,"company_id":12,"site_id":177,"fetched":2,"upserted":2,"deactivated":0,"applied_at":"…"},"meta":{…}}` | Snapshot diterapkan |
+| `200 {"data":{"status":"stale","snapshot_version":43,…},"meta":{…}}` | Versi ≤ yang tersimpan — tidak diproses; `snapshot_version` = versi yang berlaku. **Sukses bagi OneBox** |
+| `400 {"error":{"code":"INVALID_SNAPSHOT","message":"Worklist item 1 is missing external_place_id."}}` (kontrak `/api/integration/` memakai 400, bukan 422) | Snapshot invalid — **seluruhnya** ditolak, worklist lama tetap. Satu pesan (fail-fast); daftar error per item bisa menyusul bila dibutuhkan |
+| `409` kode `TENANT_INACTIVE` / `TENANT_MODE_NOT_MANAGED` / `TENANT_NOT_LINKED` | Tenant nonaktif / crawler bukan mode managed / company tidak terhubung ke site |
+| `400 INVALID_PARAMETER` | Body salah bentuk, versi bukan integer positif, lebih dari 5.000 item |
+| `401 INVALID_SERVICE_TOKEN` / `403 INSUFFICIENT_SCOPE` | Token invalid / tanpa scope `worklist:write` |
 
-**Aturan pemrosesan di crawler:**
+**Aturan pemrosesan di crawler** (terimplementasi di `WorklistSyncService.apply_snapshot`, MT-13):
 1. **Tenant dari token**, tidak ada `site_id` di body — site 177 tidak bisa mengirim worklist atas nama site 169.
 2. **Full snapshot:** item di snapshot di-upsert; target tenant itu yang **tidak ada** di snapshot di-soft-deactivate (data tetap, berhenti di-crawl). Sama dengan `_apply` sekarang.
-3. **Versi monoton:** `snapshot_version` per tenant disimpan; versi ≤ tersimpan → `stale`. Asal versi → Q-33 (usulan: counter per site di OneBox).
+3. **Versi monoton** (integer ≥ 1; `stale` = sukses bagi OneBox, termasuk saat kiriman diulang): `snapshot_version` per tenant disimpan; versi ≤ tersimpan → `stale`. Asal versi → Q-33 (usulan: counter per site di OneBox).
 4. **Atomik per tenant:** satu transaksi dengan row lock pada state tenant; dua kiriman bersamaan diserialkan, versi tertinggi menang.
 5. **Validasi sama dengan sekarang** (`_validate_payload`: `kind`, `external_place_id` wajib, tanpa duplikat, `onebox_target_id` unik).
 

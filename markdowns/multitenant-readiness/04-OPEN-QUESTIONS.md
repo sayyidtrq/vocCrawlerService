@@ -8,10 +8,10 @@ tags:
   - multitenant-readiness
   - open-questions
 status: living
-updated: 2026-10-21
+updated: 2026-10-26
 owner: Sayyid
-open_count: 18
-answered_count: 16
+open_count: 21
+answered_count: 20
 dropped_count: 2
 ---
 
@@ -44,16 +44,19 @@ dropped_count: 2
 | [[#Q-22]] | 🟢 | Observability | Alert apa yang wajib per tenant & lewat kanal apa? | Sayyid / ops | MT-42 | open |
 | [[#Q-23]] | 🟠 | Governance | ADR-0006 diratifikasi Pak Agung — kapan & format? | Sayyid | MT-01, E8 | open |
 | [[#Q-25]] | 🟠 | Istilah | "Proxy check" maksudnya apa? | Sayyid | MT-01 | open |
-| [[#Q-26]] | 🔴 | Round robin | Bobot tenant: sumbernya, rumusnya, defaultnya? Ada batas konkurensi per tenant? | Sayyid / product | MT-40 | open |
+| [[#Q-26]] | 🟠 | Round robin | Weight is decided (number from OneBox, Plus = 2). Still open: per-tenant concurrency cap, `regular_delta` before `initial_backfill`. | Sayyid | MT-40 | partial |
 | [[#Q-28]] | 🟠 | Keamanan | Token di Setup Parameter: siapa yang boleh lihat & regenerate? | Sayyid / security | MT-31 | proposed |
 | [[#Q-29]] | 🟠 | Reliability | Crawler mati saat paket diaktifkan — OneBox retry bagaimana? | Sayyid | MT-30 | proposed |
 | [[#Q-30]] | 🟢 | AI/ML | Setting per tenant (kategori ML): disimpan di mana & dikirim lewat apa? | Product / ML | MT-44 | open |
 | [[#Q-31]] | 🔴 | Inventaris | Apa saja yang sudah diimplementasi/diubah di OneBox untuk multisite? | Sayyid (lanjutan MT-03) | Fase 3 | partial |
 | [[#Q-32]] | 🔴 | Reliability | Outbox/queue OneBox untuk push worklist & provisioning: pakai apa (RabbitMQ, tabel DB)? | Sayyid | MT-33, MT-35 | partial |
 | [[#Q-33]] | 🟠 | Kontrak | `snapshot_version`: counter per site di OneBox, atau `generated_at` + hash? | Sayyid | MT-13, MT-32 | proposed |
-| [[#Q-34]] | 🟠 | Biaya | Batas akun Apify bersama (concurrent runs, plafon bulanan) & alert apa? | Sayyid (cek akun Apify) | MT-40, MT-41 | open |
-| [[#Q-35]] | 🔴 | Entitlement | Apa definisi "paket VoC aktif" — benefit yang mana yang jadi gerbang tenant? | Sayyid / product | MT-30, MT-32 | open |
+| [[#Q-34]] | 🟠 | Biaya | Apify account is free now, moving to the $19 plan. Still open: concurrent-run limit and monthly cap on the new plan, alerts. | Sayyid (check Apify account) | MT-40, MT-41 | partial |
 | [[#Q-36]] | 🟠 | Kredensial | Token tenant disimpan di level site (Setting) atau disalin ke tiap Connection cabang? | Sayyid | MT-30, MT-31 | proposed |
+| [[#Q-37]] | 🟠 | Quota | Apify quota unit is assumed to be reviews per month (volumes given). Still open: what the Plus "AI credit" is. | Sayyid / product | MT-30, MT-41 | partial |
+| [[#Q-38]] | 🔴 | Quota | Who enforces the per-tenant quotas, and when? | Sayyid | MT-30, MT-41 | proposed |
+| [[#Q-42]] | 🟠 | Pricing | Do competitor targets count toward the 10 purchased locations? They cost Apify like any other target. | COO / product | MT-30, MT-41 | open |
+| [[#Q-43]] | 🟠 | Quota | The flat Jev budget ($10 Default) does not scale with locations: a heavy 310-location backfill needs about $18. Proposed: $0.25 per location per month, floor $10. | Sayyid / product | MT-30 | proposed |
 
 ### Sudah terjawab
 
@@ -75,6 +78,10 @@ dropped_count: 2
 | [[#Q-11]] | Akun & biaya Apify | **Satu akun Apify milik platform**, anonim bagi tenant; tidak ada akun/rotasi/top-up per tenant. Biaya tetap **dicatat per tenant** (atribusi) untuk harga VoC | Sayyid (chat) | 2026-10-21 |
 | [[#Q-07]] | Gerbang paket VoC | Tidak ada lagi panggilan crawler → `VocWorklist`. OneBox hanya provisioning & push untuk site berpaket VoC aktif; paket mati → `PATCH active=false` | Desain opsi D | 2026-10-21 |
 | [[#Q-16]] | Pemicu pembaruan worklist | OneBox push snapshot saat paket aktif, cabang/kompetitor berubah, tombol Refresh, dan scheduled push; ketinggalan dicek lewat `GET /tenants/{site_id}` | Desain opsi D | 2026-10-21 |
+| [[#Q-35]] | Active VoC package | Active = the tenant has a VoC package, **Default** or **Plus**. Default: review, scrape, sched, comp (not built yet), ticket, AI analysis with Jev. Plus: Default + AI summary with OpenAI + auto reply (soon). Quotas per tenant per month: Default Jev $10 + Apify 100,000; Plus Jev $20 + Apify 500,000 + AI credit. Values may change. | Sayyid (chat) | 2026-10-26 |
+| [[#Q-39]] | Does the crawler need the package? | No. OneBox sends a numeric weight (Default 1, Plus 2); the crawler stores a number only | Sayyid (chat) | 2026-10-26 |
+| [[#Q-40]] | Jev price per token | Jev 1.13 by TypeSafe: $0.042 per 1M input tokens, $0 output. Kept in OneBox config | Sayyid (chat) | 2026-10-26 |
+| [[#Q-41]] | Does the first backfill count against the Apify quota? | Yes, as a separate bucket: backfill cap = max(100,000, 2,500 × locations), lifetime per tenant; operating cap = 2,000 per location per month | Sayyid (chat, measured on HGA) | 2026-10-26 |
 
 ### Di-drop
 
@@ -176,6 +183,7 @@ dropped_count: 2
 
 - **Jawaban (Sayyid, 2026-10-21):** perubahan desain — Apify dipakai lewat **satu akun milik platform**. Tidak perlu rotate akun dan tidak perlu mengisi kredit per tenant. Dari sisi user/tenant, engine-nya **anonim**: tenant tidak tahu ada Apify di belakang dan tidak pernah memberi akun apa pun.
 - **Perkiraan angka (Sayyid):** harga VoC ± **Rp200.000 per lokasi**; $20 kredit Apify ≈ ± **100.000 review**.
+- **Pricing update (COO via Sayyid, 2026-10-26, latest proposal):** **Rp2,000,000 per month** for a package of **10 locations**, plus **Rp200,000 per month for each additional location**. The Rp200,000-per-location figure is therefore per month, and revenue is `2,000,000 + 200,000 × max(0, locations − 10)` a month. Per 1,000 reviews the variable cost is about $0.24 (Rp 4,235 at 17,500) for Default, so the minimum package keeps variable cost near 1–2% of revenue in steady state.
 - **Turunan desain:**
   - `ApifyTokenPool` multi-akun dengan rotasi saat *exhausted* tidak lagi dibutuhkan; cukup `APIFY_API_TOKENS` berisi **satu** token (pool dengan satu token sudah didukung kode, jadi tidak ada perubahan kode wajib). Logika exhausted tidak dihapus — kegagalan akun tetap harus muncul sebagai error jelas, bukan crawl diam-diam berhenti.
   - Tenant tidak punya kredensial atau konfigurasi Apify; tidak ada field Apify di provisioning, Setup Parameter, maupun worklist.
@@ -196,6 +204,7 @@ dropped_count: 2
 - **Jawaban sebagian (Sayyid, 2026-10-21):** tenant = company di OneBox, diasumsikan **enterprise / tersebar luas** (contoh: Pertamina, Hermina, Kopi Kenangan). Perkiraan **maksimum ± 100 lokasi per tenant × ± 1.000 review per lokasi**; rata-rata lebih kecil (± **500 review per lokasi**).
 - **Hitungan kasar per tenant terbesar:** backfill awal ± 100.000 review → dengan perkiraan di [[#Q-11]], ± $20 kredit Apify.
 - **Sisa:** berapa tenant aktif dalam 6–12 bulan, dan berapa review **baru** per hari per lokasi (menentukan beban delta harian, bukan hanya backfill).
+- **Update (Sayyid, 2026-10-26):** initial pull about 100,000 reviews per site; ongoing about **5,000–10,000 reviews per site per month**; about **10–15 sites** (not branches) expected, COO still to confirm. Rough load: 50,000–150,000 new reviews a month across all tenants, plus about 100,000 per newly onboarded site. The backfill, not the delta, is the load that needs the concurrency cap ([[#Q-26]]).
 
 ### Q-14
 
@@ -247,7 +256,12 @@ dropped_count: 2
 **`company_id` Hermina per environment untuk backfill `onebox_site_id`?**
 
 - Migration MT-10 mengisi dari `worklist_sync_states.site_id`, tetap perlu dicek data nyata per env (dev/staging/prod), termasuk company sisa uji/demo.
-- **Jawaban:** _belum_
+- **Dev answered (Sayyid, 2026-10-26, queried `hermina_crawler`):** Hermina is **company 3 (`HGA`)**: site 169, 307 items, last sync 2026-10-22, 26 active tokens. MT-10 left every `onebox_site_id` empty on purpose because site 169 appeared for two companies (3 and 16). Company 16 `Puskesmas Kota Depok` is a *group* of the debug site, not a tenant (see `voc-industry-taxonomy-decisions`); it held only a user and a sync-state row.
+  - Applied manually in dev: `onebox_site_id = 169` on company 3; company 16 deactivated (not deleted). Verified.
+  - Left alone: company 2 `Hermina Kemayoran` (60 reviews, 1 location, 2 fetch logs: real old data), company 1 `Default Company` (1 token), companies 7 `a` and 15 `string` (API test leftovers).
+  - Check query: `companies` LEFT JOIN `worklist_sync_states`, plus a per-table row count by `company_id`.
+- **Still open:** staging and prod. Run the same query there before applying MT-10.
+- **Jawaban:** _sebagian_ (dev done)
 
 ### Q-22
 
@@ -279,7 +293,11 @@ dropped_count: 2
 - **Pilihan sumber bobot:** tier paket VoC · jumlah lokasi aktif · diatur manual di Setup Parameter OneBox · kombinasi.
 - **Pertanyaan lanjutan:** perlukah **batas konkurensi per tenant** (mis. maks 2 job berjalan per tenant) supaya backfill satu tenant besar tidak mengambil semua worker? Perlukah job `regular_delta` didahulukan dari `initial_backfill`?
 - **Usulan default:** bobot `1` untuk semua tenant sampai ada aturan bisnis; batas konkurensi per tenant = `ceil(jumlah_worker / 2)`.
-- **Jawaban:** _belum_
+- **New input (2026-10-26):** packages now exist ([[#Q-35]]). Option: weight from package, Default 1 and Plus 2, sent by OneBox as a number ([[#Q-39]]).
+- **Answer (Sayyid, 2026-10-26):** yes, weight comes from the package as a number: **Default 1, Plus 2**, set in OneBox config. The crawler stores the integer (`companies.weight`, MT-40).
+- **Implemented (MT-40, commit e18fc8e):** weight is stored on `companies.weight` and accepted on `POST/PATCH /tenants`; the cap is the setting `CRAWL_MAX_CONCURRENCY_PER_TENANT`, **default 0 = off**; delta runs before backfill inside a tenant. Under contention a worker may find no job and retries at its next poll.
+- **Still open:** the value of the per-tenant concurrency cap (proposal: `ceil(workers / 2)`) and whether `regular_delta` runs before `initial_backfill` (proposal: yes). With 10–15 tenants and a 100,000-review backfill per new site ([[#Q-13]]), the cap matters more than the weights.
+- **Jawaban:** _sebagian_
 
 ### Q-27
 
@@ -347,6 +365,7 @@ dropped_count: 2
 - **Usulan:** counter integer per site di OneBox yang naik setiap kali cabang/kompetitor site itu berubah. Lebih aman daripada timestamp (jam server bisa berbeda; dua perubahan bisa di detik yang sama).
 - **Alternatif:** `generated_at` + hash isi snapshot (tanpa kolom baru; hash sama → crawler balas `unchanged`).
 - **Aturan crawler:** versi ≤ versi tersimpan → `200 {"status": "stale"}` tanpa perubahan.
+- **Sudah terimplementasi (MT-13):** crawler mensyaratkan **integer positif yang naik terus** (`bigint`). Opsi counter per site cocok langsung. Opsi alternatif `generated_at` + hash **tidak** didukung oleh implementasi ini; bila dipilih, perlu perubahan di `apply_snapshot` dan migration (menyimpan hash, bukan integer).
 - **Jawaban:** _menunggu konfirmasi usulan_
 
 ### Q-34
@@ -356,17 +375,45 @@ dropped_count: 2
 - **Konteks:** dengan satu akun platform ([[#Q-11]]), semua tenant berbagi batas akun Apify: jumlah run bersamaan, memori total, dan plafon pengeluaran bulanan. Kode saat ini sudah membedakan batas konkurensi dari kredit habis (commit `b5de735`, `673db8a`).
 - **Yang perlu dicek:** paket akun Apify yang dipakai · maksimum run bersamaan · apakah ada plafon pengeluaran bulanan dan apa yang terjadi saat tercapai · kanal alert ([[#Q-22]]).
 - **Kaitan desain:** `CRAWL_MAX_CONCURRENCY_PER_TENANT` dan jumlah total worker harus ≤ batas run bersamaan akun, kalau tidak weighted round robin hanya memindahkan antrean ke sisi Apify.
-- **Jawaban:** _belum_
+- **Update (Sayyid, 2026-10-26):** the Apify account is on the **free plan now and will move to the $19 plan**. Concurrent-run limit and monthly spend cap on the new plan are not recorded yet: read them after the upgrade from `GET https://api.apify.com/v2/users/me/limits` (run it yourself with the token; do not paste the token).
+- **Risk to check:** with the earlier estimate of about $20 per 100,000 reviews ([[#Q-11]]), one new site's backfill may use a whole month of a $19 plan's usage, and 10–15 sites add 50,000–150,000 reviews a month ([[#Q-13]]). Confirm what usage the $19 plan includes before onboarding more than one large tenant.
+- **Cost model from the Q-41 caps (2026-10-26, `$0.20` per 1,000 fetched is still an estimate):** expected operating use is tiny, about 4,500–45,000 reviews a month for 15 tenants of 10–100 locations, which is $0.9–$9 of Apify. The cost is one-time backfill: typical $15–$154 and heavy $42–$418 across 15 tenants. HGA's remaining backfill is about $20 typical and $74 heavy. If every tenant hit both caps the Apify bill would be $60–$600 a month plus $300–$750 one-time.
+- **Proposed plan (awaiting confirmation):**
+  1. Read the real limits right after the upgrade with `GET https://api.apify.com/v2/users/me/limits` (run it yourself; do not paste the token). Steady state needs only about $1–$10 a month, so the plan matters for the backfill spikes and the concurrent-run limit.
+  2. Set the Apify monthly usage limit to about $50 while HGA backfills, then about $25 in steady state; alert at 70%. Raise it per onboarding batch.
+  3. Onboard one heavy tenant at a time and none while the account is above 50% of its monthly limit.
+  4. Keep total workers at or below the account's concurrent-run limit; per-tenant cap `ceil(workers / 2)` ([[#Q-26]]).
+  5. After 30 days, reconcile the Apify bill against `sum(total_fetched)` and replace the $0.20 estimate.
+- **Apify plan facts (read from apify.com/pricing on 2026-10-26, not from the Apify account):**
+
+  | Plan | Monthly billing | Annual billing | Prepaid usage / month | Actor RAM | Max concurrent runs | Compute unit |
+  |---|---|---|---|---|---|---|
+  | Free | $0 | $0 | $5 | 16 GB | 5 | $0.20 |
+  | Starter | $19 | **$17 / month** ($204 a year, 10% off) | $19 | 64 GB | 32 | $0.20 |
+  | Scale | $199 | $179 / month | $199 | 256 GB | 128 | $0.16 |
+
+  - Prepaid usage **does not roll over**: unused credit expires at the end of each billing cycle.
+  - On a **paid plan** extra usage is billed as overage up to the usage limit set in Billing; on the **Free plan access is blocked** until the next cycle once the $5 is gone (every tenant would stop).
+  - Upgrades are prorated and a plan can be changed or cancelled at any time.
+  - The cost per 1,000 reviews depends on the Actor's own pricing (pay per event or per usage), which the pricing page does not show; the $0.20 per 1,000 estimate still needs the reconciliation in step 5.
+- **Plan recommendation (2026-10-26):** Starter, billed **monthly for the first 2–3 months**, then switch to annual ($17) once the real cost per 1,000 reviews and steady spend are known. Reason: the saving is only $24 a year, steady use ($1–$10 a month) leaves most of the $19 prepaid to expire, and the real value of Starter is no hard block plus 32 concurrent runs instead of 5. Free is too risky: 15 tenants of 100 locations would use about $9 a month and be blocked after $5. Scale is not needed.
+- **Jawaban:** _sebagian_
 
 ### Q-35
 
-**Apa definisi "paket VoC aktif" — benefit mana yang menjadi gerbang tenant?**
+**What defines an "active VoC package", i.e. which benefit gates a tenant?**
 
-- **Temuan (`[code]`):** di OneBox tidak ada satu "paket VoC". Yang ada enam benefit terpisah: `VOC_AI` (analisis review), `VOC_REVIEW` (review per bulan), `VOC_SCRAPE` (crawl per hari), `VOC_SCHED` (jadwal aktif), `VOC_COMP` (kompetitor, on/off), `VOC_TICKET` (tiket, on/off). Tiap benefit dibeli sebagai item bernilai kuota dan menambah kuota langsung (belum ada pembayaran).
-- **Pertanyaan:** event apa yang berarti "tenant aktif" untuk crawler? Usulan: **tenant aktif = `VOC_SCRAPE` aktif dan kuotanya > 0** (crawl adalah yang dilakukan crawler); `VOC_AI` hanya mengatur analisa, bukan keberadaan tenant. Dan "nonaktif" = `VOC_SCRAPE` habis/dicabut?
-- **Detail yang perlu diputuskan:** kuota harian habis (`VOC_SCRAPE` per hari) **bukan** nonaktif — hanya enqueue yang ditolak oleh OneBox; nonaktif ke crawler hanya saat benefit dicabut/kedaluwarsa. Dan: tenant yang baru membeli `VOC_SCRAPE` tapi belum punya cabang tetap didaftarkan (snapshot kosong).
-- **Jebakan:** gunakan `hasBenefit`, bukan `verifyBenefit()` yang menaikkan `SiteBenefit.Quantity` ([[ADR-0001-ownership-inversion]]).
-- **Jawaban:** _belum_
+- **Answer (Sayyid, 2026-10-26):** a tenant is active when it has a VoC package. There are two packages:
+
+| Package | Features | Monthly quota per tenant |
+|---|---|---|
+| **Default** | review, scrape, sched, comp (not built yet), ticket, AI analysis with Jev | Jev: **$10** · Apify: **100,000** |
+| **Plus** | everything in Default + AI summary with OpenAI + auto reply (soon) | Jev: **$20** · Apify: **500,000** · plus AI credit |
+
+- These values are the current target and may change, so they must be configuration in OneBox, not constants in code.
+- **Follow-ups:** unit of the Apify quota and meaning of "AI credit" → [[#Q-37]]; who enforces quotas → [[#Q-38]]; whether the crawler needs the package → [[#Q-39]]; Jev price per token → [[#Q-40]]. The package may also drive round-robin weights → [[#Q-26]].
+- **Earlier context:** OneBox implements this as six separate benefits (`VOC_AI`, `VOC_REVIEW`, `VOC_SCRAPE`, `VOC_SCHED`, `VOC_COMP`, `VOC_TICKET`); a package is a bundle of those. Gate checks must use `hasBenefit`, not `verifyBenefit()` (which increments `SiteBenefit.Quantity`).
+- **Update (2026-10-26):** the Apify quota numbers above (100,000 and 500,000) are replaced by the two-bucket formula in [[#Q-41]]. The Jev dollar figures are under review in [[#Q-43]].
 
 ### Q-36
 
@@ -375,3 +422,89 @@ dropped_count: 2
 - **Temuan (`[code]`):** token baca sekarang ada di `Connection.Options.service_token`, dan satu Connection = satu cabang. `VocCrawlQueue::clientForSite()` mengambil Connection cabang pertama yang layak, jadi secara efektif token diperlakukan sebagai milik site. Rotasi token berarti mengubah semua Connection site itu bila disalin.
 - **Usulan:** simpan satu token per site di tempat level site (mis. baris `Setting` per site, pola `VocKelompokScope`); `clientForSite()` membacanya dulu dan jatuh ke `Connection.Options.service_token` selama masa transisi. Regenerate dari Setup Parameter cukup mengubah satu tempat.
 - **Jawaban:** _menunggu konfirmasi usulan_
+
+### Q-37
+
+**What unit are the Apify quotas in, and what is the Plus "AI credit"?**
+
+- **Context:** Q-35 gives Apify quotas of 100,000 (Default) and 500,000 (Plus). The earlier estimate was "$20 ≈ 100,000 reviews", so the number most likely means **reviews fetched per month**, but it could also be read as a currency amount.
+- **Assumption until answered:** reviews fetched per tenant per calendar month.
+- **Input (Sayyid, 2026-10-26):** real volumes are about 100,000 reviews for the initial pull and 5,000–10,000 per site per month ([[#Q-13]]). The quotas (100,000 / 500,000) are far above the monthly delta, which supports reading them as review counts. The unit itself was not stated; the first-pull overlap is [[#Q-41]].
+- **Also unclear:** "Plus ... with AI credit": is that an OpenAI budget for AI summary, separate from the Jev $20? Amount and unit?
+- **Answer:** _partial_: unit still assumed; "AI credit" pending
+
+### Q-38
+
+**Who enforces the per-tenant quotas, and when?**
+
+- **Proposal:** OneBox enforces, because it owns entitlements (ADR-0001/0002) and is the one that triggers crawls and analyses.
+  - **Jev budget:** the analysis API already returns `tokens_used` per run (`AnalysisService` result, passed through by `integration_analysis`). OneBox converts tokens to dollars ([[#Q-40]]), adds them to the tenant's monthly total, and refuses to trigger analysis once the budget is reached.
+  - **Apify quota:** OneBox refuses to enqueue a crawl once the tenant's reviews fetched this month reach the quota. The crawler already records `company_id` + `total_fetched` per run in `fetch_logs`; it would expose the monthly total in `GET /api/integration/v1/tenants/{site_id}` (small crawler change, MT-41) so OneBox does not need to aggregate it itself.
+  - **Accepted overshoot:** a batch that is already running is not cut off mid-way, so a tenant can exceed its quota by at most one batch.
+- **Alternative (not recommended):** the crawler enforces. It would need the quotas, the price list and the package, which duplicates entitlement outside OneBox.
+- **Update (2026-10-26, from [[#Q-41]]):** the Apify quota is now two buckets (backfill lifetime, operating monthly). The crawler's part is small: expose `backfill_fetched_total` and `operating_fetched_month` in `GET /api/integration/v1/tenants/{site_id}` (MT-41); OneBox holds the caps and does the alerting and pausing. OneBox must send the purchased location count.
+- **Also needed (not per tenant):** an alert on the shared Apify account itself (for example at 70% of its monthly usage), because generous per-tenant caps no longer protect it ([[#Q-34]]).
+- **Answer:** _partial_: OneBox enforcement still proposed, awaiting confirmation
+
+### Q-39
+
+**Does the crawler need to know a tenant's package (Default / Plus)?**
+
+- **Proposal:** no, not for features. OneBox is the one calling AI summary and auto reply, so it gates those by package itself, and the crawler stays package-agnostic.
+- **Only exception:** if round-robin weights come from the package ([[#Q-26]], e.g. Default 1, Plus 2), OneBox sends the weight (not the package name) when registering or updating the tenant. The crawler stores a number, not business rules.
+- **Answer (Sayyid, 2026-10-26):** confirmed. The weight (Default 1, Plus 2) is the only package-derived value the crawler receives ([[#Q-26]]).
+
+### Q-40
+
+**What is the Jev price per token, and where is it configured?**
+
+- **Context:** the Jev budget is in dollars ([[#Q-35]]), but the crawler reports tokens (`tokens_used`, `token_usage.prompt_tokens/completion_tokens`). Something must convert them.
+- **Proposal:** the price (per 1M input and output tokens) is OneBox configuration, next to the package quotas, so a price change needs no deploy. The repo already has a reference: `scripts/simulate_onebox_to_ai.py` / commit `f17ae22` ("correct Jev AI per-million token pricing formula").
+- **Answer (Sayyid, 2026-10-26):** Jev 1.13 by TypeSafe costs **$0.042 per 1M input tokens** ($42 per billion) and **$0.00 for output tokens**. Keep both prices in OneBox configuration.
+- **Consequence (corrected 2026-10-26; the first version said "billion" and was 1,000× too large):** $10 buys about **238 million** input tokens and $20 about 476 million. At roughly 1,000 input tokens per analyzed review (`[asumsi]`: about 400 for the review plus about 600 for the taxonomy prompt, [[voc_taxonomy_tagging_reply_master_plan]]; the spike has not measured it) that is about 238,000 reviews for $10, so a Default tenant analyzing its full 100,000 Apify quota spends about $4.20 of the $10. The Jev budget is therefore not binding in normal use, but repeated re-analysis could reach it, so it is still worth enforcing ([[#Q-38]], [[#Q-41]]).
+
+### Q-41
+
+**Does the first backfill count against the Default monthly Apify quota?**
+
+- **Context:** the Default quota is 100,000 Apify per month ([[#Q-35]]), and a new site's initial pull is about 100,000 reviews ([[#Q-13]]). Counted as ordinary usage, the first backfill alone uses the whole first month, and an enforcing OneBox ([[#Q-38]]) would block the tenant's regular delta right after onboarding.
+- **Options:** (a) exclude `initial_backfill` from the monthly quota; (b) count it, with a one-time larger allowance in the first month; (c) count it as is and size the Default quota above 100,000.
+- **Decision (Sayyid, 2026-10-26):** count the backfill against the quota (option b or c), not exclude it. Allowance size asked of Claude.
+- **Proposed allowance (awaiting confirmation):** option (b): a one-time onboarding allowance of **100,000 reviews** on top of the monthly quota, valid for the **first 30 days after activation** (not the calendar month). Default first-30-days cap 200,000, then 100,000; Plus 600,000 then 500,000 (the extra is optional). Stored in OneBox config as `onboarding_allowance_reviews`. Basis: worst-case first pull is 100 locations × 1,000 = 100,000 plus up to 10,000 delta, so 110,000 is the floor ([[#Q-13]]). Option (c), a permanent 200,000 Default quota, was rejected: steady use is 5,000–10,000 a month, so it would double the maximum cost exposure for every tenant every month for no benefit.
+- **Cost check:** at about $20 per 100,000 reviews ([[#Q-11]]), a worst-case backfill for 15 sites is about $300 of Apify usage (typical about $150), more than a $19 plan covers at once, so onboarding should be staggered ([[#Q-34]]).
+- **Revised proposal (2026-10-26, after the COO pricing in [[#Q-11]]):** make the onboarding allowance scale with the purchased locations instead of a flat 100,000: **1,000 reviews × purchased locations** (1,000 is the per-location maximum in [[#Q-13]]), valid for the first 30 days. A 10-location tenant (Rp2,000,000 a month) gets 10,000, worst-case cost about Rp 42,000; a 100-location tenant (Rp20,000,000 a month) gets 100,000. The flat 100,000 was sized for the largest tenant and would be 10× oversized for the entry package (up to Rp 424,000 of cost, 21% of its Rp2,000,000 a month). Needs the location count from OneBox on each snapshot or tenant update.
+- **Earlier proposal (not chosen):** (a). If `fetch_logs` or the job rows carry the job type (to verify in MT-41), the crawler can report backfill and delta totals separately in `GET /api/integration/v1/tenants/{site_id}`, and OneBox applies the quota to the delta only.
+- **Measured on HGA (dev `hermina_crawler`, 2026-10-26; company 3, 310 locations, only 33 finished backfill):**
+  - `full_backfill`: 75 runs, 44 locations, 61,248 fetched (53,169 new), **1,392 fetched per location**.
+  - `delta`: 181 runs, 46 locations, 1,586 fetched, about **27–36 per location per month** (use 30).
+  - Stored reviews per location: average 447, median 65, maximum 4,458. The 44 backfilled locations hold 84% of all stored reviews.
+  - Backfill is about 17–46 months of operating volume; operating cost is about 0.06% of revenue.
+  - Correction: the Context line above ("the first backfill alone uses the whole first month") holds only for a heavy 100-location tenant. A 10-location first pull is at most about 14,000.
+- **Answer (Sayyid, 2026-10-26):** two separate buckets, counted by crawl type from `fetch_logs.metadata->>'coverage'`.
+  - **Backfill bucket:** `max(100,000, 2,500 × purchased locations)` fetched reviews, **lifetime per tenant** (HGA's backfill has run 5+ weeks, so no monthly reset). Consumed by `full_backfill`. Each location added later adds 2,500. A re-backfill consumes it, so a "re-crawl everything" is blocked until an admin raises the cap.
+  - **Operating bucket:** `2,000 × purchased locations` fetched reviews **per month** (about 67× the observed 30). Consumed by `delta` and `date_window`.
+  - **Behaviour:** the quota is a circuit breaker, not a limiter. Operating: alert at 50%, pause new crawls at 100% and notify an admin, with a manual raise. Backfill: alert at 80%, pause at 100%. Both are enforced by OneBox ([[#Q-38]]).
+  - **Cost at cap:** operating 4.2% of monthly revenue; backfill (one-time) 5.3% for tenants above 40 locations and up to 21% of one month's revenue for a 10-location tenant (the 100,000 floor).
+  - **Replaces** the flat Apify numbers in [[#Q-35]] (Default 100,000, Plus 500,000). Plus is not decided: its price is unknown.
+- **Still to verify (MT-41):** every new run records `coverage` (older runs show none, 732 runs / 16,040 fetched).
+- **Limit:** one tenant, a hospital group, 33 of 310 locations finished. Other industries (SPBU, coffee) may receive reviews much faster; re-measure after the remaining backfills and a full month of delta (about the end of November 2026).
+
+### Q-42
+
+**Do competitor targets count toward the 10 purchased locations?**
+
+- **Context:** the COO pricing is Rp2,000,000 a month for 10 locations plus Rp200,000 a month per extra location ([[#Q-11]]). The worklist also carries `kind = competitor` targets, and each costs Apify like a location. The competitor feature is not built yet ([[#Q-35]], `comp`).
+- **Options:** (a) competitors are free and only locations are billed; (b) each competitor counts as a location; (c) a separate competitor allowance.
+- **Why it matters:** if (a), cost per tenant can grow with unbilled targets, so the quota and the onboarding allowance ([[#Q-41]]) must count competitor reviews too.
+- **Answer:** _pending_ (COO)
+
+### Q-43
+
+**Should the Jev dollar budget scale with purchased locations?**
+
+- **Context:** the Default Jev budget is a flat $10 a month ([[#Q-35]]); at about 1,000 input tokens per review and $0.042 per 1M tokens ([[#Q-40]]) that is about 238,000 analyzed reviews. A heavy 310-location backfill (about 432,000 reviews, [[#Q-41]]) needs about 432M tokens, or about $18, so analysis would pause partway through the backfill of a Rp62M-a-month tenant. Taxonomy prompts may raise tokens per review to about 2,000, doubling this.
+- **Proposal:** Jev budget = **$0.25 × purchased locations per month, floor $10** (Default). That is 10 locations $10, 100 locations $25, 310 locations about $78, enough for about 6,000 reviews per location at 1,000 tokens (about 3,000 at 2,000 tokens), against a heavy backfill of 1,392 per location. Worst-case cost at the cap is about 2.2% of revenue. Plus: double the rate and floor, to be confirmed with its price.
+- **Check against the Q-41 caps (2026-10-26, 1,000 tokens per review, $0.042 per 1M):** Jev cost if a tenant fills both caps in month 1: 10 locations $5.04, 25 locations $6.30, 50 locations $9.45, 100 locations $18.90, 310 locations $58.59. The proposed budget ($10, $10, $12.50, $25, $77.50) leaves 2.0×, 1.6×, 1.3×, 1.3× and 1.3× headroom.
+- **Behaviour:** alert at 80% of the budget, pause new analysis at 100% with an admin raise; never block ingestion. Rate-limit full re-analysis (rollback and re-run) per tenant, since a loop there is the main way to burn Jev. Measure tokens per review in the taxonomy spike and rescale (for example $0.50 per location) if it is above about 2,000.
+- **Alternative:** drop the dollar budget and derive it from the review caps in [[#Q-41]] (reviews analyzed × tokens × price), since Jev only analyzes reviews that were fetched.
+- **Answer:** _waiting for confirmation_

@@ -79,6 +79,7 @@ _BLANK_USES_DEFAULT_FIELDS = (
     "show_raw_payload",
     "onebox_site_id",
     "onebox_company_id",
+    "onebox_provisioning_key_hash",
     "onebox_worklist_path",
     "onebox_timeout_seconds",
     "onebox_max_retry",
@@ -87,6 +88,8 @@ _BLANK_USES_DEFAULT_FIELDS = (
     "crawl_worker_max_attempts",
     "crawl_worker_poll_seconds",
     "crawl_worker_retry_base_seconds",
+    "crawl_fairness_window_seconds",
+    "crawl_max_concurrency_per_tenant",
     "analysis_llm_max_retries",
     "analysis_llm_retry_backoff_seconds",
     "analysis_circuit_breaker_threshold",
@@ -103,6 +106,8 @@ _INT_FLOORS = {
     "crawl_worker_max_attempts": 1,
     "crawl_worker_poll_seconds": 1,
     "crawl_worker_retry_base_seconds": 1,
+    "crawl_fairness_window_seconds": 1,
+    "crawl_max_concurrency_per_tenant": 0,
     "analysis_llm_max_retries": 0,
     "analysis_circuit_breaker_threshold": 0,
     "absa_timeout_seconds": 1,
@@ -196,6 +201,10 @@ class Settings(BaseModel):
     #          dari OneBox (perilaku lama).
     # managed: tenant didaftarkan OneBox; worklist dikirim OneBox, tidak ditarik.
     onebox_tenant_mode: OneBoxTenantMode = "single"
+    # HMAC (lihat tenant_registry_service.provisioning_key_hash) dari kunci yang dipakai
+    # OneBox untuk mendaftarkan tenant. Hanya hash yang ada di sini; kunci aslinya
+    # hanya di konfigurasi OneBox. Kosong = pendaftaran tenant dinonaktifkan.
+    onebox_provisioning_key_hash: str | None = None
     onebox_worklist_path: str = "/api/VocWorklist"
     onebox_timeout_seconds: int = 30
     onebox_max_retry: int = 3
@@ -207,6 +216,8 @@ class Settings(BaseModel):
     crawl_worker_max_attempts: int = 3
     crawl_worker_poll_seconds: int = 5
     crawl_worker_retry_base_seconds: int = 60
+    crawl_fairness_window_seconds: int = 3600
+    crawl_max_concurrency_per_tenant: int = 0
     # DNGO19-3407: retry sesuai permintaan PBI. Backoff sama polanya dengan
     # OneBoxWorklistClient._backoff (min(8.0, base * 2**attempt)).
     analysis_llm_max_retries: int = 2

@@ -58,7 +58,10 @@ class ApiClientService:
         name: str,
         scopes: list[str] | None = None,
         expires_at: datetime | None = None,
+        session: Session | None = None,
     ) -> IssuedServiceToken:
+        """Terbitkan token. Dengan `session`, baris hanya di-flush; pemanggil yang
+        commit, sehingga token bisa dibuat atomik bersama data lain."""
         normalized_name = name.strip()
         if not normalized_name:
             raise ValueError("name is required")
@@ -78,12 +81,19 @@ class ApiClientService:
             expires_at=expires_at,
         )
 
-        with self.session_factory() as session:
+        if session is not None:
             if session.get(Company, company_id) is None:
                 raise ValueError(f"company_id {company_id} does not exist")
             session.add(client)
-            session.commit()
-            session.refresh(client)
+            session.flush()
+            return IssuedServiceToken(client=client, token=token)
+
+        with self.session_factory() as own_session:
+            if own_session.get(Company, company_id) is None:
+                raise ValueError(f"company_id {company_id} does not exist")
+            own_session.add(client)
+            own_session.commit()
+            own_session.refresh(client)
         return IssuedServiceToken(client=client, token=token)
 
     def verify(self, token: str) -> ApiClient:

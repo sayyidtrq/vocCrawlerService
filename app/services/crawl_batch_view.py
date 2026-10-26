@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -9,12 +11,41 @@ from app.services.crawl_result import (
     stop_reason,
 )
 
+WAITING_JOB_STATUSES = ("queued", "retry_wait", "awaiting_source")
+TERMINAL_JOB_STATUSES = (
+    "succeeded",
+    "partial_success",
+    "skipped",
+    "failed",
+    "cancelled",
+)
+
+
+def refresh_batch_status(session: Session, batch: CrawlBatch, now: datetime) -> None:
+    """Apply the same terminal status precedence for workers and cancellation."""
+    statuses = list(
+        session.scalars(select(CrawlJob.status).where(CrawlJob.batch_id == batch.id))
+    )
+    if any(status not in TERMINAL_JOB_STATUSES for status in statuses):
+        batch.status = "running"
+        return
+    failed = statuses.count("failed")
+    if failed == len(statuses):
+        batch.status = "failed"
+    elif failed:
+        batch.status = "partial_failed"
+    elif "cancelled" in statuses:
+        batch.status = "cancelled"
+    else:
+        batch.status = "completed"
+    batch.finished_at = now
 
 
 def _public_status(status: str) -> str:
     # Run Apify yang diparkir tetap "running" bagi OneBox; status internal ini
     # tidak termasuk kontrak.
     return "running" if status == "awaiting_source" else status
+
 
 def serialize_batch(
     session: Session, batch: CrawlBatch, include_jobs: bool = True
@@ -41,10 +72,7 @@ def serialize_batch(
             "queued",
             "running",
             "retry_wait",
-            "succeeded",
-            "partial_success",
-            "skipped",
-            "failed",
+            *TERMINAL_JOB_STATUSES,
         )
     }
     review_counts = {

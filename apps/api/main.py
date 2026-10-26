@@ -23,6 +23,8 @@ from apps.api.app_api.routers import (
     integration_crawl_jobs,
     integration_reply_suggestion,
     integration_reviews,
+    integration_tenants,
+    integration_worklist,
     pipeline,
     places,
     reviews,
@@ -123,6 +125,8 @@ def create_app() -> FastAPI:
     app.include_router(integration_reply_suggestion.router, prefix="/api")
     app.include_router(integration_crawl_jobs.router, prefix="/api")
     app.include_router(integration_competitor_reviews.router, prefix="/api")
+    app.include_router(integration_tenants.router, prefix="/api")
+    app.include_router(integration_worklist.router, prefix="/api")
     _drop_advertised_422_from_integration_paths(app)
     return app
 

@@ -7,7 +7,7 @@ tags:
   - multitenant-readiness
   - plan
 status: fase-0
-updated: 2026-10-21
+updated: 2026-10-26
 owner: Sayyid
 decision: opsi-D-push-worklist
 related:
@@ -93,7 +93,7 @@ Satu deployment crawler melayani **banyak tenant OneBox** (satu site = satu comp
 | G1 — Istilah & ADR | Q-25 (proxy check), Q-23 | MT-01 | open |
 | G2 — Kondisi OneBox nyata | Q-31, Q-35 | Fase 3 | partial — putaran 1 selesai; definisi gerbang "paket VoC" (Q-35) terbuka |
 | G3 — Outbox OneBox (syarat opsi D) | Q-32 | MT-30, MT-33, MT-35 | partial — **belum ada outbox**, harus dibangun (tabel DB atau RabbitMQ); fallback opsi C bila terlalu mahal |
-| G4 — Bobot round robin | Q-26 | MT-40 | open |
+| G4 — Bobot round robin | Q-26 | MT-40 | partial — weight decided (Default 1, Plus 2); concurrency cap still open |
 | G5 — Usulan yang perlu dikonfirmasi | Q-28, Q-29, Q-33, Q-36 | MT-13, MT-30–33 | proposed |
 
 ## 6. Fase & urutan
@@ -127,10 +127,10 @@ flowchart TD
 | Fase | Isi | Task | Prasyarat | Status |
 |---|---|---|---|---|
 | **0** | ADR-0006, guard refresh lintas tenant, inventaris kode OneBox | MT-01 – MT-03 | — | MT-02 `done`, MT-03 `wip`, MT-01 `todo` |
-| **1** | Migration registry tenant + `snapshot_version`, mode config, `apply_snapshot` | MT-10, MT-11, MT-13 (MT-12 `dropped`) | — | MT-10 `done` (SQLite), MT-11 `done`, MT-13 `todo` |
-| **2** | Endpoint provisioning, `PUT /worklist`, tenant nonaktif; hapus jalur pull di akhir transisi | MT-20 – MT-23 | Fase 1 | `todo` |
+| **1** | Migration registry tenant + `snapshot_version`, mode config, `apply_snapshot` | MT-10, MT-11, MT-13 (MT-12 `dropped`) | — | MT-10 `done` (SQLite), MT-11 `done`, MT-13 `done` (SQLite) |
+| **2** | Endpoint provisioning, `PUT /worklist`, tenant nonaktif; hapus jalur pull di akhir transisi | MT-20 – MT-23 | Fase 1 | MT-20 `done`, MT-21 `done` (SQLite); MT-23 `done`; MT-22 `todo` |
 | **3** | Hook paket VoC, Setup Parameter, builder snapshot + counter versi, job push (queue/retry/debounce), scheduled push + cek versi | MT-30 – MT-33, MT-35 (MT-34 `dropped`) | MT-03, Fase 2, G2, G3 | `blocked` (MT-03) |
-| **4** | Weighted round robin, atribusi Apify, observability, setting tenant | MT-40 – MT-42, MT-44 (MT-43 `dropped`) | Fase 2, G4 | sebagian `todo` |
+| **4** | Weighted round robin, atribusi Apify, observability, setting tenant | MT-40 – MT-42, MT-44 (MT-43 `dropped`) | Fase 2, G4 | MT-40 `done`; MT-41 `done` (quota counters); MT-42 `todo` (Q-22); MT-44 `blocked` (Q-30) |
 | **5** | Test matrix, UAT dev, runbook | MT-50 – MT-52 | Fase 3, Fase 4 (min. MT-40) | `todo` (test bertahap) |
 
 **Prinsip urutan**
@@ -144,7 +144,7 @@ flowchart TD
 | Sisi | Task | Catatan |
 |---|---|---|
 | Crawler (repo ini) | MT-02, MT-10, MT-11, MT-13, MT-20–23, MT-40–42, MT-44, MT-50 | |
-| OneBox (`onecloud`, PHP) | MT-03, MT-30–33, MT-35 | Repo OneBox belum ada di laptop cadangan — butuh setup dulu (sedang diinstal) |
+| OneBox (`onecloud`, PHP) — **handed off 2026-10-26**, see [[05-ONEBOX-HANDOFF]] | MT-03, MT-30–33, MT-35 | Repo OneBox belum ada di laptop cadangan — butuh setup dulu (sedang diinstal) |
 | Keputusan / non-kode | MT-01, MT-51, MT-52 | Ratifikasi Pak Agung untuk ADR-0006 (Q-23) |
 
 ## 8. Gambaran skala (untuk sizing)
@@ -155,7 +155,7 @@ flowchart TD
 | Review per lokasi (maks / rata-rata) | ± 1.000 / ± 500 | Q-13 |
 | Backfill tenant terbesar | ± 100.000 review | turunan |
 | Biaya Apify | $20 ≈ ± 100.000 review (perkiraan); satu akun platform | Q-11 |
-| Harga VoC | ± Rp200.000 per lokasi (perkiraan) | Q-11 |
+| Harga VoC | Rp2.000.000 / bulan untuk paket 10 lokasi; tambahan Rp200.000 / lokasi / bulan (proposal terbaru, COO, 2026-10-26) | Q-11 |
 | Jumlah tenant aktif, review baru per hari | **belum diketahui** | Q-13 |
 
 ## 9. Risiko program
@@ -176,6 +176,9 @@ flowchart TD
 |---|---|---|
 | 2026-10-21 | 0 | Plan dibuat dari spec Opsi C + audit kode crawler. |
 | 2026-10-21 | 0 | Plan ditulis ulang setelah jawaban Sayyid: model provisioning paket VoC, weighted round robin, nol setup manual. 13 pertanyaan terjawab. |
+| 2026-10-22 | 2 | MT-21 selesai di SQLite: `PUT /worklist` dengan token tenant. Sisi crawler untuk opsi D lengkap (kecuali MT-23). Fase 3 (OneBox) kini yang menentukan. |
+| 2026-10-22 | 2 | MT-20 selesai di SQLite: OneBox bisa mendaftarkan tenant dan mendapat token tanpa CLI. Token tenant sudah membawa scope `worklist:write`. Endpoint pembaca snapshot (MT-21) berikutnya. |
+| 2026-10-22 | 1 | MT-13 selesai di SQLite: crawler bisa menerapkan snapshot worklist secara atomik dan berversi. Belum ada endpoint yang memanggilnya (MT-21). Fase 1 tuntas kecuali bukti di Postgres. |
 | 2026-10-22 | 1 | MT-11 selesai: `ONEBOX_TENANT_MODE` (default `single`, perilaku lama utuh). Mode `managed` belum boleh dipakai sampai `PUT /worklist` (MT-21) ada. |
 | 2026-10-22 | 1 | MT-10 selesai di SQLite: `companies` bisa mencerminkan site OneBox dan nonaktif; sync state menyimpan versi snapshot. Postgres belum diuji. |
 | 2026-10-21 | 0 | MT-02 selesai: company asing tidak bisa lagi memicu refresh yang menyalin worklist site lain. Site 177 aman diberi company & token di crawler. |
