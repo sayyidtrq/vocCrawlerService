@@ -7,18 +7,26 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import Settings, get_settings
-from app.db.models import ApiClient, Company, FetchLog, WorklistSyncState
+from app.db.models import (
+    ApiClient,
+    Company,
+    CrawlBatch,
+    CrawlJob,
+    FetchLog,
+    WorklistSyncState,
+)
 from app.db.session import get_session_factory
 from app.services.api_client_service import (
     ApiClientService,
     IssuedServiceToken,
     _secret_hash,
 )
+from app.services.crawl_batch_view import WAITING_JOB_STATUSES, refresh_batch_status
 
 # Token yang dipegang OneBox untuk satu tenant. Nama ini yang membedakannya dari
 # token lain milik company yang sama (mis. yang diterbitkan lewat CLI), jadi
@@ -165,11 +173,7 @@ class TenantRegistryService:
         active: bool | None = None,
         site_name: object | None = None,
     ) -> TenantView:
-        """Ubah status/nama tenant.
-
-        Hanya menandai tenant. Pembatalan job yang menunggu dan penolakan crawl
-        baru untuk tenant nonaktif ditangani terpisah (MT-23).
-        """
+        """Update the tenant and cancel waiting jobs when it is deactivated."""
         site = _validated_site_id(site_id)
         name = _validated_name(site_name) if site_name is not None else None
         with self.session_factory() as session:
@@ -177,8 +181,33 @@ class TenantRegistryService:
             if name is not None:
                 company.name = name
             if active is False and company.is_active:
+                now = datetime.now(timezone.utc)
                 company.is_active = False
-                company.deactivated_at = _now()
+                company.deactivated_at = now
+                batch_ids = set(
+                    session.scalars(
+                        update(CrawlJob)
+                        .where(
+                            CrawlJob.company_id == company.id,
+                            CrawlJob.status.in_(WAITING_JOB_STATUSES),
+                        )
+                        .values(
+                            status="cancelled",
+                            finished_at=now,
+                            last_error_code="TENANT_INACTIVE",
+                            last_error="Tenant was deactivated.",
+                            locked_by=None,
+                            locked_at=None,
+                            lease_expires_at=None,
+                        )
+                        .returning(CrawlJob.batch_id)
+                    )
+                )
+                if batch_ids:
+                    for batch in session.scalars(
+                        select(CrawlBatch).where(CrawlBatch.id.in_(batch_ids))
+                    ):
+                        refresh_batch_status(session, batch, now)
             elif active is True and not company.is_active:
                 company.is_active = True
                 company.deactivated_at = None

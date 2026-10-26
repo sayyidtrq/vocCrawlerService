@@ -11,7 +11,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import Settings, get_settings
-from app.db.models import Competitor, CrawlBatch, CrawlJob, Location
+from app.db.models import Company, Competitor, CrawlBatch, CrawlJob, Location
 from app.db.session import get_session_factory
 from app.services.crawl_batch_view import serialize_batch
 from app.services.crawl_result import CrawlRequestSnapshot
@@ -199,6 +199,16 @@ class CrawlQueue:
                         "Idempotency-Key was already used with a different payload.",
                     )
                 return serialize_batch(session, existing), False
+
+            is_active = session.scalar(
+                select(Company.is_active).where(Company.id == company_id)
+            )
+            if is_active is False:
+                raise CrawlQueueError(
+                    409,
+                    "TENANT_INACTIVE",
+                    "Tenant is inactive; it does not accept new crawl jobs.",
+                )
 
             locations = list(
                 session.scalars(

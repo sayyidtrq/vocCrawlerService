@@ -138,7 +138,16 @@ class CrawlJobResponse(BaseModel):
     onebox_target_id: int | None = None
     competitor_id: int | None = None
     kind: str = "location"
-    status: str
+    status: Literal[
+        "queued",
+        "running",
+        "retry_wait",
+        "succeeded",
+        "partial_success",
+        "skipped",
+        "failed",
+        "cancelled",
+    ]
     attempts: int
     max_attempts: int
     result: dict[str, Any]
@@ -149,7 +158,9 @@ class CrawlJobResponse(BaseModel):
 
 class CrawlBatchDataResponse(BaseModel):
     batch_id: str
-    status: str
+    status: Literal[
+        "queued", "running", "failed", "partial_failed", "completed", "cancelled"
+    ]
     slot: str | None = None
     job_count: int
     counts: dict[str, int]

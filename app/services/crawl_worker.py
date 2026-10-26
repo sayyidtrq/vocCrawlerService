@@ -9,11 +9,16 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import Settings, get_settings
-from app.db.models import Competitor, CrawlBatch, CrawlJob, Location
+from app.db.models import Company, Competitor, CrawlBatch, CrawlJob, Location
 from app.db.session import get_session_factory
 from app.integrations.apify_token_pool import ApifyTokenPool
 from app.services.apify_fetch_service import ApifyFetchService
-from app.services.crawl_batch_view import serialize_batch
+from app.services.crawl_batch_view import (
+    TERMINAL_JOB_STATUSES,
+    WAITING_JOB_STATUSES,
+    refresh_batch_status,
+    serialize_batch,
+)
 from app.services.crawl_result import stop_reason
 
 logger = logging.getLogger(__name__)
@@ -107,8 +112,11 @@ class CrawlWorker:
         with self.session_factory() as session:
             due = or_(
                 and_(
-                    CrawlJob.status.in_(["queued", "retry_wait", "awaiting_source"]),
+                    CrawlJob.status.in_(WAITING_JOB_STATUSES),
                     CrawlJob.available_at <= now,
+                    CrawlJob.company_id.in_(
+                        select(Company.id).where(Company.is_active.is_(True))
+                    ),
                 ),
                 and_(
                     CrawlJob.status == "running",
@@ -203,7 +211,9 @@ class CrawlWorker:
             select(CrawlJob.result_json).where(
                 CrawlJob.batch_id == job.batch_id,
                 CrawlJob.id != job.id,
-                CrawlJob.status.in_(["succeeded", "partial_success", "failed"]),
+                CrawlJob.status.in_(
+                    ["succeeded", "partial_success", "failed", "cancelled"]
+                ),
             )
         )
         for result_json in siblings:
@@ -514,7 +524,7 @@ class CrawlWorker:
             job.locked_by = None
             job.locked_at = None
             job.lease_expires_at = None
-            if status in {"succeeded", "partial_success", "skipped", "failed"}:
+            if status in TERMINAL_JOB_STATUSES:
                 job.finished_at = now
             logger.info(
                 "Job %s finished: status=%s, fetched=%s, inserted=%s, duplicate=%s, stop_reason=%s",
@@ -538,20 +548,4 @@ class CrawlWorker:
     def _refresh_batch_status(
         session: Session, batch: CrawlBatch, now: datetime
     ) -> None:
-        statuses = list(
-            session.scalars(
-                select(CrawlJob.status).where(CrawlJob.batch_id == batch.id)
-            )
-        )
-        terminal = {"succeeded", "partial_success", "skipped", "failed"}
-        if any(status not in terminal for status in statuses):
-            batch.status = "running"
-            return
-        failed = statuses.count("failed")
-        if failed == len(statuses):
-            batch.status = "failed"
-        elif failed:
-            batch.status = "partial_failed"
-        else:
-            batch.status = "completed"
-        batch.finished_at = now
+        refresh_batch_status(session, batch, now)
