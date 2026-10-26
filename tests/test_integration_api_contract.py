@@ -85,6 +85,10 @@ EXPECTED_ITEM_FIELDS = {
     "keywords",
     "is_potential_viral",
     "is_safety_issue",
+    # v3, optional: null for analyses made without an OneBox industry taxonomy.
+    "taxonomy_version",
+    "risk_flags",
+    "tags",
 }
 
 ANALYSIS_ONLY_FIELDS = {

@@ -44,6 +44,7 @@ AnalysisStatus = Literal["pending", "completed", "failed", "incomplete"]
 
 API_VERSION = "v1"
 OUTPUT_SCHEMA_VERSION = "v2"
+TAXONOMY_SCHEMA_VERSION = "v3"
 DEFAULT_LIMIT = 100
 MIN_LIMIT = 1
 MAX_LIMIT = 200
@@ -63,6 +64,14 @@ def to_utc_z(value: datetime) -> str:
 
 class _Base(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+class IntegrationTag(_Base):
+    slug: str
+    p: float | None = None
+    # What the review says about this aspect: positive | negative | neutral | mixed. None only on
+    # analyses made before per-tag sentiment existed.
+    sentiment: str | None = None
 
 
 class IntegrationReviewItem(_Base):
@@ -98,19 +107,27 @@ class IntegrationReviewItem(_Base):
     # field it does not recognise from a field this version never promised.
     # OneBox compares it against the version stored per connection and warns on
     # a mismatch; without it emitted here, that check silently never fires.
-    output_schema_version: Literal["v2"] = OUTPUT_SCHEMA_VERSION
+    # v3 only for analyses made under an OneBox industry taxonomy; everything
+    # else stays v2, so a OneBox that predates v3 never sees it.
+    output_schema_version: Literal["v2", "v3"] = OUTPUT_SCHEMA_VERSION
     # Null for every one of these when analyzed is false. keywords and the two
     # flags stay non-null with empty/false defaults so consumers never have to
     # null-check a collection; see api-contract-v1.md.
     sentiment: Sentiment | None = None
     sentiment_score: float | None = None
-    issue_category: IssueCategory | None = None
+    # A slug of the review's own taxonomy (any industry), so a plain string.
+    # Legacy rows are still held to the IssueCategory values above.
+    issue_category: str | None = None
     urgency: Urgency | None = None
     summary: str | None = None
     recommended_action: str | None = None
     keywords: list[str] = []
     is_potential_viral: bool = False
     is_safety_issue: bool = False
+    # v3, optional: null for legacy analyses.
+    taxonomy_version: str | None = None
+    risk_flags: dict[str, bool] | None = None
+    tags: list[IntegrationTag] | None = None
 
     @field_serializer(
         "review_time",

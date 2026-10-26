@@ -128,12 +128,15 @@ def _sites(engine):
         return dict(conn.execute(text("SELECT id, onebox_site_id FROM companies ORDER BY id")).all())
 
 
-def test_migration_is_the_single_head_after_0011():
+def test_migration_is_on_the_chain_of_the_single_head():
     config = Config(str(ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(ROOT / "alembic"))
     script = ScriptDirectory.from_config(config)
 
-    assert script.get_heads() == ["20261022_0012"]
+    # One head (a second one makes `alembic upgrade head` refuse to run); later migrations,
+    # such as the merge with the taxonomy migration, may sit on top of this one.
+    (head,) = script.get_heads()
+    assert "20261022_0012" in {revision.revision for revision in script.walk_revisions(base="base", head=head)}
     assert script.get_revision("20261022_0012").down_revision == "20261001_0011"
 
 

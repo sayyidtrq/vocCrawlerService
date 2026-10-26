@@ -17,6 +17,7 @@ from app.integrations.onebox_worklist_client import (
     OneBoxWorklistClient,
     OneBoxWorklistError,
 )
+from app.services.taxonomy_service import upsert_snapshots
 
 logger = logging.getLogger(__name__)
 
@@ -207,7 +208,7 @@ class WorklistSyncService:
         try:
             payload = self.client.get_worklist()
             items = self._validate_payload(payload, site_id)
-            return self._apply(company_id, site_id, items)
+            return self._apply(company_id, site_id, items, payload.get("taxonomies"))
         except OneBoxAuthenticationError as exc:
             self._record_error(company_id, site_id, str(exc))
             raise WorklistSyncError(
@@ -219,7 +220,9 @@ class WorklistSyncService:
             self._record_error(company_id, site_id, str(exc))
             raise
 
-    def apply_snapshot(self, snapshot_version: Any, items: Any) -> WorklistSyncResult:
+    def apply_snapshot(
+        self, snapshot_version: Any, items: Any, taxonomies: Any = None
+    ) -> WorklistSyncResult:
         """Terapkan snapshot worklist lengkap yang dikirim OneBox.
 
         Semua atau tidak sama sekali: snapshot divalidasi lebih dulu tanpa
@@ -284,7 +287,7 @@ class WorklistSyncService:
                     ),
                 )
             upserted, deactivated, state = self._apply_items(
-                session, company_id, site_id, valid_items, now
+                session, company_id, site_id, valid_items, now, taxonomies
             )
             state.snapshot_version = version
             state.applied_at = now
@@ -429,6 +432,9 @@ class WorklistSyncService:
                 "ai_output_schema_version": _optional_str(
                     raw.get("ai_output_schema_version"), 20
                 ),
+                # Absent = the site has no industry taxonomy (flag off, or an
+                # older OneBox): the location returns to the legacy behaviour.
+                "taxonomy_key": _optional_str(raw.get("taxonomy_key"), 80),
             }
             if not item["branch_name"]:
                 raise WorklistSyncError(f"Worklist item {index} has no branch/name.")
@@ -436,14 +442,18 @@ class WorklistSyncService:
         return items
 
     def _apply(
-        self, company_id: int, site_id: int, items: list[dict[str, Any]]
+        self,
+        company_id: int,
+        site_id: int,
+        items: list[dict[str, Any]],
+        taxonomies: Any = None,
     ) -> WorklistSyncResult:
         now = _now()
         with self.session_factory() as session:
             if session.get(Company, company_id) is None:
                 raise WorklistSyncError(f"Company {company_id} does not exist.")
             upserted, deactivated, _state = self._apply_items(
-                session, company_id, site_id, items, now
+                session, company_id, site_id, items, now, taxonomies
             )
             session.commit()
         return WorklistSyncResult(
@@ -464,12 +474,15 @@ class WorklistSyncService:
         site_id: int,
         items: list[dict[str, Any]],
         now: datetime,
+        taxonomies: Any = None,
     ) -> tuple[int, int, WorklistSyncState]:
         """Tulis worklist ke session yang diberikan; pemanggil yang commit.
 
         Dipisah dari _apply supaya push snapshot bisa memeriksa versi dan
         menulis dalam satu transaksi.
         """
+        # Snapshot taksonomi yang tidak valid dilewati, tidak menggagalkan worklist.
+        upsert_snapshots(session, company_id, taxonomies)
         location_keys = {
             item["external_place_id"] for item in items if item["kind"] == "location"
         }
@@ -587,6 +600,10 @@ class WorklistSyncService:
         entity.ai_enabled = item["ai_enabled"]
         entity.ai_model = item["ai_model"]
         entity.ai_output_schema_version = item["ai_output_schema_version"]
+        entity.taxonomy_key = item["taxonomy_key"]
+        entity.taxonomy_version = (
+            item["taxonomy_key"].rpartition(":")[2][:16] if item["taxonomy_key"] else None
+        )
         entity.worklist_synced_at = now
 
     @staticmethod

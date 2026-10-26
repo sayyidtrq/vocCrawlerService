@@ -114,6 +114,20 @@ Mengikuti `AnalysisService`. Ada test yang gagal kalau daftar di kode analisis d
 
 Perlakukan nilai tak dikenal sebagai `unknown`/`other` daripada melempar error — itu memberi kami ruang menambah kategori tanpa memecahkan ingest kalian.
 
+### Taksonomi industri (`output_schema_version` = `"v3"`)
+
+Hanya untuk review yang dianalisis di bawah taksonomi dari OneBox (worklist membawa `taxonomy_key` per item dan `taxonomies` di tingkat atas). Review lain tetap `"v2"` dengan tiga field di bawah bernilai `null`, jadi OneBox yang belum mengenal v3 tidak terpengaruh.
+
+| Field | Tipe | Nullable | Catatan |
+|---|---|---|---|
+| `taxonomy_version` | string | **ya** | 8 hex dari OneBox. Null = analisis tanpa taksonomi industri. |
+| `risk_flags` | object slug → boolean | **ya** | Satu kunci per risk flag milik pack industri. |
+| `tags` | array `{slug, p, sentiment}` | **ya** | Hanya bila multi-tag menyala di site; `p` null bila penyedia tidak memberi probabilitas. |
+
+`tags[].sentiment` adalah **sentimen ulasan terhadap aspek itu saja** (satu ulasan bisa memuji satu aspek dan mengeluh soal aspek lain, mis. `pelayanan_dokter` = `positive`, `parkir` = `negative`): salah satu `positive`, `negative`, `neutral`, `mixed`. Analisis baru selalu mengisinya untuk setiap tag; bila penyedia tidak memberi sentimen untuk sebuah aspek, nilainya sentimen ulasan itu sendiri. Hanya tag dari analisis sebelum field ini ada yang bernilai `null`, jadi konsumen yang belum membacanya tidak terpengaruh (field bertambah, tidak ada yang berubah arti).
+
+Di v3 `issue_category` adalah **slug milik taksonomi lokasi itu** (mis. `takaran_bbm`), bukan salah satu enum di atas; nilai di luar daftar sudah diganti `lainnya` oleh Crawler. `is_safety_issue` = ada risk flag berseverity `critical`.
+
 ---
 
 ## 3. `sync_updated_at` dan semantik delta-sync
@@ -219,3 +233,17 @@ curl -sS "http://localhost:8000/api/integration/v1/reviews?limit=3" \
 2. Butuh field yang belum ada di sini? Penambahan bersifat additive dan aman; ajukan sekarang selagi v1 belum jalan di produksi.
 
 Yang **tidak** perlu didiskusikan lagi: struktur contract, penamaan, dan pemilihan route terpisah — itu sudah diputuskan di VOC-CS-01. Tugas OneBox adalah memvalidasi parser terhadap fixture, bukan memilih ulang strukturnya.
+
+---
+
+## 8. Saran balasan (DNGO19-3620)
+
+`POST /api/integration/v1/reviews/{review_id}/reply-suggestion` — scope `analysis:write`, AI harus aktif untuk tenant. Satu panggilan Jev memilih **id preset** dari daftar yang dikirim OneBox; teks balasan tetap milik OneBox.
+
+```json
+{ "taxonomy_key": "kesehatan:0e20266e",
+  "presets": [{"id": "mohon_maaf_waktu_tunggu", "when_to_use": "Keluhan antrean"}],
+  "thresholds": {"preset": 0.75}, "generated": {"allowed": false} }
+```
+
+Jawaban `data`: `mode` ∈ `preset` (`preset_id`, `confidence`), `escalate` (ada risk flag `critical`), `none`; plus `language` (`id`/`en`), `risk_flags`, `tokens_used`, `model`. Tanpa snapshot taksonomi pagar keselamatan tak bisa dijalankan, jadi hasilnya `none` (`reason: taxonomy_unavailable`) tanpa memanggil model. `generated` belum dipakai (tahap 2). Error: `404 REVIEW_NOT_FOUND`, `403 INSUFFICIENT_SCOPE` / `AI_NOT_ENABLED`, `400 INVALID_PARAMETER`, `502 SUGGESTION_FAILED`.

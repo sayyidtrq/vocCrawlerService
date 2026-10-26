@@ -4,6 +4,7 @@ import httpx
 
 from app.config import Settings
 from app.integrations.gemini_client import GeminiClientBase
+from app.services.taxonomy_service import Taxonomy, merge_tag_sentiments
 
 TAXONOMY_CATEGORIES = {
     "doctor": "professional_service",
@@ -70,10 +71,11 @@ class AbsaClient(GeminiClientBase):
         payload = response.json()
         if not isinstance(payload, dict) or not isinstance(payload.get("results"), list):
             raise TypeError("ABSA returned an invalid response.")
-        return self._to_analysis(payload, review)
+        taxonomy = Taxonomy(review["taxonomy"]) if review.get("taxonomy") else None
+        return self._to_analysis(payload, review, taxonomy)
 
     @staticmethod
-    def _to_analysis(payload: dict, review: dict) -> dict:
+    def _to_analysis(payload: dict, review: dict, taxonomy: Taxonomy | None = None) -> dict:
         aspects = payload.get("results") or []
         sentiments = {
             str(item.get("sentiment") or "").lower()
@@ -98,12 +100,18 @@ class AbsaClient(GeminiClientBase):
             ),
             default={},
         )
-        taxonomy = str(
+        label = str(
             primary.get("complaint_taxonomy") or primary.get("taxonomy") or ""
         ).lower()
-        category = TAXONOMY_CATEGORIES.get(taxonomy, "other")
-        if sentiment == "positive" and category == "other":
-            category = "general_praise"
+        if taxonomy is not None:
+            # The pack's absa_map replaces the hard-coded hospital-era table.
+            category = taxonomy.absa_map.get(label, taxonomy.fallback)
+            fallback, praise = taxonomy.fallback, taxonomy.praise
+        else:
+            category = TAXONOMY_CATEGORIES.get(label, "other")
+            fallback, praise = "other", "general_praise"
+        if sentiment == "positive" and category == fallback:
+            category = praise
 
         text = str(review.get("review_text") or "").lower()
         safety = any(
@@ -146,7 +154,29 @@ class AbsaClient(GeminiClientBase):
                 if value
             )
         )[:5]
+        extra = {}
+        if taxonomy is not None and taxonomy.tagging_enabled:
+            # Every aspect ABSA found that the pack can name is a candidate tag.
+            probabilities: dict[str, float] = {}
+            judged: dict[str, list[str]] = {}
+            for item in aspects:
+                slug = taxonomy.absa_map.get(
+                    str(item.get("complaint_taxonomy") or item.get("taxonomy") or "").lower()
+                )
+                if slug:
+                    probabilities[slug] = max(
+                        probabilities.get(slug, 0.0), float(item.get("confidence") or 0)
+                    )
+                    judged.setdefault(slug, []).append(str(item.get("sentiment") or ""))
+            tags = taxonomy.add_primary(
+                taxonomy.pick_tags(probabilities), category, round(float(primary.get("confidence") or 0), 4)
+            )
+            # ABSA already judges each aspect: several hits on one slug that disagree become `mixed`.
+            for tag in tags:
+                tag["sentiment"] = merge_tag_sentiments(judged.get(tag["slug"], ()))
+            extra["tags"] = tags
         return {
+            **extra,
             "sentiment": sentiment,
             "sentiment_score": max(
                 (float(item.get("confidence") or 0) for item in aspects),

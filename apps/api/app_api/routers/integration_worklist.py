@@ -44,6 +44,9 @@ class WorklistPushRequest(BaseModel):
     generated_at: str | None = None
     # list[Any]: isi tiap item divalidasi service supaya pesan errornya spesifik.
     items: list[Any] = Field(max_length=MAX_SNAPSHOT_ITEMS)
+    # Sama dengan field `taxonomies` di worklist pull: key -> body. Body yang tidak
+    # valid dilewati (dicatat di log), tidak menolak snapshot.
+    taxonomies: dict[str, Any] | None = None
 
 
 class WorklistPushData(BaseModel):
@@ -109,7 +112,7 @@ def push_worklist(
             company_id=principal.company_id,
             session_factory=session_factory,
             settings=get_settings(),
-        ).apply_snapshot(payload.snapshot_version, payload.items)
+        ).apply_snapshot(payload.snapshot_version, payload.items, payload.taxonomies)
     except WorklistSyncError as exc:
         raise _error(exc) from exc
     logger.info(

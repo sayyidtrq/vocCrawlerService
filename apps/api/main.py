@@ -21,6 +21,7 @@ from apps.api.app_api.routers import (
     integration_analysis,
     integration_competitor_reviews,
     integration_crawl_jobs,
+    integration_reply_suggestion,
     integration_reviews,
     integration_tenants,
     integration_worklist,
@@ -121,6 +122,7 @@ def create_app() -> FastAPI:
     app.include_router(fetch_logs.router, prefix="/api")
     app.include_router(integration_reviews.router, prefix="/api")
     app.include_router(integration_analysis.router, prefix="/api")
+    app.include_router(integration_reply_suggestion.router, prefix="/api")
     app.include_router(integration_crawl_jobs.router, prefix="/api")
     app.include_router(integration_competitor_reviews.router, prefix="/api")
     app.include_router(integration_tenants.router, prefix="/api")

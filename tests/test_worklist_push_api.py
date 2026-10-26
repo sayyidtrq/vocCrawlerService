@@ -286,3 +286,94 @@ def test_the_provisioning_key_cannot_push_a_worklist(env):
     )
 
     assert response.status_code == 401
+
+
+# --- taksonomi (sama dengan worklist pull) -----------------------------------
+
+import json
+from pathlib import Path
+
+from app.db.models import TaxonomySnapshot
+
+TAXONOMY_FIXTURE = json.loads(
+    (Path(__file__).parent / "fixtures" / "worklist_taxonomy_fixture.json").read_text(encoding="utf-8")
+)
+
+
+def snapshots(env, company_id):
+    with env["session_factory"]() as session:
+        rows = session.scalars(select(TaxonomySnapshot).where(TaxonomySnapshot.company_id == company_id)).all()
+        return {row.key: row.version for row in rows}
+
+
+def test_a_push_stores_the_taxonomies_and_links_each_location(env):
+    company_id, token = tenant(env, 177)
+    taxonomies = TAXONOMY_FIXTURE["taxonomies"]
+    key = next(iter(taxonomies))
+
+    response = env["client"].put(
+        URL,
+        json={"snapshot_version": 1, "items": [item("place-a", taxonomy_key=key)], "taxonomies": taxonomies},
+        headers=bearer(token),
+    )
+
+    assert response.status_code == 200 and response.json()["data"]["status"] == "applied"
+    assert snapshots(env, company_id) == {k: v["version"] for k, v in taxonomies.items()}
+    location = places(env, company_id)["place-a"]
+    assert location.taxonomy_key == key
+    assert location.taxonomy_version == key.rpartition(":")[2]
+
+
+def test_taxonomies_stay_with_the_tenant_that_pushed_them(env):
+    a_id, a_token = tenant(env, 169, "A")
+    b_id, _ = tenant(env, 177, "B")
+
+    env["client"].put(
+        URL,
+        json={"snapshot_version": 1, "items": [], "taxonomies": TAXONOMY_FIXTURE["taxonomies"]},
+        headers=bearer(a_token),
+    )
+
+    assert snapshots(env, a_id) and snapshots(env, b_id) == {}
+
+
+def test_an_invalid_taxonomy_is_skipped_without_rejecting_the_snapshot(env):
+    company_id, token = tenant(env, 177)
+    good_key, good_body = next(iter(TAXONOMY_FIXTURE["taxonomies"].items()))
+
+    response = env["client"].put(
+        URL,
+        json={
+            "snapshot_version": 1,
+            "items": [item("place-a")],
+            "taxonomies": {good_key: good_body, "rusak:00000000": {"bukan": "taksonomi"}},
+        },
+        headers=bearer(token),
+    )
+
+    assert response.status_code == 200 and response.json()["data"]["status"] == "applied"
+    assert set(snapshots(env, company_id)) == {good_key}
+    assert set(places(env, company_id)) == {"place-a"}
+
+
+def test_a_stale_push_does_not_touch_the_taxonomies(env):
+    company_id, token = tenant(env, 177)
+    push(env, token, 2, [])
+
+    env["client"].put(
+        URL,
+        json={"snapshot_version": 1, "items": [], "taxonomies": TAXONOMY_FIXTURE["taxonomies"]},
+        headers=bearer(token),
+    )
+
+    assert snapshots(env, company_id) == {}
+
+
+def test_taxonomies_must_be_an_object(env):
+    _, token = tenant(env, 177)
+
+    response = env["client"].put(
+        URL, json={"snapshot_version": 1, "items": [], "taxonomies": ["bukan", "objek"]}, headers=bearer(token)
+    )
+
+    assert response.status_code == 400 and response.json()["error"]["code"] == "INVALID_PARAMETER"

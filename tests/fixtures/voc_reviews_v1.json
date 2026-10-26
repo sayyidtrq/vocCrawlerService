@@ -38,7 +38,10 @@
         "ramah"
       ],
       "is_potential_viral": false,
-      "is_safety_issue": false
+      "is_safety_issue": false,
+      "taxonomy_version": null,
+      "risk_flags": null,
+      "tags": null
     },
     {
       "id": 102,
@@ -79,7 +82,10 @@
         "penanganan"
       ],
       "is_potential_viral": true,
-      "is_safety_issue": true
+      "is_safety_issue": true,
+      "taxonomy_version": null,
+      "risk_flags": null,
+      "tags": null
     },
     {
       "id": 103,
@@ -116,7 +122,10 @@
       "recommended_action": null,
       "keywords": [],
       "is_potential_viral": false,
-      "is_safety_issue": false
+      "is_safety_issue": false,
+      "taxonomy_version": null,
+      "risk_flags": null,
+      "tags": null
     }
   ],
   "page": {
