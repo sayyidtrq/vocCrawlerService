@@ -3,17 +3,22 @@
 from __future__ import annotations
 
 import secrets
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import Settings, get_settings
-from app.db.models import ApiClient, Company, WorklistSyncState
+from app.db.models import ApiClient, Company, FetchLog, WorklistSyncState
 from app.db.session import get_session_factory
-from app.services.api_client_service import ApiClientService, IssuedServiceToken, _secret_hash
+from app.services.api_client_service import (
+    ApiClientService,
+    IssuedServiceToken,
+    _secret_hash,
+)
 
 # Token yang dipegang OneBox untuk satu tenant. Nama ini yang membedakannya dari
 # token lain milik company yang sama (mis. yang diterbitkan lewat CLI), jadi
@@ -58,6 +63,9 @@ class TenantView:
     token_key_id: str | None
     token_last_used_at: datetime | None
     token_expires_at: datetime | None
+    operating_period: str
+    backfill_fetched_total: int
+    operating_fetched_month: int
 
 
 @dataclass(frozen=True)
@@ -95,10 +103,12 @@ class TenantRegistryService:
         self,
         session_factory: sessionmaker[Session] | None = None,
         settings: Settings | None = None,
+        clock: Callable[[], datetime] | None = None,
     ) -> None:
         self.session_factory = session_factory or get_session_factory()
         self.settings = settings or get_settings()
         self._tokens = ApiClientService(self.session_factory, self.settings)
+        self._clock = clock or _now
 
     def register(self, site_id: object, site_name: object) -> RegisteredTenant:
         """Daftarkan site, idempoten. Dipanggil OneBox saat paket VoC diaktifkan.
@@ -246,12 +256,45 @@ class TenantRegistryService:
             if client.expires_at is None or _aware(client.expires_at) > now
         ]
 
+    def _usage(self, session: Session, company_id: int) -> tuple[str, int, int]:
+        now = self._clock().astimezone(timezone.utc)
+        month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        month_end = (month_start + timedelta(days=32)).replace(day=1)
+        coverage = FetchLog.metadata_json["coverage"].as_string()
+        fetched_at = func.coalesce(FetchLog.started_at, FetchLog.created_at)
+        totals = dict(
+            session.execute(
+                select(coverage, func.sum(FetchLog.total_fetched))
+                .where(
+                    FetchLog.company_id == company_id,
+                    or_(FetchLog.status.is_(None), FetchLog.status != "dry_run"),
+                    or_(
+                        coverage == "full_backfill",
+                        and_(
+                            coverage.in_(("delta", "date_window")),
+                            fetched_at >= month_start,
+                            fetched_at < month_end,
+                        ),
+                    ),
+                )
+                .group_by(coverage)
+            ).all()
+        )
+        return (
+            month_start.strftime("%Y-%m"),
+            totals.get("full_backfill", 0),
+            totals.get("delta", 0) + totals.get("date_window", 0),
+        )
+
     def _view(self, session: Session, company: Company) -> TenantView:
         state = session.scalar(
             select(WorklistSyncState).where(WorklistSyncState.company_id == company.id)
         )
         active = self._active_tokens(session, company.id)
         token = active[-1] if active else None
+        operating_period, backfill_fetched_total, operating_fetched_month = self._usage(
+            session, company.id
+        )
         return TenantView(
             company_id=company.id,
             site_id=int(company.onebox_site_id),
@@ -265,4 +308,7 @@ class TenantRegistryService:
             token_key_id=token.key_id if token else None,
             token_last_used_at=token.last_used_at if token else None,
             token_expires_at=token.expires_at if token else None,
+            operating_period=operating_period,
+            backfill_fetched_total=backfill_fetched_total,
+            operating_fetched_month=operating_fetched_month,
         )

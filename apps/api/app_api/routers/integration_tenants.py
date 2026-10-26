@@ -79,6 +79,11 @@ def _tenant_data(view: TenantView) -> dict:
             if view.token_key_id
             else None
         ),
+        "usage": {
+            "operating_period": view.operating_period,
+            "backfill_fetched_total": view.backfill_fetched_total,
+            "operating_fetched_month": view.operating_fetched_month,
+        },
     }
 
 

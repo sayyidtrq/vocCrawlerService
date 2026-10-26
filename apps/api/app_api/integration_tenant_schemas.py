@@ -54,6 +54,12 @@ class IssuedToken(BaseModel):
     scopes: list[str]
 
 
+class Usage(BaseModel):
+    operating_period: str
+    backfill_fetched_total: int
+    operating_fetched_month: int
+
+
 class TenantData(BaseModel):
     company_id: int
     site_id: int
@@ -62,6 +68,7 @@ class TenantData(BaseModel):
     deactivated_at: str | None = None
     worklist: WorklistState
     credential: CredentialInfo | None = None
+    usage: Usage
 
 
 class TenantRegisteredData(TenantData):
