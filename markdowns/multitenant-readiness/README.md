@@ -114,6 +114,7 @@ Dokumen yang **tidak dipakai** (superseded): `integrations/implementation-plan-o
 
 | Tanggal | Perubahan | Terkait |
 |---|---|---|
+| 2026-10-26 | Merged `origin/dev` (industry taxonomy, reply suggestion) into the branch. The one conflict (`worklist_sync_service.py`) is resolved so pull and push share `_apply_items`, and `PUT /worklist` now carries `taxonomies` like the pull worklist. Handoff updated: the contract is final. | MT-21, 05-ONEBOX-HANDOFF |
 | 2026-10-26 | Q-35 answered (packages Default/Plus with monthly quotas); Q-37–Q-40 added (quota unit, enforcement, package awareness, Jev price). **OneBox side handed off** to another developer: `05-ONEBOX-HANDOFF.md`. | Q-35, Q-37–Q-40, MT-30–35 |
 | 2026-10-21 | Folder dibuat. Sintesis brainstorm + spec + meeting Agung + audit kode `dev`. 24 pertanyaan terbuka dicatat. Bahaya laten refresh worklist lintas-tenant ditemukan. | semua |
 | 2026-10-21 | Jawaban Sayyid: model diganti ke provisioning paket VoC + OneBox control panel + weighted round robin + nol setup manual. 13 Q terjawab, Q-06 di-drop, Q-25–Q-31 ditambah. Design/Plan/Implementation ditulis ulang; ID task MT dinomori ulang. | Q-01–Q-31 |

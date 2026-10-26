@@ -166,6 +166,7 @@ Tidak dibutuhkan: di opsi D crawler tidak menarik worklist dari OneBox.
 - **Error:** `400 INVALID_SNAPSHOT` (isi snapshot salah; ditolak utuh) · `400 INVALID_PARAMETER` (body salah bentuk, versi bukan integer positif, item > 5.000) · `401 INVALID_SERVICE_TOKEN` · `403 INSUFFICIENT_SCOPE` · `409 TENANT_INACTIVE` · `409 TENANT_MODE_NOT_MANAGED` · `409 TENANT_NOT_LINKED` (company tidak terhubung ke site) · `500 WORKLIST_PUSH_FAILED` (error lain, detail hanya di log).
 - **End-to-end:** test memakai token asli dari provisioning (`TenantRegistryService.register`) lalu `PUT`, jadi MT-13, MT-20, dan MT-21 terbukti nyambung; termasuk isolasi dua tenant dan bahwa kunci provisioning tidak bisa dipakai untuk push.
 - **Perbaikan yang ikut:** `WorklistSyncService` tidak lagi membuat klien httpx di konstruktor saat mode `managed` (tidak dipakai, dan sebelumnya bocor per request).
+- **Taksonomi (2026-10-26, setelah merge `dev`):** body menerima `taxonomies` (key → body, sama dengan worklist pull) dan `taxonomy_key` per item; disimpan lewat `upsert_snapshots` di `_apply_items`, jadi jalur pull dan push memakai kode yang sama. Body taksonomi yang tidak valid dilewati, tidak menolak snapshot; push `stale` tidak menyentuh taksonomi. 5 test tambahan memakai fixture taksonomi milik `dev`.
 - **Dengan ini sisi crawler untuk opsi D lengkap:** daftar tenant (MT-20) → token → push worklist (MT-21). Tinggal sisi OneBox (Fase 3) dan MT-23 (tenant nonaktif menolak crawl).
 
 ### MT-22 — Bersihkan jalur pull
