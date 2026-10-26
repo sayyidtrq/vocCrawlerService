@@ -299,11 +299,12 @@ Authorization: Bearer <token tenant site 177>
 
 | Respons | Kapan |
 |---|---|
-| `200 {"status":"applied","snapshot_version":42,"upserted":2,"deactivated":0}` | Snapshot diterapkan |
-| `200 {"status":"stale","current_version":43}` | Versi ≤ yang tersimpan — tidak diproses |
+| `200 {"data":{"status":"applied","snapshot_version":42,"company_id":12,"site_id":177,"fetched":2,"upserted":2,"deactivated":0,"applied_at":"…"},"meta":{…}}` | Snapshot diterapkan |
+| `200 {"data":{"status":"stale","snapshot_version":43,…},"meta":{…}}` | Versi ≤ yang tersimpan — tidak diproses; `snapshot_version` = versi yang berlaku. **Sukses bagi OneBox** |
 | `400 {"error":{"code":"INVALID_SNAPSHOT","message":"Worklist item 1 is missing external_place_id."}}` (kontrak `/api/integration/` memakai 400, bukan 422) | Snapshot invalid — **seluruhnya** ditolak, worklist lama tetap. Satu pesan (fail-fast); daftar error per item bisa menyusul bila dibutuhkan |
-| `409 {"code":"TENANT_INACTIVE"}` | Tenant nonaktif |
-| `401/403` | Token invalid / tanpa scope `worklist:write` |
+| `409` kode `TENANT_INACTIVE` / `TENANT_MODE_NOT_MANAGED` / `TENANT_NOT_LINKED` | Tenant nonaktif / crawler bukan mode managed / company tidak terhubung ke site |
+| `400 INVALID_PARAMETER` | Body salah bentuk, versi bukan integer positif, lebih dari 5.000 item |
+| `401 INVALID_SERVICE_TOKEN` / `403 INSUFFICIENT_SCOPE` | Token invalid / tanpa scope `worklist:write` |
 
 **Aturan pemrosesan di crawler** (terimplementasi di `WorklistSyncService.apply_snapshot`, MT-13):
 1. **Tenant dari token**, tidak ada `site_id` di body — site 177 tidak bisa mengirim worklist atas nama site 169.

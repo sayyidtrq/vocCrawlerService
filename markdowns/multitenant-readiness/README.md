@@ -123,3 +123,4 @@ Dokumen yang **tidak dipakai** (superseded): `integrations/implementation-plan-o
 | 2026-10-22 | **MT-11 selesai**: `ONEBOX_TENANT_MODE=single\|managed`, 15 test. Default `single` tidak mengubah perilaku. | MT-11 |
 | 2026-10-22 | **MT-13 selesai** (SQLite): `WorklistSyncService.apply_snapshot` — validasi dulu, satu transaksi dengan kunci company, versi monoton, rollback total. 24 test. Fase 1 tuntas. | MT-13, Q-33 |
 | 2026-10-22 | **MT-20 selesai** (SQLite): `POST/GET/PATCH /tenants`, `token:rotate`, kunci provisioning ber-HMAC (`ONEBOX_PROVISIONING_KEY_HASH`), 37 test. Koreksi nama scope: `crawl:enqueue`. | MT-20 |
+| 2026-10-22 | **MT-21 selesai** (SQLite): `PUT /api/integration/v1/worklist` dengan token tenant; tenant dari token, bukan body; error bertipe. 20 test, termasuk end-to-end provisioning → push. | MT-21 |
