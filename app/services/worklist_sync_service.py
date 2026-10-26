@@ -52,6 +52,14 @@ class WorklistTenantInactiveError(WorklistSyncError):
     """The tenant is switched off, so it does not accept worklist changes."""
 
 
+class WorklistNotManagedError(WorklistSyncError):
+    """Pushed snapshots are only accepted in managed tenant mode."""
+
+
+class WorklistTenantNotLinkedError(WorklistSyncError):
+    """The company is not linked to a OneBox site, so it has no worklist to receive."""
+
+
 @dataclass(frozen=True)
 class WorklistSyncResult:
     status: str
@@ -166,7 +174,11 @@ class WorklistSyncService:
         self.settings = settings or get_settings()
         self.company_id = company_id if company_id is not None else self.settings.onebox_company_id
         self.session_factory = session_factory or get_session_factory()
-        self.client = client or OneBoxWorklistClient(self.settings)
+        # Mode managed tidak menarik apa pun, jadi tidak ada klien HTTP yang perlu
+        # dibuat (dan dibiarkan terbuka) di setiap request.
+        self.client = client or (
+            None if self.settings.onebox_managed else OneBoxWorklistClient(self.settings)
+        )
 
     @classmethod
     def is_configured(cls, settings: Settings) -> bool:
@@ -217,7 +229,7 @@ class WorklistSyncService:
         itu sukses: tidak ada yang perlu dikirim ulang).
         """
         if not self.settings.onebox_managed:
-            raise WorklistSyncError(
+            raise WorklistNotManagedError(
                 "Applying a pushed worklist snapshot requires ONEBOX_TENANT_MODE=managed."
             )
         if self.company_id is None:
@@ -244,7 +256,7 @@ class WorklistSyncService:
             if company is None:
                 raise WorklistSyncError(f"Company {company_id} does not exist.")
             if company.onebox_site_id is None:
-                raise WorklistSyncError(
+                raise WorklistTenantNotLinkedError(
                     f"Company {company_id} is not linked to a OneBox site."
                 )
             if not company.is_active:
