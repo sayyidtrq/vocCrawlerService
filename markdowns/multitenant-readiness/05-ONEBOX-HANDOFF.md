@@ -7,8 +7,8 @@ tags:
   - multitenant-readiness
   - handoff
   - onebox
-status: ready-for-handoff
-updated: 2026-10-26
+status: superseded
+updated: 2026-10-27
 owner: Sayyid
 handoff_to: OneBox developer (and their coding agent)
 related:
@@ -23,6 +23,9 @@ related:
   - "[[VOC_ONEBOX_SETUP_DEV]]"
   - "[[local-dev-setup-guide]]"
 ---
+
+> [!warning] Superseded (2026-10-27)
+> The crawler became a stateless REST service ([ADR-0006](../decisions/ADR-0006-stateless-rest-crawler.md)). Tenant provisioning, the pushed worklist, the outbox and the Setup Parameter page described below (MT-30 to MT-35) are **not** needed. Use [ONEBOX_V2_MIGRATION.md](../05-runbooks/ONEBOX_V2_MIGRATION.md) instead.
 # Multi-Tenant Readiness — OneBox Handoff
 
 > [!abstract] Navigasi

@@ -29,6 +29,9 @@ from apps.api.app_api.routers import (
     places,
     reviews,
     settings,
+    v2_ai,
+    v2_audit,
+    v2_crawls,
 )
 
 INTEGRATION_PREFIX = "/api/integration/"
@@ -127,6 +130,9 @@ def create_app() -> FastAPI:
     app.include_router(integration_competitor_reviews.router, prefix="/api")
     app.include_router(integration_tenants.router, prefix="/api")
     app.include_router(integration_worklist.router, prefix="/api")
+    app.include_router(v2_crawls.router, prefix="/api")
+    app.include_router(v2_ai.router, prefix="/api")
+    app.include_router(v2_audit.router, prefix="/api")
     _drop_advertised_422_from_integration_paths(app)
     return app
 
