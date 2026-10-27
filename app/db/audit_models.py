@@ -54,3 +54,27 @@ class AuditReview(Base):
     first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     seen_count: Mapped[int] = mapped_column(Integer, default=1, server_default="1", nullable=False)
+
+
+class AuditAnalysis(Base):
+    __tablename__ = "audit_analyses"
+    __table_args__ = (
+        Index("idx_audit_analyses_site_hash", "site_id", "review_hash"),
+        Index("idx_audit_analyses_site_created", "site_id", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    site_id: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    # Caller id for analysis; first 64 hash characters (or "") for reply suggestions.
+    review_ref: Mapped[str] = mapped_column(String(64), nullable=False)
+    review_hash: Mapped[str | None] = mapped_column(String(255))
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    provider: Mapped[str] = mapped_column(String(20), nullable=False)
+    model: Mapped[str | None] = mapped_column(String(100))
+    taxonomy_key: Mapped[str | None] = mapped_column(String(80))
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    result: Mapped[dict] = mapped_column(JsonType, nullable=False)
+    prompt_tokens: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    completion_tokens: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    total_tokens: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)

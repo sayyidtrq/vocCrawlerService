@@ -693,9 +693,9 @@ def test_crawler_setting_env_default_and_blank(monkeypatch):
         get_settings.cache_clear()
 
 
-def test_openapi_only_phase_one_paths(api):
+def test_openapi_crawl_paths(api):
     paths = api.app.openapi()["paths"]
-    assert {path for path in paths if "/v2/" in path} == {URL, URL + "/{crawl_id}"}
+    assert {path for path in paths if "/v2/crawls" in path} == {URL, URL + "/{crawl_id}"}
     assert "422" not in paths[URL]["post"]["responses"]
 
 
