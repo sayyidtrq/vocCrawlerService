@@ -17,8 +17,8 @@ from app.db.audit_models import AuditAnalysis, AuditCrawlRun, AuditReview
 from app.db.base import Base
 from app.services import audit_query_service as service_module
 from app.services.audit_query_service import AuditQueryService
-from apps.api.app_api.integration_schemas import API_VERSION
 from apps.api.app_api.routers.v2_audit import get_audit_query_service
+from apps.api.app_api.v2_common import V2_API_VERSION
 from apps.api.main import create_app
 
 SUMMARY_URL = "/api/integration/v2/audit/summary"
@@ -154,7 +154,7 @@ def test_auth(api, endpoint, authorization, expected):
             "code": "INVALID_SERVICE_TOKEN", "message": "Invalid service token.", "request_id": "auth-test",
         }}
     else:
-        assert response.json()["meta"] == {"api_version": API_VERSION, "request_id": "auth-test"}
+        assert response.json()["meta"] == {"api_version": V2_API_VERSION, "request_id": "auth-test"}
 
 
 @pytest.mark.parametrize("endpoint", ["site", "place", "reconcile"])
@@ -213,7 +213,7 @@ def test_place_summary_exact_counts_and_only_successful_analyses_count(place_dat
             "count": 4, "last_analysis_at": "2026-10-25T00:00:00Z",
             "by_status": {"analyzed": 1, "failed": 2, "rating_fallback": 1},
         },
-    }, "meta": {"api_version": API_VERSION, "request_id": "v2-audit-test"}}
+    }, "meta": {"api_version": V2_API_VERSION, "request_id": "v2-audit-test"}}
     assert all(marker not in response.text for marker in MARKERS)
 
 
@@ -341,7 +341,7 @@ def test_reconcile_exact_set_arithmetic_and_duplicates(reconcile_data):
         "missing_in_caller_truncated": False, "missing_in_backup": ["f", "z"],
         "missing_in_backup_count": 2, "missing_in_backup_truncated": False,
         "other_place_count": 1, "as_of": "2026-10-27T12:00:00Z",
-    }, "meta": {"api_version": API_VERSION, "request_id": "v2-audit-test"}}
+    }, "meta": {"api_version": V2_API_VERSION, "request_id": "v2-audit-test"}}
     assert all(marker not in response.text for marker in MARKERS)
 
 

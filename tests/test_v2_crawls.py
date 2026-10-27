@@ -1,12 +1,13 @@
 """The stateless crawl contract uses no live Apify or tenant data."""
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, inspect, select
+from sqlalchemy import create_engine, event, inspect, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -22,8 +23,9 @@ from app.integrations.review_source_client import ReviewSourceError
 from app.services.stateless_crawl_service import StatelessCrawlService, decode_crawl_id, encode_crawl_id
 from app.utils.date_parser import parse_datetime
 from app.utils.hashing import generate_review_hash
-from apps.api.app_api.integration_schemas import API_VERSION
+from apps.api.app_api.integration_schemas import IntegrationMeta
 from apps.api.app_api.routers.v2_crawls import get_stateless_crawl_service
+from apps.api.app_api.v2_common import V2_API_VERSION
 from apps.api.main import create_app
 
 URL = "/api/integration/v2/crawls"
@@ -77,6 +79,7 @@ class FakeApifyClient:
         self.start_calls = []
         self.page_calls = []
         self.status_calls = []
+        self.count_calls = []
         self.failures = {}
         self.runs = {}
         self.items = {}
@@ -113,6 +116,7 @@ class FakeApifyClient:
         return self.items[dataset_id][offset:offset + limit]
 
     def dataset_item_count(self, dataset_id, *, token):
+        self.count_calls.append((dataset_id, token))
         if self.count_error:
             raise self.count_error
         return None if self.count_missing else len(self.items[dataset_id])
@@ -246,7 +250,7 @@ def test_post_starts_exact_actor_input_and_handle(api, mode, sort_by):
     response = post(api, places=("p1", "p2"), key=KEY, **options)
     assert response.status_code == 202
     body = response.json()
-    assert body["meta"] == {"api_version": API_VERSION, "request_id": "v2-test"}
+    assert body["meta"] == {"api_version": V2_API_VERSION, "request_id": "v2-test"}
     assert body["data"]["idempotent_replay"] is False
     for place, call, run in zip(("p1", "p2"), api.apify.start_calls, body["data"]["runs"]):
         assert call == (api.settings.apify_actor_id, {
@@ -305,16 +309,40 @@ def test_rotation_on_exhaustion(api):
     assert api.pool.read_indices == [1]
 
 
-def test_all_accounts_exhausted_and_no_tokens(api):
+def test_all_accounts_exhausted(api):
     api.apify.failures["place-1"] = ApifyAccountExhaustedError("No credits")
     response = post(api)
     assert response.status_code == 503
     assert response.json()["error"]["code"] == "APIFY_ACCOUNTS_EXHAUSTED"
     assert api.pool.exhausted == {0, 1}
-    api.service.token_count = 0
-    api.apify.start_calls.clear()
-    assert post(api).status_code == 503
-    assert api.apify.start_calls == []
+    assert len(api.apify.start_calls) == 2
+
+
+@pytest.mark.parametrize("tokens", [[], ["  "]])
+def test_apify_not_configured_before_start_or_handle_decoding(api, tokens):
+    settings = api.settings.model_copy(update={"apify_api_tokens": tokens})
+    service = StatelessCrawlService(
+        settings, apify_client=api.apify, token_pool=api.pool, session_factory=api.factory,
+    )
+    api.app.dependency_overrides[get_stateless_crawl_service] = lambda: service
+    handle = {
+        "v": 1, "run_id": "run-1", "dataset_id": "dataset-1", "token_index": 0,
+        "place_id": "place-1", "site_id": 0, "mode": "delta", "date_from": None,
+        "date_to": None, "limit": 100,
+    }
+    responses = [
+        post(api, places=("p1", "p2")),
+        poll(api, {"crawl_id": encode_crawl_id(handle)}),
+        poll(api, {"crawl_id": "!!!"}),
+    ]
+    for response in responses:
+        assert response.status_code == 503
+        assert response.json() == {"error": {
+            "code": "APIFY_NOT_CONFIGURED", "message": "No Apify account is configured.",
+            "request_id": "v2-test",
+        }}
+    assert api.apify.start_calls == api.apify.status_calls == api.apify.page_calls == api.apify.count_calls == []
+    assert api.pool.read_indices == []
 
 
 def test_replay_and_new_places_and_site_isolation(api):
@@ -356,6 +384,7 @@ def test_get_statuses_and_produced_items(api, apify_status, status, done):
     api.apify.runs[run["run_id"]]["status"] = apify_status
     response = poll(api, run)
     assert response.status_code == 200
+    assert response.json()["meta"] == {"api_version": V2_API_VERSION, "request_id": "v2-test"}
     data = response.json()["data"]
     assert (data["status"], data["done"], data["next_cursor"]) == (status, done, None if done else "5")
     assert data["fetched_so_far"] == 5 and len(data["reviews"]) == 5
@@ -470,6 +499,7 @@ def test_malformed_crawl_ids(api, value):
     response = poll(api, {"crawl_id": value})
     assert response.status_code == 400
     assert response.json()["error"]["code"] == "INVALID_CRAWL_ID"
+    assert api.apify.status_calls == api.apify.page_calls == api.apify.count_calls == []
 
 
 def test_handle_range_validation(api):
@@ -579,6 +609,150 @@ def test_audit_same_hash_two_site_labels(api):
         assert {row.review_hash for row in rows} == {left["review_hash"]}
 
 
+def test_hundred_reviews_use_one_review_transaction_and_preserve_run_counts(api):
+    run = start(api)
+    items = [actor_item(i) for i in range(100)]
+    api.apify.items[api.apify.runs[run["run_id"]]["dataset_id"]] = items
+    commits, statements = [], []
+
+    def record_commit(connection):
+        commits.append(True)
+
+    def record_statement(connection, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+
+    event.listen(api.engine, "commit", record_commit)
+    event.listen(api.engine, "before_cursor_execute", record_statement)
+    try:
+        response = poll(api, run)
+    finally:
+        event.remove(api.engine, "commit", record_commit)
+        event.remove(api.engine, "before_cursor_execute", record_statement)
+    assert response.status_code == 200
+    assert len(response.json()["data"]["reviews"]) == 100
+    assert len(commits) == 2  # One review batch and the existing run write.
+    assert len([
+        statement for statement in statements
+        if statement.lstrip().upper().startswith("SELECT") and "audit_reviews" in statement
+    ]) == 1
+    with api.factory() as session:
+        rows = list(session.scalars(select(AuditReview)))
+        assert len(rows) == 100 and all(row.seen_count == 1 for row in rows)
+    assert poll(api, run).json() == response.json()
+    with api.factory() as session:
+        assert all(row.seen_count == 1 for row in session.scalars(select(AuditReview)))
+    second_run = start(api)
+    api.apify.items[api.apify.runs[second_run["run_id"]]["dataset_id"]] = items
+    assert poll(api, second_run).status_code == 200
+    with api.factory() as session:
+        rows = list(session.scalars(select(AuditReview)))
+        assert len(rows) == 100 and all(row.seen_count == 2 for row in rows)
+        assert all(row.first_run_id == run["run_id"] and row.last_run_id == second_run["run_id"] for row in rows)
+
+
+def test_review_batch_mixes_existing_and_new_rows(api):
+    first_run = start(api, site_id=123)
+    assert poll(api, first_run, limit=2).status_code == 200
+    with api.factory() as session:
+        original = {row.payload["external_review_id"]: row for row in session.scalars(select(AuditReview))}
+    second_run = start(api, site_id=123)
+    api.apify.items[api.apify.runs[second_run["run_id"]]["dataset_id"]] = [
+        actor_item(1, owner_response="Updated response"), actor_item(2), actor_item(3),
+    ]
+    response = poll(api, second_run)
+    assert response.status_code == 200
+    with api.factory() as session:
+        rows = {row.payload["external_review_id"]: row for row in session.scalars(select(AuditReview))}
+        assert {key: row.seen_count for key, row in rows.items()} == {
+            "review-0": 1, "review-1": 2, "review-2": 1, "review-3": 1,
+        }
+        assert rows["review-0"].last_seen_at == original["review-0"].last_seen_at
+        assert rows["review-1"].first_seen_at == original["review-1"].first_seen_at
+        assert rows["review-1"].last_seen_at > original["review-1"].last_seen_at
+        assert rows["review-1"].first_run_id == first_run["run_id"]
+        for review in response.json()["data"]["reviews"]:
+            row = rows[review["external_review_id"]]
+            assert row.payload == review and row.site_id == 123
+            assert row.review_time == parse_datetime(review["review_time"]).replace(tzinfo=None)
+            assert row.last_run_id == second_run["run_id"]
+        assert all(rows[f"review-{i}"].first_run_id == second_run["run_id"] for i in (2, 3))
+
+
+def test_review_audit_1200_reviews_in_three_pages_and_chunked_batch(api):
+    run = start(api, max_reviews=1200)
+    api.apify.items[api.apify.runs[run["run_id"]]["dataset_id"]] = [actor_item(i) for i in range(1200)]
+    lookups, commits = [], []
+
+    def record_statement(connection, cursor, statement, parameters, context, executemany):
+        if statement.lstrip().upper().startswith("SELECT") and "audit_reviews" in statement:
+            lookups.append(len(parameters))
+
+    def record_commit(connection):
+        commits.append(True)
+
+    event.listen(api.engine, "before_cursor_execute", record_statement)
+    try:
+        reviews = []
+        for offset, size in ((0, 500), (500, 500), (1000, 200)):
+            response = poll(api, run, cursor=str(offset), limit=500)
+            assert response.status_code == 200
+            data = response.json()["data"]
+            assert len(data["reviews"]) == size
+            assert data["next_cursor"] == (str(offset + size) if offset < 1000 else None)
+            reviews.extend(data["reviews"])
+        assert lookups == [501, 501, 201]
+        with api.factory() as session:
+            rows = list(session.scalars(select(AuditReview)))
+            assert len(rows) == 1200 and all(row.seen_count == 1 for row in rows)
+
+        # Exercise multiple IN chunks within one transaction, beyond the HTTP page limit.
+        handle = {**decode_crawl_id(run["crawl_id"], 2), "run_id": "second-run"}
+        lookups.clear()
+        event.listen(api.engine, "commit", record_commit)
+        try:
+            api.service._upsert_reviews(handle, reviews, datetime.now(timezone.utc))
+        finally:
+            event.remove(api.engine, "commit", record_commit)
+        assert lookups == [501, 501, 201] and commits == [True]
+        with api.factory() as session:
+            rows = list(session.scalars(select(AuditReview)))
+            assert len(rows) == 1200 and all(row.seen_count == 2 for row in rows)
+    finally:
+        event.remove(api.engine, "before_cursor_execute", record_statement)
+
+
+@pytest.mark.parametrize("error", [
+    RuntimeError("batch commit rejected"),
+    IntegrityError("INSERT", {}, RuntimeError("concurrent batch insert")),
+])
+def test_review_batch_rolls_back_before_per_review_fallback(api, error, caplog):
+    first_run = start(api)
+    assert poll(api, first_run).status_code == 200
+    run = start(api)
+    expected_reviews = [api.service._normalize_review(actor_item(i), "place-1") for i in range(5)]
+    attempts = []
+
+    def fail_first_commit(session):
+        attempts.append(session)
+        if len(attempts) == 1:
+            session.flush()
+            raise error
+
+    event.listen(api.factory.class_, "before_commit", fail_first_commit)
+    try:
+        response = poll(api, run)
+    finally:
+        event.remove(api.factory.class_, "before_commit", fail_first_commit)
+    assert response.status_code == 200
+    assert response.json()["data"]["reviews"] == expected_reviews
+    assert len(attempts) == 7  # Failed batch, five fallback reviews, and the run.
+    with api.factory() as session:
+        rows = list(session.scalars(select(AuditReview)))
+        assert len(rows) == 5 and all(row.seen_count == 2 for row in rows)
+        assert all(row.first_run_id == first_run["run_id"] and row.last_run_id == run["run_id"] for row in rows)
+    assert "V2 audit batch write failed; falling back per review:" in caplog.text
+
+
 def test_get_recovers_missing_audit_run(api):
     api.service.session_factory = explode
     run = start(api, mode="range", date_from="2026-10-01T00:00:00Z", date_to="2026-10-04T00:00:00Z", site_id=91)
@@ -598,6 +772,7 @@ def test_audit_failure_leaves_identical_response(api, caplog):
     api.service.session_factory = explode
     response = poll(api, run)
     assert response.status_code == 200 and response.json() == expected
+    assert "V2 audit batch write failed; falling back per review: audit database unavailable" in caplog.text
     assert "V2 audit write failed: audit database unavailable" in caplog.text
     assert all(record.levelname == "WARNING" for record in caplog.records)
 
@@ -611,14 +786,18 @@ def test_independent_audit_operations(api, monkeypatch, caplog):
             raise RuntimeError("first review write rejected")
         original(session, handle, review, now)
 
+    monkeypatch.setattr(api.service, "_upsert_reviews", lambda *args: explode())
     monkeypatch.setattr(api.service, "_upsert_review", fail_one)
     response = poll(api, run)
     assert response.status_code == 200
-    assert len(response.json()["data"]["reviews"]) == 5
+    assert response.json()["data"]["reviews"] == [
+        api.service._normalize_review(actor_item(i), "place-1") for i in range(5)
+    ]
     with api.factory() as session:
         assert len(list(session.scalars(select(AuditReview)))) == 4
         assert session.scalar(select(AuditCrawlRun)).fetched_count == 5
     assert "first review write rejected" in caplog.text
+    assert "V2 audit batch write failed; falling back per review: audit database unavailable" in caplog.text
 
 
 def test_run_write_failure_does_not_rollback_reviews(api, monkeypatch, caplog):
@@ -643,12 +822,14 @@ def test_integrity_error_retries_with_fresh_session(api, monkeypatch, caplog):
             raise IntegrityError("INSERT", {}, RuntimeError("concurrent insert"))
         original(session, handle, review, now)
 
+    monkeypatch.setattr(api.service, "_upsert_reviews", lambda *args: explode())
     monkeypatch.setattr(api.service, "_upsert_review", conflict_once)
     assert poll(api, run, limit=1).status_code == 200
     assert len(attempts) == 2 and attempts[0] is not attempts[1]
     with api.factory() as session:
         assert session.scalar(select(AuditReview)).seen_count == 1
     assert "concurrent insert" in caplog.text
+    assert "V2 audit batch write failed; falling back per review: audit database unavailable" in caplog.text
 
 
 def test_audit_tables_registered_without_foreign_keys(api):
@@ -697,6 +878,33 @@ def test_openapi_crawl_paths(api):
     paths = api.app.openapi()["paths"]
     assert {path for path in paths if "/v2/crawls" in path} == {URL, URL + "/{crawl_id}"}
     assert "422" not in paths[URL]["post"]["responses"]
+    for path, method in ((URL, "post"), (URL + "/{crawl_id}", "get")):
+        assert "APIFY_NOT_CONFIGURED" in paths[path][method]["responses"]["503"]["description"]
+
+
+@pytest.mark.parametrize("path,method,status", [
+    (URL, "post", "202"), (URL + "/{crawl_id}", "get", "200"),
+    ("/api/integration/v2/analysis", "post", "200"),
+    ("/api/integration/v2/reply-suggestion", "post", "200"),
+    ("/api/integration/v2/audit/summary", "get", "200"),
+    ("/api/integration/v2/audit/reconcile", "post", "200"),
+])
+def test_v2_openapi_success_meta_declares_v2(api, path, method, status):
+    schema = api.app.openapi()
+    response = schema["paths"][path][method]["responses"][status]["content"]["application/json"]["schema"]
+    response_model = schema["components"]["schemas"][response["$ref"].split("/")[-1]]
+    meta = response_model["properties"]["meta"]
+    meta_model = schema["components"]["schemas"][meta["$ref"].split("/")[-1]]
+    version = meta_model["properties"]["api_version"]
+    assert V2_API_VERSION == "v2"
+    assert version["const"] == version["default"] == "v2"
+
+
+def test_v1_meta_schema_default_is_unchanged():
+    meta = IntegrationMeta(request_id="v1-test")
+    assert meta.api_version == "v1"
+    version = IntegrationMeta.model_json_schema()["properties"]["api_version"]
+    assert version["const"] == version["default"] == "v1"
 
 
 def test_crawl_id_does_not_depend_on_key_order():
@@ -707,3 +915,26 @@ def test_crawl_id_does_not_depend_on_key_order():
         "date_to": None, "limit": 10,
     }
     assert encode_crawl_id(handle) == encode_crawl_id(dict(reversed(list(handle.items()))))
+
+
+def test_audit_warnings_never_log_sql_or_review_data(api, caplog):
+    """str() of a SQLAlchemy error carries the statement and parameters: only its first line may be logged."""
+    from sqlalchemy.exc import OperationalError
+    from app.services.stateless_crawl_service import log_reason
+
+    secret = "SENSITIVE-REVIEW-TEXT"
+    error = OperationalError(
+        f"INSERT INTO audit_reviews (payload) VALUES ('{secret}')", {"payload": secret},
+        Exception(f"connection lost\nDETAIL: {secret}"),
+    )
+    assert log_reason(error) == "connection lost"
+    assert log_reason(RuntimeError("plain message")) == "plain message"
+    assert log_reason(RuntimeError("")) == ""
+
+    def fail(session):
+        raise error
+
+    with caplog.at_level("WARNING"):
+        api.service._write_audit(fail)
+    assert "V2 audit write failed: connection lost" in caplog.text
+    assert secret not in caplog.text and "INSERT INTO" not in caplog.text

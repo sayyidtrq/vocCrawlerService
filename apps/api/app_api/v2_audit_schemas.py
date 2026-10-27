@@ -5,7 +5,8 @@ from typing import Annotated
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, PlainSerializer
 
-from apps.api.app_api.integration_schemas import IntegrationMeta, to_utc_z
+from apps.api.app_api.integration_schemas import to_utc_z
+from apps.api.app_api.v2_common import V2Meta
 
 UtcTimestamp = Annotated[datetime, PlainSerializer(to_utc_z, return_type=str)]
 ReviewHash = Annotated[str, Field(min_length=1, max_length=255)]
@@ -85,7 +86,7 @@ class SiteSummary(BaseModel):
 
 class AuditSummaryResponse(BaseModel):
     data: PlaceSummary | SiteSummary
-    meta: IntegrationMeta
+    meta: V2Meta
 
 
 class ReconcileRequest(BaseModel):
@@ -116,4 +117,4 @@ class ReconcileData(BaseModel):
 
 class ReconcileResponse(BaseModel):
     data: ReconcileData
-    meta: IntegrationMeta
+    meta: V2Meta

@@ -15,6 +15,7 @@ router = APIRouter(
     dependencies=[Depends(require_crawler_token)], route_class=CrawlRoute,
 )
 ERRORS = {code: {"model": IntegrationErrorResponse} for code in (400, 401, 404, 429, 502, 503)}
+ERRORS[503]["description"] = "V2_NOT_CONFIGURED, APIFY_NOT_CONFIGURED, or APIFY_ACCOUNTS_EXHAUSTED."
 
 
 def get_stateless_crawl_service() -> StatelessCrawlService:

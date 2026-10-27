@@ -25,8 +25,8 @@ from app.services.analysis_service import AnalysisService, RATING_FALLBACK_MODEL
 from app.services.integration_review_service import IntegrationRequestError
 from app.services.stateless_ai_service import StatelessAiService
 from app.services.taxonomy_service import Taxonomy, validate_body
-from apps.api.app_api.integration_schemas import API_VERSION
 from apps.api.app_api.routers.v2_ai import get_stateless_ai_service
+from apps.api.app_api.v2_common import V2_API_VERSION
 from apps.api.main import create_app
 
 ANALYSIS_URL = "/api/integration/v2/analysis"
@@ -181,7 +181,7 @@ def test_auth_and_response_without_database(api, url, authorization, expected, c
         assert not api.clients.calls
     else:
         assert response.json()["data"]
-        assert response.json()["meta"] == {"api_version": API_VERSION, "request_id": "auth-test"}
+        assert response.json()["meta"] == {"api_version": V2_API_VERSION, "request_id": "auth-test"}
         assert "V2 AI audit write failed" in caplog.text
 
 

@@ -14,7 +14,7 @@ The v2 API is stateless: every call carries what it needs, and the crawler keeps
 | 3 | Run the migrations (the API container does it on start): `docker compose exec -T api python -m alembic upgrade head`. Head today: `20261027_0016`. It adds `audit_crawl_runs`, `audit_reviews`, `audit_analyses`. |
 | 4 | Check: `curl -s -H "Authorization: Bearer $TOKEN" "$CRAWLER/api/integration/v2/audit/summary"` returns `200` with zeros on a fresh database. |
 
-Every example below uses `CRAWLER=https://your-crawler-host` and `TOKEN=<the CRAWLER_API_TOKEN value>`. Every response is `{"data": ..., "meta": {"api_version": "v1", "request_id": ...}}` (the `api_version` label is still `v1`). Errors are `{"error": {"code", "message", "request_id"}}`. Send `X-Request-ID` to correlate.
+Every example below uses `CRAWLER=https://your-crawler-host` and `TOKEN=<the CRAWLER_API_TOKEN value>`. Every success response is `{"data": ..., "meta": {"api_version": "v2", "request_id": ...}}`. Errors are `{"error": {"code", "message", "request_id"}}`. Send `X-Request-ID` to correlate.
 
 ## 2. Crawl
 
@@ -50,7 +50,8 @@ curl -s -H "Authorization: Bearer $TOKEN" "$CRAWLER/api/integration/v2/crawls/$C
 | Status | Meaning |
 |---|---|
 | `429 APIFY_CONCURRENCY_LIMIT` | Apify is at its concurrent-run limit; wait `Retry-After` (60 s) and retry |
-| `503 APIFY_ACCOUNTS_EXHAUSTED` | every configured Apify account is out of credit |
+| `503 APIFY_NOT_CONFIGURED` | no Apify token is configured on the crawler (`APIFY_API_TOKENS` is empty); checked before any Apify call, on both POST and GET |
+| `503 APIFY_ACCOUNTS_EXHAUSTED` | tokens are configured but every account is out of credit |
 | `502 APIFY_RUN_FAILED` | any other Apify failure |
 | `400 INVALID_CRAWL_ID` | the `crawl_id` was altered or is malformed |
 | `404 CRAWL_NOT_FOUND` | Apify does not know that run for that account |
@@ -104,7 +105,7 @@ Send the hashes OneBox holds for the place. You get `missing_in_caller` (the bac
 ## 5. Tests for v2
 
 ```bash
-.venv/bin/python -m pytest tests/test_v2_crawls.py tests/test_v2_ai.py tests/test_v2_audit.py -q     # 317 tests, offline
+.venv/bin/python -m pytest tests/test_v2_crawls.py tests/test_v2_ai.py tests/test_v2_audit.py -q     # 332 tests, offline
 .venv/bin/python -m alembic heads                                                                    # one head: 20261027_0016
 ```
 

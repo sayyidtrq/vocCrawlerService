@@ -37,6 +37,12 @@ HANDLE_FIELDS = {
 }
 
 
+def log_reason(exc: Exception) -> str:
+    """First line of the database error only: str() of a SQLAlchemy error carries the SQL and its parameters (review data)."""
+    text = str(getattr(exc, "orig", None) or exc)
+    return (text.splitlines() or [""])[0][:200]
+
+
 def encode_crawl_id(handle: dict) -> str:
     return base64.urlsafe_b64encode(
         # sort_keys: JSONB (PostgreSQL) reorders keys, and a replay must give the same id.
@@ -128,6 +134,10 @@ class StatelessCrawlService:
         self.token_count = len([token for token in settings.apify_api_tokens if token.strip()])
         self.session_factory = session_factory if session_factory is not None else lambda: get_session_factory()()
 
+    def _require_apify_configuration(self) -> None:
+        if self.token_count == 0:
+            raise IntegrationRequestError(503, "APIFY_NOT_CONFIGURED", "No Apify account is configured.")
+
     def _start_run(self, place_id: str, params: dict) -> dict:
         actor_input = ApifyReviewClient._actor_input(
             place_id, params["max_reviews"], params["sort_by"], parse_datetime(params["date_from"])
@@ -162,7 +172,7 @@ class StatelessCrawlService:
                 )).all()
                 return {row.place_id: row.handle for row in rows}
         except Exception as exc:
-            logger.warning("V2 audit replay lookup failed: %s", exc)
+            logger.warning("V2 audit replay lookup failed: %s", log_reason(exc))
             return {}
 
     @staticmethod
@@ -173,6 +183,7 @@ class StatelessCrawlService:
         }
 
     def start_crawls(self, params: dict, idempotency_key: str | None = None) -> dict:
+        self._require_apify_configuration()
         stored = self._replay_handles(params["site_id"], idempotency_key)
         replay = all(target["place_id"] in stored for target in params["targets"])
         runs, errors = [], []
@@ -236,6 +247,7 @@ class StatelessCrawlService:
         return review
 
     def get_crawl(self, crawl_id: str, *, cursor: str | None = None, limit: int = 100) -> dict:
+        self._require_apify_configuration()
         handle = decode_crawl_id(crawl_id, self.token_count)
         if cursor is not None and not re.fullmatch(r"[0-9]+", cursor):
             raise IntegrationRequestError(400, "INVALID_PARAMETER", "Cursor must contain digits only.")
@@ -271,8 +283,13 @@ class StatelessCrawlService:
             "reviews": reviews, "next_cursor": None if done else str(next_offset), "done": done,
         }
         now = datetime.now(timezone.utc)
-        for review in reviews:
-            self._write_audit(lambda session: self._upsert_review(session, handle, review, now))
+        if reviews:
+            try:
+                self._upsert_reviews(handle, reviews, now)
+            except Exception as exc:
+                logger.warning("V2 audit batch write failed; falling back per review: %s", log_reason(exc))
+                for review in reviews:
+                    self._write_audit(lambda session: self._upsert_review(session, handle, review, now))
         self._write_audit(lambda session: self._upsert_run(
             session, handle, page=data, items_seen=next_offset, final=final, now=now
         ))
@@ -286,9 +303,9 @@ class StatelessCrawlService:
                     session.commit()
                 return
             except IntegrityError as exc:
-                logger.warning("V2 audit write conflict%s: %s", "; retrying" if attempt == 0 else "", exc)
+                logger.warning("V2 audit write conflict%s: %s", "; retrying" if attempt == 0 else "", log_reason(exc))
             except Exception as exc:
-                logger.warning("V2 audit write failed: %s", exc)
+                logger.warning("V2 audit write failed: %s", log_reason(exc))
                 return
 
     @staticmethod
@@ -318,20 +335,40 @@ class StatelessCrawlService:
             if final and run.finished_at is None:
                 run.finished_at = now
 
+    def _upsert_reviews(self, handle: dict, reviews: list[dict], now: datetime) -> None:
+        hashes = [review["review_hash"] for review in reviews]
+        with self.session_factory() as session, session.begin():
+            rows = {}
+            for offset in range(0, len(hashes), 500):
+                rows.update((row.review_hash, row) for row in session.scalars(
+                    select(AuditReview).where(
+                        AuditReview.site_id == handle["site_id"],
+                        AuditReview.review_hash.in_(hashes[offset:offset + 500]),
+                    ).with_for_update()
+                ))
+            for review in reviews:
+                row = self._apply_review(rows.get(review["review_hash"]), handle, review, now)
+                rows[review["review_hash"]] = row
+                session.add(row)
+
     @staticmethod
-    def _upsert_review(session, handle: dict, review: dict, now: datetime) -> None:
-        row = session.scalar(select(AuditReview).where(
-            AuditReview.site_id == handle["site_id"], AuditReview.review_hash == review["review_hash"]
-        ).with_for_update())
+    def _apply_review(row: AuditReview | None, handle: dict, review: dict, now: datetime) -> AuditReview:
         if row is None:
             row = AuditReview(
                 site_id=handle["site_id"], place_id=handle["place_id"], review_hash=review["review_hash"],
                 first_run_id=handle["run_id"], first_seen_at=now, seen_count=1,
             )
-            session.add(row)
         elif row.last_run_id != handle["run_id"]:
             row.seen_count += 1
         row.payload = review
         row.review_time = parse_datetime(review["review_time"])
         row.last_run_id = handle["run_id"]
         row.last_seen_at = now
+        return row
+
+    @staticmethod
+    def _upsert_review(session, handle: dict, review: dict, now: datetime) -> None:
+        row = session.scalar(select(AuditReview).where(
+            AuditReview.site_id == handle["site_id"], AuditReview.review_hash == review["review_hash"]
+        ).with_for_update())
+        session.add(StatelessCrawlService._apply_review(row, handle, review, now))

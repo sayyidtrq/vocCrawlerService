@@ -5,7 +5,8 @@ from typing import Literal
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_serializer, model_validator
 
-from apps.api.app_api.integration_schemas import IntegrationMeta, to_utc_z
+from apps.api.app_api.integration_schemas import to_utc_z
+from apps.api.app_api.v2_common import V2Meta
 
 CrawlMode = Literal["backfill", "delta", "range"]
 CrawlStatus = Literal["running", "succeeded", "failed", "aborted", "timed_out", "unknown"]
@@ -58,7 +59,7 @@ class CrawlStartData(BaseModel):
 
 class CrawlStartResponse(BaseModel):
     data: CrawlStartData
-    meta: IntegrationMeta
+    meta: V2Meta
 
 
 class CrawlReview(BaseModel):
@@ -98,4 +99,4 @@ class CrawlPageData(BaseModel):
 
 class CrawlPageResponse(BaseModel):
     data: CrawlPageData
-    meta: IntegrationMeta
+    meta: V2Meta

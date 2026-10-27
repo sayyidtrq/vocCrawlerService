@@ -14,6 +14,7 @@ from app.integrations.analysis_client import create_analysis_client
 from app.services.analysis_service import AnalysisService, RATING_FALLBACK_MODEL
 from app.services.integration_review_service import IntegrationRequestError
 from app.services.reply_suggestion_service import DEFAULT_PRESET_THRESHOLD, decide
+from app.services.stateless_crawl_service import log_reason
 from app.services.taxonomy_service import Taxonomy, validate_body
 
 logger = logging.getLogger(__name__)
@@ -191,4 +192,4 @@ class StatelessAiService:
                 session.add_all(rows)
                 session.commit()
         except Exception as exc:
-            logger.warning("V2 AI audit write failed: %s", exc)
+            logger.warning("V2 AI audit write failed: %s", log_reason(exc))

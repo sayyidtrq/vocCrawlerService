@@ -7,7 +7,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.services.reply_suggestion_service import DEFAULT_PRESET_THRESHOLD
-from apps.api.app_api.integration_schemas import IntegrationMeta
+from apps.api.app_api.v2_common import V2Meta
 
 Provider = Literal["jev", "openai", "absa"]
 
@@ -100,9 +100,9 @@ class AnalysisData(BaseModel):
 
 class AnalysisResponse(BaseModel):
     data: AnalysisData
-    meta: IntegrationMeta
+    meta: V2Meta
 
 
 class ReplySuggestionResponse(BaseModel):
     data: dict[str, Any] = Field(description="Reply decision fields, exactly as emitted by the v1 decision rules.")
-    meta: IntegrationMeta
+    meta: V2Meta
