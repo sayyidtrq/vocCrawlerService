@@ -1,6 +1,6 @@
 # ADR-0006 - Stateless REST crawler with an audit-only database
 
-- **Status:** Proposed (2026-10-26)
+- **Status:** Accepted. Phases 1 to 3 implemented on `feature/stateless-rest-crawler` (2026-10-27). OneBox does not call v2 yet.
 - **Decision maker:** Sayyid (dev). Not ratified by Pak Agung.
 - **Replaces:** the planned ADR-0006 "multi-tenant package provisioning + push worklist" (never written) and the "opsi D" design in `markdowns/multitenant-readiness/`. The code for it (tenant registry, `PUT /worklist`, weighted queue, usage counters) is already on `dev`, switched off by default (`ONEBOX_TENANT_MODE=single`).
 - **Related:** [ADR-0001](ADR-0001-ownership-inversion.md) (OneBox is the system of record, kept), [ADR-0003](ADR-0003-crawl-execution-pull-queue.md) (pull worklist and durable queue, replaced for v2), [ADR-0005](ADR-0005-separate-review-tables-shared-columns.md).
@@ -82,3 +82,16 @@ Not needed in v2: `ONEBOX_*`, `SERVICE_TOKEN_PEPPER`, `CRAWL_WORKER_*`, the prov
 2. How long should OneBox keep collecting from `GET /crawls/{run_id}` before the Apify dataset expires, and who alerts on a run that was never collected?
 3. Should `analysis` write to `audit_analyses` when `site_id` is absent (use a null label) or skip the write?
 4. Does the audit store need the raw Apify payload, or only the normalized review?
+
+## As built (2026-10-27)
+
+Implemented as designed, with these specifics and deviations:
+
+- **Routes:** `POST/GET /api/integration/v2/crawls`, `POST /api/integration/v2/analysis`, `POST /api/integration/v2/reply-suggestion`, `GET /api/integration/v2/audit/summary`, `POST /api/integration/v2/audit/reconcile`. All need `Authorization: Bearer $CRAWLER_API_TOKEN`; without the setting they answer `503 V2_NOT_CONFIGURED`. Calling guide: `markdowns/05-runbooks/STATELESS_V2_API.md`.
+- **`crawl_id`** is an opaque base64url handle holding the Apify run id, dataset id, account index, place id, site id, mode, dates and limit, never a token. The encoding is key-order independent because PostgreSQL `jsonb` reorders keys (found on a real PostgreSQL: a replay returned a different string for the same run).
+- **Audit tables:** `audit_crawl_runs`, `audit_reviews` (migration `20261026_0015`) and `audit_analyses` (migration `20261027_0016`). No links to the v1 tables. Writes are best effort; a failed write is logged and never changes a response.
+- **Read exception:** the audit endpoints (`summary`, `reconcile`) are the only v2 routes that read the database, because that is their purpose. They are strictly read-only and answer `503 AUDIT_UNAVAILABLE` when the database fails. Replay protection for `POST /crawls` also reads it, and fails open.
+- **"Analysed" rule:** a review counts as analysed only with an `audit_analyses` row of kind `analysis` and status `analyzed` or `rating_fallback`. A failed analysis, or a reply suggestion, does not hide it from `unanalyzed_count`.
+- **Errors:** Apify concurrency or rate limit is `429 APIFY_CONCURRENCY_LIMIT` with `Retry-After: 60`; every account out of credit is `503 APIFY_ACCOUNTS_EXHAUSTED`; other Apify failures are `502 APIFY_RUN_FAILED`; a malformed handle is `400 INVALID_CRAWL_ID`; an unknown run is `404 CRAWL_NOT_FOUND`; an unusable taxonomy on analysis is `400 INVALID_TAXONOMY`; no provider is `503 PROVIDER_NOT_CONFIGURED`; a reply-suggestion provider failure is `502 SUGGESTION_FAILED`.
+- **Not done:** `AUDIT_RETENTION_DAYS` (no purge job yet); the response envelope still reports `"api_version": "v1"`; audit writes are one small transaction per review on `GET /crawls`; a missing Apify run is recognized from the client's error text because `ApifyClient` does not expose HTTP status codes; nothing has run against real Apify, Jev or OpenAI.
+- **Open questions 1 to 4** above are still open.

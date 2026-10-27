@@ -77,6 +77,14 @@ cd hermina-crawler
 .venv/bin/python -m pytest tests/test_integration_api_contract.py tests/test_contract_v3.py tests/test_integration_delta_sync.py tests/test_service_auth.py -q
 ```
 
+### Stateless v2 API (317 tests, offline)
+
+```bash
+.venv/bin/python -m pytest tests/test_v2_crawls.py tests/test_v2_ai.py tests/test_v2_audit.py -q
+```
+
+How to call the v2 API by hand (curl examples, setup, error codes): [../STATELESS_V2_API.md](../STATELESS_V2_API.md). Design: ADR-0006.
+
 ### Migrations
 
 ```bash
