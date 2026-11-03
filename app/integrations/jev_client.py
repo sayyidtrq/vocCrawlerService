@@ -191,8 +191,10 @@ class JevAiClient(GeminiClientBase):
         sentiment = str(sentiment_ans.get("choice", "unknown")).lower()
         category_ans = answers.get("category", {})
         category, _ = taxonomy.category(category_ans.get("choice") or taxonomy.fallback)
+        category_confidence = round(float(category_ans.get("confidence", 0.0)), 4)
         if sentiment == "positive" and category == taxonomy.fallback:
             category = taxonomy.praise
+            category_confidence = None  # praise is a rule here, not the model's pick
 
         flags = {
             flag["slug"]: self._probability(answers.get(f"flag_{flag['slug']}")) > 0.5
@@ -214,6 +216,7 @@ class JevAiClient(GeminiClientBase):
             "sentiment": sentiment,
             "sentiment_score": float(sentiment_ans.get("confidence", 0.0)),
             "issue_category": category,
+            "category_confidence": category_confidence,
             "urgency": urgency,
             "summary": SUMMARIES.get(
                 sentiment, "Ulasan belum memiliki aspek yang cukup meyakinkan."

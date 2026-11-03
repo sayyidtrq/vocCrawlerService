@@ -110,8 +110,10 @@ class AbsaClient(GeminiClientBase):
         else:
             category = TAXONOMY_CATEGORIES.get(label, "other")
             fallback, praise = "other", "general_praise"
+        category_confidence = round(float(primary.get("confidence") or 0), 4) if primary else None
         if sentiment == "positive" and category == fallback:
             category = praise
+            category_confidence = None  # praise is a rule here, not the model's pick
 
         text = str(review.get("review_text") or "").lower()
         safety = any(
@@ -183,6 +185,7 @@ class AbsaClient(GeminiClientBase):
                 default=0.0,
             ),
             "issue_category": category,
+            "category_confidence": category_confidence,
             "urgency": urgency,
             "summary": summaries.get(
                 sentiment, "Ulasan belum memiliki aspek yang cukup meyakinkan."
