@@ -263,3 +263,21 @@ def test_validate_result_derives_the_legacy_booleans_from_the_flags(tx_spbu, tx_
     # missing flags are all false, never an error
     cleaned, _ = AnalysisService._validate_result({"issue_category": "lainnya", "sentiment": "negative"}, Taxonomy(tx_spbu))
     assert set(cleaned["risk_flags"].values()) == {False}
+
+
+def test_category_confidence_is_kept_only_for_the_models_own_valid_category(tx_spbu):
+    taxonomy = Taxonomy(tx_spbu)
+    base = {"issue_category": "takaran_bbm", "sentiment": "negative"}
+    kept, _ = AnalysisService._validate_result({**base, "category_confidence": 0.8123456}, taxonomy)
+    assert kept["category_confidence"] == 0.8123
+    # a category replaced here was not the model's pick, so its confidence does not apply
+    replaced, _ = AnalysisService._validate_result({**base, "issue_category": "mystery", "category_confidence": 0.9}, taxonomy)
+    assert "category_confidence" not in replaced
+    for bad in (None, "x", 1.5, -0.1, float("nan")):
+        cleaned, _ = AnalysisService._validate_result({**base, "category_confidence": bad}, taxonomy)
+        assert "category_confidence" not in cleaned
+    # engines that emit nothing (LLM, mock, rating fallback) stay unchanged
+    cleaned, _ = AnalysisService._validate_result(base, taxonomy)
+    assert "category_confidence" not in cleaned
+    legacy, _ = AnalysisService._validate_result({"issue_category": "other", "sentiment": "negative", "category_confidence": 0.7})
+    assert legacy["category_confidence"] == 0.7

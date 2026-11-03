@@ -713,13 +713,16 @@ class AnalysisService:
         if urgency not in ALLOWED_URGENCIES:
             corrected = True
             urgency = "unknown"
+        category_replaced = False
         if taxonomy is not None:
             category, replaced = taxonomy.category(result.get("issue_category") or taxonomy.fallback)
             corrected = corrected or replaced
+            category_replaced = replaced
         else:
             category = str(result.get("issue_category") or "other").lower()
             if category not in ALLOWED_CATEGORIES:
                 corrected = True
+                category_replaced = True
                 category = "other"
         try:
             score = float(result.get("sentiment_score", 0))
@@ -746,6 +749,13 @@ class AnalysisService:
                 result.get("is_safety_issue", result.get("is_patient_safety_issue", False))
             ),
         }
+        # Optional: only the model's own pick has a confidence; a category replaced here has none.
+        try:
+            confidence = float(result["category_confidence"])
+        except (KeyError, TypeError, ValueError):
+            confidence = None
+        if confidence is not None and 0.0 <= confidence <= 1.0 and not category_replaced:
+            cleaned["category_confidence"] = round(confidence, 4)
         if taxonomy is not None and not taxonomy.legacy:
             flags = taxonomy.flags(result.get("risk_flags"))
             cleaned["risk_flags"] = flags

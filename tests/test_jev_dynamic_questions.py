@@ -256,3 +256,13 @@ def test_a_provider_error_is_raised_not_swallowed(tx_spbu):
     )
     with pytest.raises(RuntimeError, match="HTTP 500"):
         client.analyze_review({**REVIEW, "taxonomy": tx_spbu})
+
+
+def test_category_confidence_is_the_models_own_and_absent_when_a_rule_chose_the_category(tx_spbu):
+    taxonomy = {**tx_spbu}
+    picked = Recorder(answers(conf=0.9)).client().analyze_review({**REVIEW, "taxonomy": taxonomy})
+    assert picked["issue_category"] == "takaran_bbm" and picked["category_confidence"] == 0.9
+    ruled = Recorder(answers(sentiment="positive", category="mystery", conf=0.4)).client().analyze_review(
+        {**REVIEW, "taxonomy": taxonomy}
+    )
+    assert ruled["issue_category"] == "pujian_umum" and ruled["category_confidence"] is None
