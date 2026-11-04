@@ -1,4 +1,4 @@
-"""Stateless analysis and reply suggestion contracts."""
+"""Stateless AI request and response contracts."""
 
 from __future__ import annotations
 
@@ -64,6 +64,21 @@ class ReplySuggestionRequest(BaseModel):
     generated: GeneratedOptions = Field(default_factory=GeneratedOptions)
 
 
+class BriefFact(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    key: str = Field(min_length=1, max_length=60)
+    value: str | int | float
+
+
+class BriefRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    language: str = Field(default="id", min_length=2, max_length=2, pattern=r"^[a-z]{2}$")
+    audience: Literal["coo", "manager"] = "coo"
+    draft: str = Field(min_length=1, max_length=6000)
+    facts: list[BriefFact] = Field(default_factory=list, max_length=200)
+    max_words: int = Field(default=250, ge=50, le=600, strict=True)
+
+
 class AnalysisError(BaseModel):
     code: str
     message: str
@@ -105,4 +120,15 @@ class AnalysisResponse(BaseModel):
 
 class ReplySuggestionResponse(BaseModel):
     data: dict[str, Any] = Field(description="Reply decision fields, exactly as emitted by the v1 decision rules.")
+    meta: V2Meta
+
+
+class BriefData(BaseModel):
+    text: str
+    model: str | None
+    usage: TokenUsage
+
+
+class BriefResponse(BaseModel):
+    data: BriefData
     meta: V2Meta
