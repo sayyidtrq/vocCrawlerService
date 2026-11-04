@@ -203,7 +203,7 @@ class LocalLLMClient(GeminiClientBase):
         return "\n".join(lines)
 
     def brief(self, messages: list[dict]) -> str:
-        """Rewrite once without JSON formatting or SDK retries."""
+        """Generate text once without provider formatting or SDK retries."""
         self.last_usage = {}
         response = self.client.with_options(max_retries=0).chat.completions.create(
             model=self.model_name, messages=messages, store=False,

@@ -13,6 +13,8 @@ from apps.api.app_api.v2_ai_schemas import (
     BriefResponse,
     ReplySuggestionRequest,
     ReplySuggestionResponse,
+    ReviewSummaryRequest,
+    ReviewSummaryResponse,
 )
 from apps.api.app_api.v2_common import CrawlRoute, _envelope
 
@@ -49,3 +51,11 @@ def brief(
     service: StatelessAiService = Depends(get_stateless_ai_service),
 ) -> dict:
     return _envelope(request, service.brief(payload.model_dump()))
+
+
+@router.post("/review-summary", response_model=ReviewSummaryResponse, responses=ERRORS)
+def review_summary(
+    payload: ReviewSummaryRequest, request: Request,
+    service: StatelessAiService = Depends(get_stateless_ai_service),
+) -> dict:
+    return _envelope(request, service.review_summary(payload.model_dump()))
