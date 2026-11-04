@@ -108,11 +108,31 @@ Response `200`:
 {"data": {"text": "Ringkasan uji mencatat 17 laporan.", "model": null, "usage": {"prompt_tokens": 100, "completion_tokens": 12, "total_tokens": 112}}, "meta": {"api_version": "v2", "request_id": "brief-example"}}
 ```
 
-`model` is the configured model identifier (or `null` when unavailable). Set `OPENAI_API_KEY` and `OPENAI_MODEL`; optional `BRIEF_MODEL` overrides the model for this endpoint only, and can also supply the model when `OPENAI_MODEL` is unset. A blank `BRIEF_MODEL` falls back to `OPENAI_MODEL`.
+`model` is the configured model identifier (or `null` when unavailable). Set `OPENAI_API_KEY` and `OPENAI_MODEL`; optional `BRIEF_MODEL` overrides the model for `/brief` and `/review-summary`, and can also supply the model when `OPENAI_MODEL` is unset. A blank `BRIEF_MODEL` falls back to `OPENAI_MODEL`.
 
 Errors use the shared v2 envelope: `401 INVALID_SERVICE_TOKEN` for missing/bad auth, `400 INVALID_PARAMETER` for validation, `429 BRIEF_FAILED` for provider rate limits (`Retry-After: 60`), `502 BRIEF_FAILED` for provider failure or empty text, and `503 PROVIDER_NOT_CONFIGURED` for missing OpenAI configuration. As with every v2 route, an unset `CRAWLER_API_TOKEN` gives `503 V2_NOT_CONFIGURED`.
 
-## 5. Audit: is the backup stale?
+## 5. `POST /api/integration/v2/review-summary`
+
+One stateless OpenAI call produces a brief of one review in the requested language. It uses the same client and model selection as `/brief`. Review text, rating and labels are delimited JSON data, never instructions. The crawler never stores or logs that content or the output; audit rows use `kind: "review_summary"`, operational metadata, status and token counts only (`result: {}`).
+
+```json
+{"language": "id", "text": "Antrean Sangat Lama, tetapi petugas ramah.", "rating": 2, "labels": {"sentiment": "negative", "category": "antrean", "urgency": "high"}}
+```
+
+`text` is required (1–4000 characters). `language` is two lowercase letters, default `id`. `rating` is optional or `null`, and otherwise a strict integer from 1 to 5 (booleans and strings are rejected). `labels` defaults to `{}`; its optional, nullable string fields are `sentiment` (max 20), `category` (max 100), and `urgency` (max 20). Unknown request or label fields are rejected.
+
+Response `200`:
+
+```json
+{"data": {"summary": "Pengulas mengeluhkan antrean.", "evidence": "Antrean Sangat Lama", "recommended_action": "Periksa waktu tunggu.", "evidence_verified": true, "model": null, "usage": {"prompt_tokens": 100, "completion_tokens": 30, "total_tokens": 130}}, "meta": {"api_version": "v2", "request_id": "review-summary-example"}}
+```
+
+The model is asked for at most two summary sentences and one action sentence. The server strips tags, markdown and control characters and caps `summary` at 400 characters and `recommended_action` at 240, cutting at word boundaries. Evidence must quote the review in support of the category: the server matches after normalizing case and whitespace, then returns the review's original characters, capped at 240 characters at a word boundary. Empty or unverified evidence becomes `null` with `evidence_verified: false`; the response still succeeds.
+
+Errors use the shared v2 envelope: `401 INVALID_SERVICE_TOKEN` for missing/bad auth, `400 INVALID_PARAMETER` for validation, `429 REVIEW_SUMMARY_FAILED` for provider rate limits (`Retry-After: 60`), `502 REVIEW_SUMMARY_FAILED` for provider failure, empty output, unparseable JSON or unusable summary/action fields, and `503 PROVIDER_NOT_CONFIGURED` for missing OpenAI configuration. An unset `CRAWLER_API_TOKEN` gives `503 V2_NOT_CONFIGURED`.
+
+## 6. Audit: is the backup stale?
 
 ```bash
 # one place
@@ -131,7 +151,7 @@ curl -s -X POST "$CRAWLER/api/integration/v2/audit/reconcile" \
 
 Send the hashes OneBox holds for the place. You get `missing_in_caller` (the backup has it, OneBox lacks it), `missing_in_backup` (OneBox has it, the backup never saw it), `matched`, exact counts, and truncation flags. A place with more than 200,000 backup rows answers `400 RECONCILE_TOO_LARGE`; pass `since`. Both audit calls only read. If the database is down they answer `503 AUDIT_UNAVAILABLE`.
 
-## 6. Tests for v2
+## 7. Tests for v2
 
 ```bash
 .venv/bin/python -m pytest tests/test_v2_crawls.py tests/test_v2_ai.py tests/test_v2_audit.py -q     # 332 tests, offline
@@ -140,7 +160,7 @@ Send the hashes OneBox holds for the place. You get `missing_in_caller` (the bac
 
 They use in-memory SQLite and fakes for Apify and the AI providers, so nothing real is called. Real Apify, Jev and OpenAI have not been exercised yet: before OneBox switches, run one real crawl of one place with a small `max_reviews`, poll it to `done`, and check `audit/summary` shows it.
 
-## 7. Smoke test the AI Insight API on a deployed Crawler
+## 8. Smoke test the AI Insight API on a deployed Crawler
 
 OneBox's AI Insight (weekly brief, label confidence) depends on `/analysis` and `/brief`. `scripts/smoke_v2.sh` covers crawl, audit, reconcile and idempotency; this script covers the AI side, using only the Python 3 standard library:
 

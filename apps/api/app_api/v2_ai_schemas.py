@@ -79,6 +79,21 @@ class BriefRequest(BaseModel):
     max_words: int = Field(default=250, ge=50, le=600, strict=True)
 
 
+class ReviewSummaryLabels(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    sentiment: str | None = Field(default=None, max_length=20)
+    category: str | None = Field(default=None, max_length=100)
+    urgency: str | None = Field(default=None, max_length=20)
+
+
+class ReviewSummaryRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    language: str = Field(default="id", min_length=2, max_length=2, pattern=r"^[a-z]{2}$")
+    text: str = Field(min_length=1, max_length=4000)
+    rating: int | None = Field(default=None, ge=1, le=5, strict=True)
+    labels: ReviewSummaryLabels = Field(default_factory=ReviewSummaryLabels)
+
+
 class AnalysisError(BaseModel):
     code: str
     message: str
@@ -131,4 +146,18 @@ class BriefData(BaseModel):
 
 class BriefResponse(BaseModel):
     data: BriefData
+    meta: V2Meta
+
+
+class ReviewSummaryData(BaseModel):
+    summary: str
+    evidence: str | None
+    recommended_action: str
+    evidence_verified: bool
+    model: str | None
+    usage: TokenUsage
+
+
+class ReviewSummaryResponse(BaseModel):
+    data: ReviewSummaryData
     meta: V2Meta
