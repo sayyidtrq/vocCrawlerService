@@ -83,7 +83,36 @@ curl -s -X POST "$CRAWLER/api/integration/v2/reply-suggestion" \
 
 `data.mode` is `preset` (with `preset_id` and `confidence`), `escalate` (a critical risk flag fired) or `none` (with a `reason`: `taxonomy_unavailable`, `no_text`, `no_presets`, or no confident preset). OneBox keeps the reply text and looks it up by `preset_id`. A provider failure is `502 SUGGESTION_FAILED`.
 
-## 4. Audit: is the backup stale?
+## 4. `POST /api/integration/v2/brief`
+
+OneBox sends its draft and aggregate facts; the crawler rewrites them in natural Indonesian by default with one OpenAI call. OneBox owns number verification. The crawler never stores or logs the draft, facts, or rewritten text; the audit row contains only operational metadata, status, and token counts (`result: {}`).
+
+```bash
+curl -s -X POST "$CRAWLER/api/integration/v2/brief" \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"language": "id", "audience": "coo", "draft": "Ringkasan uji: 17 laporan.",
+       "facts": [{"key": "reports", "value": 17}], "max_words": 250}'
+```
+
+| Field | Rule |
+|---|---|
+| `language` | two lowercase letters, default `id` |
+| `audience` | `coo` (default) or `manager` |
+| `draft` | required, 1 to 6000 characters |
+| `facts` | up to 200 objects, default `[]`; each has a `key` of 1 to 60 characters and a string, integer, or float `value` |
+| `max_words` | integer, 50 to 600, default 250 |
+
+Response `200`:
+
+```json
+{"data": {"text": "Ringkasan uji mencatat 17 laporan.", "model": null, "usage": {"prompt_tokens": 100, "completion_tokens": 12, "total_tokens": 112}}, "meta": {"api_version": "v2", "request_id": "brief-example"}}
+```
+
+`model` is the configured model identifier (or `null` when unavailable). Set `OPENAI_API_KEY` and `OPENAI_MODEL`; optional `BRIEF_MODEL` overrides the model for this endpoint only, and can also supply the model when `OPENAI_MODEL` is unset. A blank `BRIEF_MODEL` falls back to `OPENAI_MODEL`.
+
+Errors use the shared v2 envelope: `401 INVALID_SERVICE_TOKEN` for missing/bad auth, `400 INVALID_PARAMETER` for validation, `429 BRIEF_FAILED` for provider rate limits (`Retry-After: 60`), `502 BRIEF_FAILED` for provider failure or empty text, and `503 PROVIDER_NOT_CONFIGURED` for missing OpenAI configuration. As with every v2 route, an unset `CRAWLER_API_TOKEN` gives `503 V2_NOT_CONFIGURED`.
+
+## 5. Audit: is the backup stale?
 
 ```bash
 # one place
@@ -102,7 +131,7 @@ curl -s -X POST "$CRAWLER/api/integration/v2/audit/reconcile" \
 
 Send the hashes OneBox holds for the place. You get `missing_in_caller` (the backup has it, OneBox lacks it), `missing_in_backup` (OneBox has it, the backup never saw it), `matched`, exact counts, and truncation flags. A place with more than 200,000 backup rows answers `400 RECONCILE_TOO_LARGE`; pass `since`. Both audit calls only read. If the database is down they answer `503 AUDIT_UNAVAILABLE`.
 
-## 5. Tests for v2
+## 6. Tests for v2
 
 ```bash
 .venv/bin/python -m pytest tests/test_v2_crawls.py tests/test_v2_ai.py tests/test_v2_audit.py -q     # 332 tests, offline

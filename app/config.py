@@ -52,6 +52,7 @@ _BLANK_USES_DEFAULT_FIELDS = (
     "gemini_api_key",
     "openai_api_key",
     "openai_model",
+    "brief_model",
     "typesafe_api_key",
     "absa_confidence_threshold",
     "absa_timeout_seconds",
@@ -159,6 +160,7 @@ class Settings(BaseModel):
     openai_base_url: str = "https://api.openai.com/v1"
     openai_api_key: str | None = None
     openai_model: str | None = None
+    brief_model: str | None = None
     fetch_limit_per_location: int = 50
     fetch_timeout_seconds: int = 30
     fetch_max_retry: int = 3

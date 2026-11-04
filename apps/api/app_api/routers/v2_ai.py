@@ -1,4 +1,4 @@
-"""Stateless v2 analysis and reply suggestion routes."""
+"""Stateless v2 AI routes."""
 
 from fastapi import APIRouter, Depends, Request
 
@@ -9,6 +9,8 @@ from apps.api.app_api.integration_schemas import IntegrationErrorResponse
 from apps.api.app_api.v2_ai_schemas import (
     AnalysisRequest,
     AnalysisResponse,
+    BriefRequest,
+    BriefResponse,
     ReplySuggestionRequest,
     ReplySuggestionResponse,
 )
@@ -39,3 +41,11 @@ def suggest_reply(
     service: StatelessAiService = Depends(get_stateless_ai_service),
 ) -> dict:
     return _envelope(request, service.suggest_reply(payload.model_dump()))
+
+
+@router.post("/brief", response_model=BriefResponse, responses=ERRORS)
+def brief(
+    payload: BriefRequest, request: Request,
+    service: StatelessAiService = Depends(get_stateless_ai_service),
+) -> dict:
+    return _envelope(request, service.brief(payload.model_dump()))

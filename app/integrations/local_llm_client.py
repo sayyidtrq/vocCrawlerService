@@ -202,6 +202,19 @@ class LocalLLMClient(GeminiClientBase):
             )
         return "\n".join(lines)
 
+    def brief(self, messages: list[dict]) -> str:
+        """Rewrite once without JSON formatting or SDK retries."""
+        self.last_usage = {}
+        response = self.client.with_options(max_retries=0).chat.completions.create(
+            model=self.model_name, messages=messages, store=False,
+        )
+        usage = getattr(response, "usage", None)
+        self.last_usage = {
+            key: int(getattr(usage, key, 0) or 0)
+            for key in ("prompt_tokens", "completion_tokens", "total_tokens")
+        }
+        return response.choices[0].message.content or ""
+
     def analyze_review(self, review: dict) -> dict:
         taxonomy = Taxonomy(review["taxonomy"]) if review.get("taxonomy") else None
         system_instruction = self.system_instruction
