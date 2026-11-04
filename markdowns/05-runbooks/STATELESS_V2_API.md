@@ -139,3 +139,21 @@ Send the hashes OneBox holds for the place. You get `missing_in_caller` (the bac
 ```
 
 They use in-memory SQLite and fakes for Apify and the AI providers, so nothing real is called. Real Apify, Jev and OpenAI have not been exercised yet: before OneBox switches, run one real crawl of one place with a small `max_reviews`, poll it to `done`, and check `audit/summary` shows it.
+
+## 7. Smoke test the AI Insight API on a deployed Crawler
+
+OneBox's AI Insight (weekly brief, label confidence) depends on `/analysis` and `/brief`. `scripts/smoke_v2.sh` covers crawl, audit, reconcile and idempotency; this script covers the AI side, using only the Python 3 standard library:
+
+```bash
+CRAWLER=https://your-dev-host TOKEN=<CRAWLER_API_TOKEN> python3 scripts/smoke_ai_insight_v2.py
+# flags: --provider jev|openai|absa  --max-tokens 20000  --taxonomy-file taxonomy.json  --skip-analysis  --skip-brief
+```
+
+It leaves `TOKEN` out of its output (if unset it prompts, hidden). Exit 0 means every check passed. What each part proves:
+
+1. **auth**: a request without a token gets 401; a request with the token reaches validation (400 on an empty review list, so no model is called). A 503 means `CRAWLER_API_TOKEN` is unset on the server.
+2. **`/analysis`**: four synthetic reviews (one rating-only). Every `category_confidence` is a number in [0, 1], the rating-only review has none, and for `jev`/`absa` at least one analysed review carries it. If none does, the server runs a build older than `b6a5501`.
+3. **`/brief`**: a draft and facts shaped like OneBox's weekly brief. The reply must be non-empty, report model and token usage, keep every headline number and add no number of its own (the same guard OneBox applies, `VocBriefGuard`, ported to Python). A second call appends an instruction written in words ("sembilan ratus sembilan puluh sembilan") to the draft and fails if the digits `999` come back. An empty draft and 201 facts must both be rejected.
+4. **tokens**: the total is printed, and `--max-tokens` turns an overrun into a failure.
+
+Cost: one `/analysis` call of 4 reviews (the rating-only one costs nothing) and two LLM `/brief` calls. The script's own tests (`tests/test_smoke_ai_insight_script.py`) run it offline against the stubbed app, including broken-server cases (invented number, dropped headline number, missing or out-of-range confidence, wrong token, empty brief) that must fail.
