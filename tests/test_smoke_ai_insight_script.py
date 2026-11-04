@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from test_v2_ai import FakeAnalysisClient, api  # noqa: F401  (api is a fixture)
+from test_v2_ai import TAXONOMY, FakeAnalysisClient, api  # noqa: F401  (api is a fixture)
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "smoke_ai_insight_v2.py"
 _spec = importlib.util.spec_from_file_location("smoke_ai_insight_v2", SCRIPT)
@@ -120,9 +120,11 @@ def make_request(api, token="shared-secret", always_send_token=False):
     return request
 
 
-def run_script(request, *argv):
+def run_script(request, *argv, taxonomy=None):
     lines = []
-    code = smoke.run(request, smoke.build_parser().parse_args(list(argv)), out=lines.append)
+    args = smoke.build_parser().parse_args(list(argv))
+    args.taxonomy = taxonomy
+    code = smoke.run(request, args, out=lines.append)
     return code, "\n".join(lines)
 
 
@@ -192,17 +194,38 @@ def test_script_fails_when_the_model_obeys_the_injection(api, monkeypatch):
     assert "number guard passes" in output
 
 
-def test_script_fails_when_confidence_is_missing_for_jev(api):
+def test_script_requires_confidence_for_jev_with_a_taxonomy(api):
+    api.clients.analysis_answer = {"category_confidence": 0.8}
+    api.clients.brief_text = reordered_draft()
+    code, output = run_script(make_request(api), taxonomy=TAXONOMY)
+    assert code == 0, output
+    assert "category_confidence present on 3 of 3 analysed reviews" in output
+
+    api.clients.analysis_answer = {}
+    code, output = run_script(make_request(api), taxonomy=TAXONOMY)
+    assert code == 1
+    assert "FAIL  no analysed review carries category_confidence: the server runs a build older than b6a5501" in output
+
+
+def test_script_requires_confidence_for_absa(api):
+    api.clients.brief_text = reordered_draft()
+    code, output = run_script(make_request(api), "--provider", "absa")
+    assert code == 1 and "FAIL  no analysed review carries category_confidence" in output
+
+
+def test_script_does_not_require_confidence_for_jev_without_a_taxonomy(api):
+    # Live finding: Jev emits it only on its taxonomy path, so a plain request legitimately has none.
     api.clients.brief_text = reordered_draft()
     code, output = run_script(make_request(api))
-    assert code == 1
-    assert "FAIL  no analysed review carries category_confidence: the server build is older than b6a5501" in output
+    assert code == 0, output
+    assert "category_confidence not required here (jev returns it only with a taxonomy" in output
+    assert "FAIL" not in output
 
 
 def test_script_fails_when_confidence_is_out_of_range(api):
     api.clients.analysis_answer = {"category_confidence": 1.5}
     api.clients.brief_text = reordered_draft()
-    code, output = run_script(make_request(api))
+    code, output = run_script(make_request(api), "--provider", "absa")
     assert code == 1 and "category_confidence" in output.split("FAIL", 1)[1]
 
 

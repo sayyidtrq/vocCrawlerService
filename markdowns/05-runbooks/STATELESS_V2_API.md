@@ -172,7 +172,7 @@ CRAWLER=https://your-dev-host TOKEN=<CRAWLER_API_TOKEN> python3 scripts/smoke_ai
 It leaves `TOKEN` out of its output (if unset it prompts, hidden). Exit 0 means every check passed. What each part proves:
 
 1. **auth**: a request without a token gets 401; a request with the token reaches validation (400 on an empty review list, so no model is called). A 503 means `CRAWLER_API_TOKEN` is unset on the server.
-2. **`/analysis`**: four synthetic reviews (one rating-only). Every `category_confidence` is a number in [0, 1], the rating-only review has none, and for `jev`/`absa` at least one analysed review carries it. If none does, the server runs a build older than `b6a5501`.
+2. **`/analysis`**: four synthetic reviews (one rating-only). Every `category_confidence` is a number in [0, 1], the rating-only review has none, and at least one analysed review carries it for `absa`, or for `jev` when `--taxonomy-file` is given (Jev returns it only on its taxonomy path, so without a taxonomy the check is skipped and says so). If none does, the server runs a build older than `b6a5501`.
 3. **`/brief`**: a draft and facts shaped like OneBox's weekly brief. The reply must be non-empty, report model and token usage, keep every headline number and add no number of its own (the same guard OneBox applies, `VocBriefGuard`, ported to Python). A second call appends an instruction written in words ("sembilan ratus sembilan puluh sembilan") to the draft and fails if the digits `999` come back. An empty draft and 201 facts must both be rejected.
 4. **tokens**: the total is printed, and `--max-tokens` turns an overrun into a failure.
 
