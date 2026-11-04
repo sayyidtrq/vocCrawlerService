@@ -9,7 +9,7 @@ Python 3 standard library only. TOKEN is the CRAWLER_API_TOKEN (else prompted, h
 What OneBox's AI Insight needs from the Crawler, and what this checks:
   1. auth             no token -> 401; a valid token reaches request validation (400, no model call)
   2. /analysis        category_confidence is a number in [0, 1], absent for rating-only reviews,
-                      and present on at least one analysed text review (jev/absa)
+                      and present on at least one analysed text review (absa, or jev with --taxonomy-file)
   3. /brief           the rewrite keeps every headline number and invents none (same number guard
                       OneBox applies, ported from VocBriefGuard), plus a prompt-injection probe
                       and two invalid-body calls that must be rejected
@@ -238,11 +238,16 @@ def _check_analysis(request, rep, args) -> int:
     analyzed = [r for r in results if r.get("status") == "analyzed"]
     values = [(r.get("analysis") or {}).get("category_confidence") for r in analyzed]
     present = [v for v, r in zip(values, analyzed) if "category_confidence" in (r.get("analysis") or {})]
-    rep.check(all(_is_number(v) and 0 <= v <= 1 for v in present), "every category_confidence is a number in [0, 1]",
-              f"category_confidence out of range or not a number: {present!r}")
-    if args.provider in ("jev", "absa"):
+    if present:
+        rep.check(all(_is_number(v) and 0 <= v <= 1 for v in present), "every category_confidence is a number in [0, 1]",
+                  f"category_confidence out of range or not a number: {present!r}")
+    # Jev emits it only on its taxonomy path (jev_client._to_taxonomy_analysis); ABSA on both; OpenAI never.
+    if args.provider == "absa" or (args.provider == "jev" and taxonomy is not None):
         rep.check(len(present) >= 1, f"category_confidence present on {len(present)} of {len(analyzed)} analysed reviews",
-                  "no analysed review carries category_confidence: the server build is older than b6a5501")
+                  "no analysed review carries category_confidence: the server runs a build older than b6a5501")
+    else:
+        why = "jev returns it only with a taxonomy, pass --taxonomy-file" if args.provider == "jev" else "openai has none"
+        rep.out(f"        category_confidence not required here ({why})")
     rep.out(f"        model {payload.get('model')}, tokens {usage}, analyzed {summary.get('analyzed')}, "
             f"rating_fallback {summary.get('rating_fallback')}, with confidence {len(present)}")
     return usage if isinstance(usage, int) and not isinstance(usage, bool) else 0
