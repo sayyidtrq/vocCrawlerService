@@ -1,6 +1,8 @@
 """The AI Insight smoke script is tested offline against the stubbed v2 app; no network is used."""
 
+import copy
 import importlib.util
+import json
 import subprocess
 import sys
 import urllib.error
@@ -8,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from test_v2_ai import FakeAnalysisClient, api  # noqa: F401  (api is a fixture)
+from test_v2_ai import TAXONOMY, FakeAnalysisClient, api  # noqa: F401  (api is a fixture)
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "smoke_ai_insight_v2.py"
 _spec = importlib.util.spec_from_file_location("smoke_ai_insight_v2", SCRIPT)
@@ -20,6 +22,34 @@ HEADLINES = [
     {"key": key, "value": value, "text": str(value), "headline": True}
     for key, value in (("total", 1234), ("avg_rating", 3.25), ("negative", 88), ("unreplied_negative", 77))
 ]
+
+
+# --- review-summary stub -----------------------------------------------------------------------
+# /brief and /review-summary share FakeAnalysisClient.brief, so route by the system message.
+
+def review_json(summary=None, evidence=None, action=None):
+    return json.dumps({
+        "summary": summary or "Pasien menunggu dokter lebih dari 2 jam tanpa kabar.",
+        "evidence": "menunggu dokter lebih dari 2 jam tanpa kabar" if evidence is None else evidence,
+        "recommended_action": action or "Beri kabar pasien yang menunggu dan tinjau antrean poli.",
+    })
+
+
+@pytest.fixture(autouse=True)
+def review_summary_stub(monkeypatch):
+    original = FakeAnalysisClient.brief
+
+    def brief(self, messages):
+        if "Summarize one review" not in messages[0]["content"]:
+            return original(self, messages)
+        factory = self.factory
+        factory.__dict__.setdefault("review_calls", []).append(copy.deepcopy(messages))
+        self.last_usage = {"prompt_tokens": 30, "completion_tokens": 20, "total_tokens": 50}
+        if factory.__dict__.get("review_obey") and "sembilan ratus" in messages[-1]["content"]:
+            return review_json(summary="Rating ulasan ini 999.")
+        return factory.__dict__.get("review_text") or review_json()
+
+    monkeypatch.setattr(FakeAnalysisClient, "brief", brief)
 
 
 def fact(key, value, headline=False):
@@ -120,9 +150,11 @@ def make_request(api, token="shared-secret", always_send_token=False):
     return request
 
 
-def run_script(request, *argv):
+def run_script(request, *argv, taxonomy=None):
     lines = []
-    code = smoke.run(request, smoke.build_parser().parse_args(list(argv)), out=lines.append)
+    args = smoke.build_parser().parse_args(list(argv))
+    args.taxonomy = taxonomy
+    code = smoke.run(request, args, out=lines.append)
     return code, "\n".join(lines)
 
 
@@ -192,17 +224,38 @@ def test_script_fails_when_the_model_obeys_the_injection(api, monkeypatch):
     assert "number guard passes" in output
 
 
-def test_script_fails_when_confidence_is_missing_for_jev(api):
+def test_script_requires_confidence_for_jev_with_a_taxonomy(api):
+    api.clients.analysis_answer = {"category_confidence": 0.8}
+    api.clients.brief_text = reordered_draft()
+    code, output = run_script(make_request(api), taxonomy=TAXONOMY)
+    assert code == 0, output
+    assert "category_confidence present on 3 of 3 analysed reviews" in output
+
+    api.clients.analysis_answer = {}
+    code, output = run_script(make_request(api), taxonomy=TAXONOMY)
+    assert code == 1
+    assert "FAIL  no analysed review carries category_confidence: the server runs a build older than b6a5501" in output
+
+
+def test_script_requires_confidence_for_absa(api):
+    api.clients.brief_text = reordered_draft()
+    code, output = run_script(make_request(api), "--provider", "absa")
+    assert code == 1 and "FAIL  no analysed review carries category_confidence" in output
+
+
+def test_script_does_not_require_confidence_for_jev_without_a_taxonomy(api):
+    # Live finding: Jev emits it only on its taxonomy path, so a plain request legitimately has none.
     api.clients.brief_text = reordered_draft()
     code, output = run_script(make_request(api))
-    assert code == 1
-    assert "FAIL  no analysed review carries category_confidence: the server build is older than b6a5501" in output
+    assert code == 0, output
+    assert "category_confidence not required here (jev returns it only with a taxonomy" in output
+    assert "FAIL" not in output
 
 
 def test_script_fails_when_confidence_is_out_of_range(api):
     api.clients.analysis_answer = {"category_confidence": 1.5}
     api.clients.brief_text = reordered_draft()
-    code, output = run_script(make_request(api))
+    code, output = run_script(make_request(api), "--provider", "absa")
     assert code == 1 and "category_confidence" in output.split("FAIL", 1)[1]
 
 
@@ -235,6 +288,63 @@ def test_script_enforces_the_token_budget(api):
     assert code == 1 and "FAIL  token budget exceeded" in output
     code, output = run_script(make_request(api), "--max-tokens", "100000")
     assert code == 0 and "within the token budget" in output
+
+
+def test_script_checks_the_review_summary(api):
+    healthy(api)
+    code, output = run_script(make_request(api))
+    assert code == 0, output
+    assert "4. review summary" in output
+    assert "review-summary: the evidence quote is a verbatim excerpt of the review" in output
+    assert "review-summary: no invented numbers or markup" in output
+    assert "review-summary injection probe: the model did not obey" in output
+    assert "empty review text is rejected" in output and "rating 6 is rejected" in output
+    calls = api.clients.review_calls
+    assert len(calls) == 2
+    prompt = calls[0][-1]["content"]
+    assert prompt.startswith("BEGIN_REVIEW_DATA") and smoke.REVIEW_TEXT in prompt and "Waktu Tunggu" in prompt
+    assert "sembilan ratus" in calls[1][-1]["content"]
+    assert len(api.clients.brief_calls) == 2
+
+
+def test_script_can_skip_the_review_summary(api):
+    healthy(api)
+    code, output = run_script(make_request(api), "--skip-review-summary")
+    assert code == 0 and "4. review summary" not in output
+    assert not api.clients.__dict__.get("review_calls")
+
+
+def test_script_reports_a_dropped_evidence_quote_without_failing(api):
+    healthy(api)
+    api.clients.review_text = review_json(evidence="kutipan yang tidak ada dalam ulasan")
+    code, output = run_script(make_request(api))
+    assert code == 0, output
+    assert "no evidence quote, evidence_verified is false" in output
+    assert "the server dropped it" in output
+
+
+def test_script_fails_when_the_review_summary_invents_a_number(api):
+    healthy(api)
+    api.clients.review_text = review_json(summary="Pasien menunggu 500 jam di poli.")
+    code, output = run_script(make_request(api))
+    assert code == 1
+    assert "FAIL  review-summary: guard rejected the output" in output and "number_not_in_facts:500" in output
+
+
+def test_script_fails_when_the_review_summary_obeys_the_injection(api):
+    healthy(api)
+    api.clients.review_obey = True
+    code, output = run_script(make_request(api))
+    assert code == 1
+    assert "FAIL  review-summary injection probe: output contains 999" in output
+    assert "review-summary: no invented numbers or markup" in output
+
+
+def test_script_fails_when_the_review_summary_is_not_json(api):
+    healthy(api)
+    api.clients.review_text = "bukan json"
+    code, output = run_script(make_request(api))
+    assert code == 1 and "FAIL  review-summary: expected 200, got 502" in output
 
 
 # --- command line -------------------------------------------------------------------------------
