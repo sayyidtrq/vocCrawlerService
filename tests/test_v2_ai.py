@@ -254,6 +254,67 @@ def test_analysis_model_input_and_clean_output(api, with_taxonomy):
         assert forbidden not in response.text
 
 
+@pytest.mark.parametrize("taxonomy", [None, TAXONOMY])
+@pytest.mark.parametrize("confidence,expected", [
+    pytest.param(0.73456, 0.7346, id="rounded"),
+    pytest.param(0, 0, id="zero"),
+])
+def test_analysis_preserves_category_confidence(api, taxonomy, confidence, expected):
+    api.clients.analysis_answer = {"category_confidence": confidence}
+    response = post(api, taxonomy=taxonomy)
+    assert response.status_code == 200, response.text
+    result = response.json()["data"]["results"][0]
+    assert result["status"] == "analyzed" and result["corrected"] is False
+    assert result["analysis"]["issue_category"] == ("antrean" if taxonomy else "waiting_time")
+    assert "category_confidence" in result["analysis"]
+    assert result["analysis"]["category_confidence"] == expected
+
+
+@pytest.mark.parametrize("taxonomy", [None, TAXONOMY])
+def test_analysis_replaced_category_omits_category_confidence(api, taxonomy):
+    api.clients.analysis_answer = {"issue_category": "invalid", "category_confidence": 0.73456}
+    response = post(api, taxonomy=taxonomy)
+    assert response.status_code == 200, response.text
+    result = response.json()["data"]["results"][0]
+    assert result["status"] == "analyzed" and result["corrected"] is True
+    assert result["analysis"]["issue_category"] == ("lainnya" if taxonomy else "other")
+    assert "category_confidence" not in result["analysis"]
+
+
+@pytest.mark.parametrize("taxonomy", [None, TAXONOMY])
+def test_analysis_rule_chosen_praise_omits_category_confidence(api, taxonomy):
+    category = "pujian_umum" if taxonomy else "general_praise"
+    api.clients.analysis_answer = {
+        "sentiment": "positive", "issue_category": category, "category_confidence": None,
+    }
+    response = post(api, reviews=[review(text="Pelayanan sangat baik.", rating=5)], taxonomy=taxonomy)
+    assert response.status_code == 200, response.text
+    result = response.json()["data"]["results"][0]
+    assert result["status"] == "analyzed" and result["corrected"] is False
+    assert result["analysis"]["issue_category"] == category
+    assert "category_confidence" not in result["analysis"]
+
+
+@pytest.mark.parametrize("taxonomy", [None, TAXONOMY])
+def test_analysis_missing_category_confidence_is_omitted(api, taxonomy):
+    response = post(api, taxonomy=taxonomy)
+    assert response.status_code == 200, response.text
+    result = response.json()["data"]["results"][0]
+    assert result["status"] == "analyzed"
+    assert "category_confidence" not in result["analysis"]
+
+
+@pytest.mark.parametrize("taxonomy", [None, TAXONOMY])
+def test_rating_fallback_omits_category_confidence(api, taxonomy):
+    api.clients.analysis_answer = {"category_confidence": 0.73456}
+    response = post(api, reviews=[review(text="", rating=5)], taxonomy=taxonomy)
+    assert response.status_code == 200, response.text
+    result = response.json()["data"]["results"][0]
+    assert result["status"] == "rating_fallback"
+    assert "category_confidence" not in result["analysis"]
+    assert not api.clients.calls
+
+
 def test_analysis_cleans_invalid_provider_fields(api):
     api.clients.analysis_answer = {"sentiment": "invalid", "sentiment_score": 5, "issue_category": "invalid", "keywords": "wrong"}
     result = post(api).json()["data"]["results"][0]
