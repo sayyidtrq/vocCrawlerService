@@ -160,6 +160,7 @@ class Settings(BaseModel):
     openai_base_url: str = "https://api.openai.com/v1"
     openai_api_key: str | None = None
     openai_model: str | None = None
+    sub_product_llm_model: str = ""
     brief_model: str | None = None
     fetch_limit_per_location: int = 50
     fetch_timeout_seconds: int = 30
