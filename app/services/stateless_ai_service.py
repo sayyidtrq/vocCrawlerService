@@ -22,6 +22,7 @@ from app.services.integration_review_service import IntegrationRequestError
 from app.services.reply_suggestion_service import DEFAULT_PRESET_THRESHOLD, decide
 from app.services.stateless_crawl_service import log_reason
 from app.services.taxonomy_service import Taxonomy, validate_body
+from apps.api.app_api.v2_ai_schemas import ProductPrefill
 
 logger = logging.getLogger(__name__)
 TOKEN_FIELDS = ("prompt_tokens", "completion_tokens", "total_tokens")
@@ -135,6 +136,8 @@ class StatelessAiService:
             if not review["text"].strip():
                 raw = AnalysisService._rating_only_result(review.get("rating"), taxonomy)
                 result["analysis"], result["corrected"] = AnalysisService._validate_result(raw, taxonomy)
+                if params.get("product_catalog"):
+                    result["analysis"].update(ProductPrefill().model_dump())
                 return result, usage, RATING_FALLBACK_MODEL
 
             if not hasattr(worker, "client"):
@@ -149,11 +152,31 @@ class StatelessAiService:
                 "id": review["id"], "rating": review.get("rating"), "review_text": review["text"],
                 "reviewer_name": review.get("reviewer_name"), "review_time": None, "location_id": None,
             }
+            if params.get("product_catalog"):
+                llm_review["product_catalog"] = params["product_catalog"]
             if taxonomy is not None:
                 llm_review["taxonomy"] = taxonomy.body
             try:
                 raw = self._call_llm_with_retry(client, llm_review, usage)
                 result["analysis"], result["corrected"] = AnalysisService._validate_result(raw, taxonomy)
+                if params.get("product_catalog"):
+                    prefill = raw if provider == "jev" else {}
+                    if provider != "jev":
+                        try:
+                            if not hasattr(worker, "product_client"):
+                                worker.product_client = self.client_factory(self.settings, "jev")
+                            worker.product_client.last_usage = {}
+                            prefill = worker.product_client.product_prefill(llm_review)
+                        except Exception:  # noqa: BLE001 - product prefill must not fail analysis
+                            logger.warning("Product prefill unavailable; retaining analysis")
+                        finally:
+                            if hasattr(worker, "product_client"):
+                                for key, value in _usage(worker.product_client.last_usage).items():
+                                    usage[key] += value
+                    try:
+                        result["analysis"].update(ProductPrefill.model_validate(prefill).model_dump())
+                    except ValueError:
+                        result["analysis"].update(ProductPrefill().model_dump())
                 result["status"] = "analyzed"
             except Exception:
                 result["status"] = "failed"
