@@ -112,17 +112,12 @@ class ApifyTokenPool:
         return None
 
     def token_at(self, index: int) -> str:
+        """Exhaustion blocks starting runs, not reading existing runs."""
         if not self._tokens:
             raise ApifyAllAccountsExhaustedError(
                 "No Apify accounts configured."
             )
-        idx = index % len(self._tokens)
-        if self.is_exhausted(idx):
-            try:
-                return self.current()
-            except ApifyAllAccountsExhaustedError:
-                return self._tokens[idx]
-        return self._tokens[idx]
+        return self._tokens[index % len(self._tokens)]
 
     def rotate(self, marker: dict | None = None) -> str | None:
         self._sync()
