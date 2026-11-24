@@ -70,7 +70,7 @@ printf '%s\n' \
   'REVIEW_SOURCE_MODE=apify' \
   "APIFY_API_TOKENS=$(dotenv_quote "$APIFY_API_TOKENS")" \
   'ANALYSIS_PROVIDER=absa' \
-  'ONEBOX_BASE_URL=https://staging.onebox.co.id/1_124_0' \
+  'ONEBOX_BASE_URL=https://staging.onebox.co.id/1_126_0' \
   "ONEBOX_SVC_EMAIL=$(dotenv_quote "$ONEBOX_SVC_EMAIL")" \
   "ONEBOX_SVC_PASSWORD=$(dotenv_quote "$ONEBOX_SVC_PASSWORD")" \
   'ONEBOX_SITE_ID=169' \
