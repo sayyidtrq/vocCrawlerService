@@ -1,4 +1,4 @@
-﻿# Fetch Jobs End-to-End Contract
+# Fetch Jobs End-to-End Contract
 
 > Status: implementation contract untuk demo key process.
 > Acuan: ADR-0003 dan ADR-0004.
@@ -45,6 +45,10 @@ Content-Type: application/json
 memakai target dari cache Worklist. Jika dikirim, nilainya 1-300 dan menjadi target job itu.
 Nilai target ikut fingerprint idempotency, sehingga key yang sama dengan target berbeda
 menghasilkan `409 IDEMPOTENCY_CONFLICT`.
+
+Untuk target kompetitor (`kind: "competitor"`): di-alamati via `onebox_target_id` (utama/stabil)
+atau `external_place_id` (legacy). Jika keduanya dikirim, `onebox_target_id` menang. Job kompetitor
+pada response membawa `onebox_target_id`.
 
 Response status batch memuat target per job dan agregat review:
 

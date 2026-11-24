@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -451,7 +453,8 @@ def test_backfill_script_fills_photos_from_raw_payload():
 
     with factory() as session:
         stats = backfill(session)
-    assert stats == {"scanned": 2, "updated": 1, "photos": 1}
+    assert stats == {"scanned": 2, "updated": 1, "photos": 1, "photo_reviews": 1,
+                     "urls": 1, "invalid_payloads": 0}
     after = {r.external_review_id: r for r in _all_reviews(factory)}
     assert after["old"].review_photo_urls == photos
     assert after["old"].review_url == "https://maps/old"
@@ -463,3 +466,110 @@ def test_backfill_script_fills_photos_from_raw_payload():
 def _all_reviews(factory):
     with factory() as session:
         return session.scalars(select(Review)).all()
+
+
+def test_photo_only_backfill_is_batched_idempotent_and_exported(monkeypatch):
+    from scripts import backfill_review_photos as script
+    from app.services.integration_review_service import IntegrationReviewService
+
+    monkeypatch.setattr(script, "BATCH", 1)
+    factory, company_id, location = make_db()
+    photos = ["https://lh3.googleusercontent.com/a"]
+    for review_id in ("first", "second", "no-photo"):
+        store(factory, company_id, location, {
+            **raw(review_id),
+            "raw_payload": {
+                "review_photos_urls": [] if review_id == "no-photo" else photos,
+                "review_url": "https://maps/" + review_id,
+            },
+        })
+    before = {r.id: utc(r.sync_updated_at) for r in _all_reviews(factory)}
+    with factory() as session:
+        dry = script.backfill(session, company_id=company_id, photos_only=True, dry_run=True)
+    assert dry["updated"] == dry["photo_reviews"] == 2
+    assert dry["urls"] == 0
+    assert all(not r.review_photo_urls for r in _all_reviews(factory))
+    assert {r.id: utc(r.sync_updated_at) for r in _all_reviews(factory)} == before
+
+    with factory() as session:
+        assert script.backfill(session, company_id=company_id, photos_only=True) == dry
+        assert script.backfill(session, company_id=company_id, photos_only=True)["updated"] == 0
+    for review in _all_reviews(factory):
+        assert review.review_url is None
+        if review.external_review_id == "no-photo":
+            assert utc(review.sync_updated_at) == before[review.id]
+        else:
+            assert review.review_photo_urls == photos
+            assert utc(review.sync_updated_at) > before[review.id]
+    exported = IntegrationReviewService(
+        company_id=company_id, session_factory=factory, cursor_secret="test-only-secret",
+    ).list_reviews(limit=10)
+    assert sum(bool(r["review_photo_urls"]) for r in exported["items"]) == 2
+
+
+def test_backfill_preserves_existing_fields_and_counts_only_new_photos():
+    from scripts.backfill_review_photos import backfill
+
+    factory, company_id, location = make_db()
+    existing = ["https://lh3.googleusercontent.com/original"]
+    store(factory, company_id, location, {
+        **raw("existing"), "review_photo_urls": existing,
+        "raw_payload": {"review_photos_urls": ["https://lh3.googleusercontent.com/other"],
+                        "review_url": "https://maps/existing"},
+    })
+    with factory() as session:
+        stats = backfill(session, company_id=company_id)
+    assert stats["updated"] == stats["urls"] == 1
+    assert stats["photo_reviews"] == stats["photos"] == 0
+    review = only_review(factory)
+    assert review.review_photo_urls == existing
+    assert review.review_url == "https://maps/existing"
+    with factory() as session:
+        assert backfill(session, company_id=company_id)["updated"] == 0
+
+
+@pytest.mark.parametrize("payload", [
+    ["not-an-object"],
+    {"review_photos_urls": "https://lh3.googleusercontent.com/not-an-array"},
+    {"review_photos_urls": [None]},
+    {"review_photos_urls": ["javascript:alert(1)"]},
+    {"review_photos_urls": ["https://"]},
+    {"review_url": "https://[bad"},
+])
+def test_backfill_skips_malformed_payloads(payload):
+    from scripts.backfill_review_photos import backfill
+
+    factory, company_id, location = make_db()
+    store(factory, company_id, location, raw("malformed"))
+    with factory() as session:
+        session.scalar(select(Review)).raw_payload = payload
+        session.commit()
+        stats = backfill(session, company_id=company_id)
+    assert stats["updated"] == 0
+    assert stats["invalid_payloads"] == 1
+    assert only_review(factory).review_photo_urls == []
+
+
+def test_backfill_filters_company_and_location():
+    from scripts.backfill_review_photos import backfill
+
+    factory, company_id, location = make_db()
+    with factory() as session:
+        other_company = Company(name="Other", total_enable_review=0)
+        session.add(other_company)
+        session.flush()
+        other_location = Location(company_id=other_company.id, hospital_name="Other",
+                                  branch_name="Other branch", source="apify_google_maps",
+                                  external_place_id="place-2", onebox_location_id=102)
+        session.add(other_location)
+        session.commit()
+    for tenant, branch in ((company_id, location), (other_company.id, other_location)):
+        store(factory, tenant, branch, {
+            **raw(str(tenant)),
+            "raw_payload": {"review_photos_urls": ["https://lh3.googleusercontent.com/a"]},
+        })
+    with factory() as session:
+        assert backfill(session, company_id=company_id, location_id=other_location.id)["scanned"] == 0
+        stats = backfill(session, company_id=company_id, location_id=location.id, photos_only=True)
+    assert stats["scanned"] == stats["updated"] == 1
+    assert next(r for r in _all_reviews(factory) if r.company_id == other_company.id).review_photo_urls == []

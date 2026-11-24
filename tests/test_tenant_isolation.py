@@ -52,7 +52,7 @@ def two_companies(session_factory):
 
 def _add_location(session_factory, company_id: int, external_place_id: str):
     return LocationService(company_id=company_id, session_factory=session_factory).add_location(
-        hospital_name="Hermina",
+        organization_name="Company",
         branch_name=f"Branch {external_place_id}",
         source="google_places",
         external_place_id=external_place_id,
@@ -76,6 +76,29 @@ def test_location_isolation(session_factory, two_companies):
         service_b.update_location(location_a.id, "branch_name", "Hijacked")
     with pytest.raises(ValueError):
         service_b.delete_location(location_a.id)
+
+
+def test_place_and_review_identity_are_scoped_per_company(session_factory, two_companies):
+    company_a_id, company_b_id = two_companies
+    location_a = _add_location(session_factory, company_a_id, "shared-place")
+    location_b = _add_location(session_factory, company_b_id, "shared-place")
+    review = {
+        "source": "google_places",
+        "external_place_id": "shared-place",
+        "review_hash": "shared-review-hash",
+        "review_text": "Ulasan yang sama dapat terlihat oleh dua tenant.",
+        "raw_payload": {},
+    }
+
+    for company_id, location in (
+        (company_a_id, location_a),
+        (company_b_id, location_b),
+    ):
+        inserted, duplicate = ReviewService(
+            company_id=company_id, session_factory=session_factory
+        ).insert_review({**review, "location_id": location.id})
+        assert inserted.company_id == company_id
+        assert duplicate is False
 
 
 def test_review_isolation(session_factory, two_companies):

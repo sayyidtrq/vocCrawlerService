@@ -18,6 +18,7 @@ Expected response shape:
 {
   "data": [
     {
+      "onebox_target_id": 501,
       "onebox_connection_id": 1039,
       "onebox_location_id": 12,
       "kind": "location",
@@ -37,7 +38,8 @@ Expected response shape:
 }
 ```
 
-`data[].kind` is `location` or `competitor`. `external_place_id` is the stable identity
+`data[].kind` is `location` or `competitor`. `onebox_target_id` is the OneBox target registry id.
+`onebox_connection_id` is deprecated/optional. `external_place_id` is the stable identity
 used for idempotent upsert. `active` controls visibility/activation, `crawl_enabled`
 controls whether the target enters a crawl run, `ingest_reviews` controls review ingestion,
 and `mock` selects mock fetch behavior for a managed location.
@@ -87,7 +89,7 @@ crawler's local mock review client instead of Google Maps or Selenium.
 1. The entire response is validated before any database mutation.
 2. Location and competitor rows are upserted by `company_id + external_place_id`.
 3. Existing review, analysis, deduplication, and crawl-cursor data is preserved.
-4. Rows previously managed by OneBox but absent from a successful response are soft-disabled;
+4. Rows previously managed by OneBox (any of `onebox_connection_id`, `onebox_location_id`, or `onebox_target_id` is not null) but absent from a successful response are soft-disabled;
    they are not deleted.
 5. A successful pull writes `worklist_sync_states` with last attempt, last success, item count,
    site ID, and cleared error.

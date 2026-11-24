@@ -1,7 +1,9 @@
+from datetime import datetime
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.db.models import CrawlBatch, CrawlJob
+from app.db.models import Competitor, CrawlBatch, CrawlJob
 from app.services.crawl_result import (
     matched_count,
     rating_snapshot,
@@ -9,12 +11,41 @@ from app.services.crawl_result import (
     stop_reason,
 )
 
+WAITING_JOB_STATUSES = ("queued", "retry_wait", "awaiting_source")
+TERMINAL_JOB_STATUSES = (
+    "succeeded",
+    "partial_success",
+    "skipped",
+    "failed",
+    "cancelled",
+)
+
+
+def refresh_batch_status(session: Session, batch: CrawlBatch, now: datetime) -> None:
+    """Apply the same terminal status precedence for workers and cancellation."""
+    statuses = list(
+        session.scalars(select(CrawlJob.status).where(CrawlJob.batch_id == batch.id))
+    )
+    if any(status not in TERMINAL_JOB_STATUSES for status in statuses):
+        batch.status = "running"
+        return
+    failed = statuses.count("failed")
+    if failed == len(statuses):
+        batch.status = "failed"
+    elif failed:
+        batch.status = "partial_failed"
+    elif "cancelled" in statuses:
+        batch.status = "cancelled"
+    else:
+        batch.status = "completed"
+    batch.finished_at = now
 
 
 def _public_status(status: str) -> str:
     # Run Apify yang diparkir tetap "running" bagi OneBox; status internal ini
     # tidak termasuk kontrak.
     return "running" if status == "awaiting_source" else status
+
 
 def serialize_batch(
     session: Session, batch: CrawlBatch, include_jobs: bool = True
@@ -26,16 +57,22 @@ def serialize_batch(
             .order_by(CrawlJob.id)
         )
     )
+    competitor_ids = {job.competitor_id for job in jobs if job.competitor_id is not None}
+    target_ids = (
+        dict(session.execute(
+            select(Competitor.id, Competitor.onebox_target_id).where(
+                Competitor.id.in_(competitor_ids)
+            )
+        ).all())
+        if include_jobs and competitor_ids else {}
+    )
     counts = {
         status: 0
         for status in (
             "queued",
             "running",
             "retry_wait",
-            "succeeded",
-            "partial_success",
-            "skipped",
-            "failed",
+            *TERMINAL_JOB_STATUSES,
         )
     }
     review_counts = {
@@ -119,6 +156,7 @@ def serialize_batch(
             {
                 "job_id": job.id,
                 "onebox_location_id": job.onebox_location_id,
+                "onebox_target_id": target_ids.get(job.competitor_id),
                 "competitor_id": job.competitor_id,
                 "kind": (
                     "competitor"
@@ -190,4 +228,3 @@ def batch_stop_reasons(jobs) -> tuple[str | None, dict[str, int]]:
     if len(counts) == 1:
         return next(iter(counts)), counts
     return "mixed", counts
-

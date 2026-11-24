@@ -316,9 +316,9 @@ def test_local_llm_normalizes_invalid_category_and_boolean(settings):
         }
     )
 
-    assert result["issue_category"] == "staff_communication"
+    assert result["issue_category"] == "staff_service"
     assert result["is_potential_viral"] is False
-    assert result["is_patient_safety_issue"] is False
+    assert result["is_safety_issue"] is False
 
 
 def test_local_llm_wraps_openai_api_errors(settings):

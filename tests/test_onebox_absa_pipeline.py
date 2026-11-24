@@ -168,3 +168,23 @@ def test_onebox_receives_absa_sentiment(analysis_request, pipeline):
         stored = session.scalar(select(ReviewAnalysis))
     assert stored.model_name == "v14"
     assert stored.raw_response["absa"]["model_version"] == "14.0.0-candidate"
+
+
+def _absa_client(aspects):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"engine_version": "v14", "model_version": "14.0.0", "results": aspects})
+
+    http = httpx.Client(base_url="http://absa.test/api", transport=httpx.MockTransport(handler))
+    return AbsaClient(Settings(database_url="sqlite+pysqlite:///:memory:", analysis_provider="absa"), http_client=http)
+
+
+def test_category_confidence_is_the_primary_aspects_and_absent_without_a_real_pick():
+    review = {"review_text": "x", "rating": 2}
+    waiting = {"aspect": "antrean", "opinion": "lama", "sentiment": "negative", "taxonomy": "Waiting Time", "confidence": 0.93}
+    assert _absa_client([waiting]).analyze_review(review)["category_confidence"] == 0.93
+    # no aspect found: nothing was picked, so there is nothing to be confident about
+    assert _absa_client([]).analyze_review(review)["category_confidence"] is None
+    # praise rule replaces an unmapped positive aspect: not the model's pick either
+    nice = {"aspect": "dokter", "opinion": "ramah", "sentiment": "positive", "taxonomy": "Unmapped Thing", "confidence": 0.8}
+    result = _absa_client([nice]).analyze_review({"review_text": "x", "rating": 5})
+    assert result["issue_category"] == "general_praise" and result["category_confidence"] is None

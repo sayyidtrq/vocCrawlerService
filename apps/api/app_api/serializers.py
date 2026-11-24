@@ -28,7 +28,7 @@ def location_to_dict(location: Any) -> dict[str, Any]:
     return to_jsonable(
         {
             "id": location.id,
-            "hospital_name": location.hospital_name,
+            "organization_name": location.organization_name,
             "branch_name": location.branch_name,
             "city": location.city,
             "address": location.address,

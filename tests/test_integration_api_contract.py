@@ -1,4 +1,4 @@
-"""Contract tests for the OneBox v1 integration endpoint (VOC-CS-01).
+"""Contract tests for the OneBox v2 integration endpoint (VOC-CS-01).
 
 These tests exist to make a breaking change loud. OneBox parses this response, so
 a dropped field, a widened enum, a "+00:00" instead of a "Z", or a leaked
@@ -48,6 +48,7 @@ FORBIDDEN_FIELDS = {"raw_payload", "raw_response", "company_id"}
 EXPECTED_ITEM_FIELDS = {
     "id",
     "location_id",
+    "onebox_location_id",
     "location",
     "source",
     "external_place_id",
@@ -83,7 +84,11 @@ EXPECTED_ITEM_FIELDS = {
     "recommended_action",
     "keywords",
     "is_potential_viral",
-    "is_patient_safety_issue",
+    "is_safety_issue",
+    # v3, optional: null for analyses made without an OneBox industry taxonomy.
+    "taxonomy_version",
+    "risk_flags",
+    "tags",
 }
 
 ANALYSIS_ONLY_FIELDS = {
@@ -257,6 +262,48 @@ def client(app):
     return TestClient(app)
 
 
+def test_location_lookup_resolves_onebox_id_within_token_tenant(client, session_factory, seeded):
+    with session_factory() as session:
+        session.get(Location, seeded["depok_id"]).onebox_location_id = 682
+        session.get(Location, seeded["foreign_location_id"]).onebox_location_id = 682
+        session.commit()
+    response = client.get("/api/integration/v1/locations/682")
+    assert response.status_code == 200
+    assert response.json() == {"id": seeded["depok_id"], "onebox_location_id": 682}
+
+
+def test_location_lookup_does_not_expose_other_tenants_mapping(client, session_factory, seeded):
+    with session_factory() as session:
+        session.get(Location, seeded["foreign_location_id"]).onebox_location_id = 999
+        session.commit()
+    assert client.get("/api/integration/v1/locations/999").status_code == 404
+
+
+def test_location_lookup_rejects_ambiguous_mapping(client, session_factory, seeded):
+    with session_factory() as session:
+        session.get(Location, seeded["depok_id"]).onebox_location_id = 682
+        session.get(Location, seeded["bekasi_id"]).onebox_location_id = 682
+        session.commit()
+    assert client.get("/api/integration/v1/locations/682").status_code == 409
+
+
+def test_location_lookup_requires_review_scope(client, app, seeded):
+    app.dependency_overrides[require_service_principal] = lambda: ServicePrincipal(
+        client_id=1, key_id="test", company_id=seeded["company_id"], scopes=frozenset(),
+    )
+    assert client.get("/api/integration/v1/locations/682").status_code == 403
+
+
+@pytest.mark.parametrize("location_id", [0, -1])
+def test_location_lookup_rejects_invalid_onebox_id(client, location_id):
+    assert client.get(f"/api/integration/v1/locations/{location_id}").status_code == 400
+
+
+def test_location_lookup_requires_authentication():
+    with TestClient(create_app()) as unauthenticated:
+        assert unauthenticated.get("/api/integration/v1/locations/682").status_code == 401
+
+
 def _get(client, **params):
     response = client.get("/api/integration/v1/reviews", params=params)
     assert response.status_code == 200, response.text
@@ -380,7 +427,7 @@ def test_unanalyzed_review_nulls_every_analysis_field(client):
     # Collections stay non-null so consumers never null-check them.
     assert item["keywords"] == []
     assert item["is_potential_viral"] is False
-    assert item["is_patient_safety_issue"] is False
+    assert item["is_safety_issue"] is False
 
 
 def test_analyzed_reviews_carry_their_analysis(client):
@@ -392,8 +439,8 @@ def test_analyzed_reviews_carry_their_analysis(client):
     assert critical["analysis_status"] == "completed"
     assert critical["sentiment"] == "negative"
     assert critical["urgency"] == "critical"
-    assert critical["issue_category"] == "emergency_room"
-    assert critical["is_patient_safety_issue"] is True
+    assert critical["issue_category"] == "safety_security"
+    assert critical["is_safety_issue"] is True
     assert critical["summary"]
     assert critical["recommended_action"]
 
@@ -458,7 +505,7 @@ def test_sync_updated_at_is_exposed_and_differs_from_updated_at(client, seeded):
     ("stored", "expected"),
     [
         ("customer service", "customer_service"),
-        ("service quality", "customer_service"),
+        ("service quality", "service_quality"),
         ("waiting time", "waiting_time"),
         ("General", "other"),
         ("future category", "other"),

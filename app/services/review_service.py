@@ -271,7 +271,7 @@ class ReviewService:
             "is_potential_viral": (
                 analysis.is_potential_viral if analysis else False
             ),
-            "is_patient_safety_issue": (
-                analysis.is_patient_safety_issue if analysis else False
+            "is_safety_issue": (
+                analysis.is_safety_issue if analysis else False
             ),
         }

@@ -7,31 +7,44 @@ from openai import APIError, OpenAI
 
 from app.config import Settings
 from app.integrations.gemini_client import GeminiClientBase, ReviewAnalysisResult
+from app.services.taxonomy_service import Taxonomy
 
 ALLOWED_ISSUE_CATEGORIES = {
-    "doctor_service",
-    "nurse_service",
+    "product_quality",
+    "service_quality",
+    "professional_service",
+    "staff_service",
     "administration",
     "waiting_time",
     "cleanliness",
     "facility",
     "parking",
-    "billing",
-    "pharmacy",
-    "emergency_room",
-    "inpatient",
+    "accessibility",
+    "price_value",
+    "billing_payment",
+    "availability",
+    "delivery_fulfillment",
     "customer_service",
-    "booking_system",
-    "staff_communication",
-    "security",
-    "food",
+    "booking_ordering",
+    "digital_experience",
+    "safety_security",
+    "food_beverage",
     "general_praise",
     "other",
 }
 ISSUE_CATEGORY_ALIASES = {
     "waiting_room": "waiting_time",
-    "staff_service": "staff_communication",
-    "patient_experience": "other",
+    "doctor_service": "professional_service",
+    "nurse_service": "staff_service",
+    "billing": "billing_payment",
+    "pharmacy": "availability",
+    "emergency_room": "safety_security",
+    "inpatient": "facility",
+    "booking_system": "booking_ordering",
+    "staff_communication": "staff_service",
+    "security": "safety_security",
+    "food": "food_beverage",
+    "patient_experience": "service_quality",
 }
 
 
@@ -53,14 +66,21 @@ def _coerce_model_bool(value) -> bool:
     return False
 
 
-def _normalize_model_output(parsed: dict) -> dict:
+def _normalize_model_output(parsed: dict, taxonomy: Taxonomy | None = None) -> dict:
     normalized = dict(parsed)
-    category = str(normalized.get("issue_category") or "other").strip().lower()
-    category = ISSUE_CATEGORY_ALIASES.get(category, category)
-    normalized["issue_category"] = (
-        category if category in ALLOWED_ISSUE_CATEGORIES else "other"
-    )
-    for field in ("is_potential_viral", "is_patient_safety_issue"):
+    if taxonomy is not None:
+        normalized["issue_category"] = taxonomy.category(
+            normalized.get("issue_category") or taxonomy.fallback
+        )[0]
+    else:
+        category = str(normalized.get("issue_category") or "other").strip().lower()
+        category = ISSUE_CATEGORY_ALIASES.get(category, category)
+        normalized["issue_category"] = (
+            category if category in ALLOWED_ISSUE_CATEGORIES else "other"
+        )
+    if "is_safety_issue" not in normalized:
+        normalized["is_safety_issue"] = normalized.get("is_patient_safety_issue")
+    for field in ("is_potential_viral", "is_safety_issue"):
         normalized[field] = _coerce_model_bool(normalized.get(field))
     return normalized
 
@@ -69,7 +89,10 @@ def _build_example_from_schema(schema: dict) -> dict:
     """Bangun contoh instance JSON (bukan schema) dari pydantic JSON schema,
     supaya kalau field di ReviewAnalysisResult berubah, contoh di prompt ikut update."""
     example: dict = {}
-    for field, spec in schema.get("properties", {}).items():
+    properties = schema.get("properties", {})
+    # Optional fields (risk_flags, tags) belong to the taxonomy instructions, not the example.
+    for field in schema.get("required", list(properties)):
+        spec = properties[field]
         if "enum" in spec:
             example[field] = spec["enum"][0]
         elif spec.get("type") == "string":
@@ -147,9 +170,58 @@ class LocalLLMClient(GeminiClientBase):
         }
         return sorted(model for model in models if model)
 
+    @staticmethod
+    def _taxonomy_instruction(taxonomy: Taxonomy) -> str:
+        """Closed vocabulary for one location; replaces the generic category guidance."""
+        lines = [
+            "\n\nTAXONOMY OVERRIDE (this location's own vocabulary; it replaces the generic "
+            "category guidance above, including `general_praise` and `other`):",
+        ]
+        if taxonomy.persona:
+            lines.append(f"The review is from a {taxonomy.persona}.")
+        lines.append("`issue_category` MUST be exactly one of these slugs:")
+        lines += [
+            f"- {slug}: {aspect.get('criteria') or slug}" for slug, aspect in taxonomy.aspects.items()
+        ]
+        lines.append(
+            f"Use `{taxonomy.praise}` for general praise without a specific issue and "
+            f"`{taxonomy.fallback}` when nothing else fits."
+        )
+        if taxonomy.risk_flags:
+            lines.append(
+                "Also add `risk_flags`: an object with a true/false value for EACH of these keys:"
+            )
+            lines += [f"- {flag['slug']}: {flag['question']}" for flag in taxonomy.risk_flags]
+        if taxonomy.tagging_enabled:
+            lines.append(
+                f"Also add `tags`: a JSON array with one object for EVERY aspect above the review "
+                f"mentions (at most {taxonomy.max_tags}), most prominent first. Each object is "
+                '{"slug": <aspect slug>, "sentiment": <positive|negative|neutral|mixed>}, where '
+                "sentiment is what the review says about THAT aspect only (a review can praise one "
+                "aspect and criticise another)."
+            )
+        return "\n".join(lines)
+
+    def brief(self, messages: list[dict]) -> str:
+        """Generate text once without provider formatting or SDK retries."""
+        self.last_usage = {}
+        response = self.client.with_options(max_retries=0).chat.completions.create(
+            model=self.model_name, messages=messages, store=False,
+        )
+        usage = getattr(response, "usage", None)
+        self.last_usage = {
+            key: int(getattr(usage, key, 0) or 0)
+            for key in ("prompt_tokens", "completion_tokens", "total_tokens")
+        }
+        return response.choices[0].message.content or ""
+
     def analyze_review(self, review: dict) -> dict:
+        taxonomy = Taxonomy(review["taxonomy"]) if review.get("taxonomy") else None
+        system_instruction = self.system_instruction
+        if taxonomy is not None:
+            system_instruction += self._taxonomy_instruction(taxonomy)
         prompt = (
-            "Analisis review rumah sakit berikut sesuai instruksi sistem.\n\n"
+            "Analisis review berikut sesuai instruksi sistem.\n\n"
             f"Rating: {review.get('rating')}\n"
             f"Reviewer: {review.get('reviewer_name') or 'Anonymous'}\n"
             f"Waktu review: {review.get('review_time') or 'unknown'}\n"
@@ -160,7 +232,7 @@ class LocalLLMClient(GeminiClientBase):
             response = self.client.chat.completions.create(
                 model=self.model_name,
                 messages=[
-                    {"role": "system", "content": self.system_instruction},
+                    {"role": "system", "content": system_instruction},
                     {"role": "user", "content": prompt},
                 ],
                 temperature=0.1,
@@ -202,7 +274,7 @@ class LocalLLMClient(GeminiClientBase):
         if "properties" in parsed and "sentiment" not in parsed:
             parsed = parsed["properties"]
 
-        parsed = _normalize_model_output(parsed)
+        parsed = _normalize_model_output(parsed, taxonomy)
         try:
             return ReviewAnalysisResult.model_validate(parsed).model_dump()
         except ValueError as exc:

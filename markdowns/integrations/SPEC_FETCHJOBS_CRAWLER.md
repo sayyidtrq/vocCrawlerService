@@ -781,6 +781,12 @@ anything here means changing Part 1 §5 in the same commit.**
 ### 5.1 `CrawlTargetRequest` (`apps/api/app_api/integration_crawl_schemas.py`)
 
 ```python
+kind: Literal["location", "competitor"] = "location"
+onebox_location_id: int | None = Field(default=None, gt=0)
+onebox_target_id: int | None = Field(default=None, gt=0)
+external_place_id: str | None = Field(default=None, max_length=255)
+onebox_connection_id: int | None = Field(default=None, gt=0)  # deprecated; audit trail only
+
 coverage: Literal["full_backfill", "date_window", "delta"] | None = None
 budget: int | None = Field(default=None, ge=1, le=100_000)
 
@@ -793,6 +799,10 @@ scan_limit: int | None = None          # accepted, ignored, logged once
 
 Validator rules:
 
+- `kind == "location"` requires `onebox_location_id`.
+- `kind == "competitor"` requires `onebox_target_id` (preferred) or non-empty `external_place_id` (legacy).
+  When `onebox_target_id` is supplied, it resolves by `Competitor.onebox_target_id` (tenant-scoped, active)
+  and wins over `external_place_id` if both are sent. Otherwise resolves by `external_place_id`.
 - `coverage == "date_window"` requires at least one of `date_from`/`date_to`,
   and **forbids `budget`** (D8 — a date range always takes everything). A
   legacy request mapped to `date_window` has its `target_review_count`
@@ -841,6 +851,9 @@ request rather than surfacing the mismatch.
 "budget": int | None,
 "stop_reason": ... | "budget_exhausted" | "coverage_complete",
 ```
+
+Per job in batch responses (`CrawlJobResponse`):
+- `onebox_target_id`: `int | None = None` — populated for competitor jobs from `Competitor.onebox_target_id`; null for location jobs.
 
 ### 5.5 Review API additions (`GET /integration/v1/reviews`) — additive only
 

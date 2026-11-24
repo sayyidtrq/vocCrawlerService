@@ -6,12 +6,12 @@ import logging
 from datetime import datetime
 from uuid import uuid4
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import Settings, get_settings
-from app.db.models import Competitor, CrawlBatch, CrawlJob, Location
+from app.db.models import Company, Competitor, CrawlBatch, CrawlJob, Location
 from app.db.session import get_session_factory
 from app.services.crawl_batch_view import serialize_batch
 from app.services.crawl_result import CrawlRequestSnapshot
@@ -48,6 +48,21 @@ class CrawlQueue:
         self.settings = settings or get_settings()
 
     @staticmethod
+    def _competitor_spec_key(spec: dict) -> str:
+        target_id = spec.get("onebox_target_id")
+        if target_id is not None:
+            return f"target:{target_id}"
+        return str(spec.get("external_place_id") or "").strip()
+
+    @staticmethod
+    def _competitor_key(competitor: Competitor, competitor_specs: dict[str, dict]) -> str:
+        if competitor.onebox_target_id is not None:
+            target_key = f"target:{competitor.onebox_target_id}"
+            if target_key in competitor_specs:
+                return target_key
+        return competitor.external_place_id
+
+    @staticmethod
     def request_fingerprint(
         slot: str | None,
         onebox_location_ids: list[int],
@@ -67,21 +82,21 @@ class CrawlQueue:
             # pengulangan. Tanpa ini permintaan kedua akan diam-diam
             # mengembalikan batch pertama.
             payload["competitor_targets"] = {
-                place_id: {
-                    "target_review_count": competitor_targets[place_id].get(
+                spec_key: {
+                    "target_review_count": competitor_targets[spec_key].get(
                         "target_review_count"
                     ),
                     "date_from": _iso(
-                        competitor_targets[place_id].get("date_from")
+                        competitor_targets[spec_key].get("date_from")
                     ),
-                    "date_to": _iso(competitor_targets[place_id].get("date_to")),
-                    "sort_by": competitor_targets[place_id].get("sort_by")
+                    "date_to": _iso(competitor_targets[spec_key].get("date_to")),
+                    "sort_by": competitor_targets[spec_key].get("sort_by")
                     or "newest",
-                    "coverage": competitor_targets[place_id].get("coverage"),
-                    "budget": competitor_targets[place_id].get("budget"),
-                    "crawl_mode": competitor_targets[place_id].get("crawl_mode"),
+                    "coverage": competitor_targets[spec_key].get("coverage"),
+                    "budget": competitor_targets[spec_key].get("budget"),
+                    "crawl_mode": competitor_targets[spec_key].get("crawl_mode"),
                 }
-                for place_id in sorted(competitor_targets)
+                for spec_key in sorted(competitor_targets)
             }
         if target_sorts:
             # Urutan ikut sidik jari: permintaan yang sama dengan urutan berbeda
@@ -144,9 +159,9 @@ class CrawlQueue:
         target_ids = sorted(set(onebox_location_ids))
         competitor_specs: dict[str, dict] = {}
         for spec in competitor_targets or []:
-            place_id = str(spec.get("external_place_id") or "").strip()
-            if place_id:
-                competitor_specs[place_id] = spec
+            spec_key = self._competitor_spec_key(spec)
+            if spec_key:
+                competitor_specs[spec_key] = spec
         if not target_ids and not competitor_specs:
             raise CrawlQueueError(
                 400,
@@ -184,6 +199,16 @@ class CrawlQueue:
                         "Idempotency-Key was already used with a different payload.",
                     )
                 return serialize_batch(session, existing), False
+
+            is_active = session.scalar(
+                select(Company.is_active).where(Company.id == company_id)
+            )
+            if is_active is False:
+                raise CrawlQueueError(
+                    409,
+                    "TENANT_INACTIVE",
+                    "Tenant is inactive; it does not accept new crawl jobs.",
+                )
 
             locations = list(
                 session.scalars(
@@ -237,34 +262,62 @@ class CrawlQueue:
             # ditarik sebagai pembanding.
             competitors = []
             if competitor_specs:
-                competitors = list(
-                    session.scalars(
-                        select(Competitor)
-                        .where(
-                            Competitor.company_id == company_id,
-                            Competitor.external_place_id.in_(
-                                sorted(competitor_specs)
-                            ),
-                            Competitor.is_active.is_(True),
-                        )
-                        .order_by(Competitor.id)
-                    )
-                )
-                found_places = {
-                    competitor.external_place_id for competitor in competitors
-                }
-                missing_places = [
-                    place
-                    for place in sorted(competitor_specs)
-                    if place not in found_places
+                competitor_target_ids = [
+                    spec["onebox_target_id"]
+                    for spec in competitor_specs.values()
+                    if spec.get("onebox_target_id") is not None
                 ]
-                if missing_places:
-                    raise CrawlQueueError(
-                        404,
-                        "TARGET_NOT_FOUND",
-                        "One or more competitor targets are absent, disabled, "
-                        "or outside this tenant.",
+                place_ids = [
+                    spec["external_place_id"]
+                    for spec in competitor_specs.values()
+                    if spec.get("onebox_target_id") is None and spec.get("external_place_id")
+                ]
+                clauses = []
+                if competitor_target_ids:
+                    clauses.append(Competitor.onebox_target_id.in_(competitor_target_ids))
+                if place_ids:
+                    clauses.append(Competitor.external_place_id.in_(place_ids))
+                competitor_rows = (
+                    list(
+                        session.scalars(
+                            select(Competitor)
+                            .where(
+                                Competitor.company_id == company_id,
+                                or_(*clauses),
+                                Competitor.is_active.is_(True),
+                            )
+                            .order_by(Competitor.id)
+                        )
                     )
+                    if clauses
+                    else []
+                )
+                by_target_id = {
+                    c.onebox_target_id: c
+                    for c in competitor_rows
+                    if c.onebox_target_id is not None
+                }
+                by_place_id = {
+                    c.external_place_id: c
+                    for c in competitor_rows
+                    if c.external_place_id
+                }
+                resolved: dict[str, Competitor] = {}
+                for spec_key, spec in competitor_specs.items():
+                    comp = None
+                    if spec.get("onebox_target_id") is not None:
+                        comp = by_target_id.get(spec["onebox_target_id"])
+                    elif spec.get("external_place_id"):
+                        comp = by_place_id.get(spec["external_place_id"])
+                    if comp is None:
+                        raise CrawlQueueError(
+                            404,
+                            "TARGET_NOT_FOUND",
+                            "One or more competitor targets are absent, disabled, "
+                            "or outside this tenant.",
+                        )
+                    resolved[spec_key] = comp
+                competitors = sorted(dict.fromkeys(resolved.values()), key=lambda c: c.id)
 
             active_batch = self._find_active_batch_for_single_target(
                 session=session,
@@ -344,7 +397,8 @@ class CrawlQueue:
                     )
                 )
             for competitor in competitors:
-                spec = competitor_specs[competitor.external_place_id]
+                spec_key = self._competitor_key(competitor, competitor_specs)
+                spec = competitor_specs[spec_key]
                 date_from = spec.get("date_from")
                 date_to = spec.get("date_to")
                 coverage = self._normalize_coverage(
@@ -549,7 +603,8 @@ class CrawlQueue:
             )
         else:
             competitor = competitors[0]
-            spec = competitor_specs[competitor.external_place_id]
+            spec_key = self._competitor_key(competitor, competitor_specs)
+            spec = competitor_specs[spec_key]
             conditions.extend(
                 [
                     CrawlJob.competitor_id == competitor.id,
@@ -578,6 +633,14 @@ class CrawlQueue:
             WorklistSyncService,
         )
 
+        if self.settings.onebox_managed:
+            logger.warning(
+                "crawl target %s tidak dikenal; mode managed: worklist dikirim OneBox, "
+                "minta OneBox mengirim ulang snapshot (Refresh di Setup Parameter)",
+                missing,
+            )
+            return False
+
         if not WorklistSyncService.is_configured(self.settings):
             logger.warning(
                 "crawl target %s tidak dikenal dan worklist OneBox belum "
@@ -587,8 +650,12 @@ class CrawlQueue:
             return False
 
         try:
+            # settings dioper eksplisit: is_configured di atas memeriksa
+            # self.settings, jadi refresh harus memakai konfigurasi yang sama.
             result = WorklistSyncService(
-                company_id=company_id, session_factory=self.session_factory
+                company_id=company_id,
+                session_factory=self.session_factory,
+                settings=self.settings,
             ).refresh()
         except WorklistSyncError as exc:
             logger.warning("refresh worklist otomatis gagal untuk %s: %s", missing, exc)

@@ -1,0 +1,197 @@
+"""Stateless AI request and response contracts."""
+
+from __future__ import annotations
+
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from app.services.reply_suggestion_service import DEFAULT_PRESET_THRESHOLD
+from apps.api.app_api.v2_common import V2Meta
+
+Provider = Literal["jev", "openai", "absa"]
+
+
+class AnalysisReview(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: str = Field(min_length=1, max_length=64)
+    review_hash: str | None = Field(default=None, min_length=1, max_length=255)
+    rating: int | None = Field(default=None, ge=1, le=5, strict=True)
+    text: str = Field(max_length=10000)
+    reviewer_name: str | None = Field(default=None, max_length=255)
+
+
+class SubProductOffer(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    slug: str = Field(min_length=1, max_length=80, pattern=r"^[a-z][a-z0-9_]*$")
+    name: str = Field(min_length=1, max_length=255)
+    condition: str = Field(max_length=4000)
+
+
+class ProductOffer(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    slug: str = Field(min_length=1, max_length=80, pattern=r"^[a-z][a-z0-9_]*$")
+    name: str = Field(min_length=1, max_length=255)
+    sub_products: list[SubProductOffer] = Field(min_length=1, max_length=500)
+
+
+class SubProductProposal(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    name: str = Field(min_length=1, max_length=255)
+    condition: str = Field(min_length=1, max_length=4000)
+
+
+class ProductPrefill(BaseModel):
+    product: str | None = Field(default=None, max_length=80, pattern=r"^[a-z][a-z0-9_]*$", strict=True)
+    sub_product: str | None = Field(default=None, max_length=80, pattern=r"^[a-z][a-z0-9_]*$", strict=True)
+    sub_product_source: Literal["jev", "llm"] | None = None
+    sub_product_proposal: SubProductProposal | None = None
+
+
+class AnalysisRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    site_id: int = Field(default=0, ge=0, strict=True)
+    provider: Provider | None = None
+    taxonomy: dict[str, Any] | None = None
+    taxonomy_key: str | None = Field(default=None, min_length=1, max_length=80)
+    product_catalog: list[ProductOffer] = Field(default_factory=list, max_length=200)
+    reviews: list[AnalysisReview] = Field(min_length=1, max_length=50)
+
+    @model_validator(mode="after")
+    def unique_review_ids(self) -> AnalysisRequest:
+        if len({review.id for review in self.reviews}) != len(self.reviews):
+            raise ValueError("Duplicate review ids are not allowed.")
+        if len({p.slug for p in self.product_catalog}) != len(self.product_catalog):
+            raise ValueError("Duplicate product slugs are not allowed.")
+        for product in self.product_catalog:
+            slugs = [row.slug for row in product.sub_products]
+            if "other" in slugs or len(set(slugs)) != len(slugs):
+                raise ValueError("Sub-product slugs must be unique and cannot be other.")
+        return self
+
+
+class PresetOffer(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: str = Field(min_length=1, max_length=60, pattern=r"^[a-z][a-z0-9_]*$")
+    when_to_use: str = Field(min_length=1, max_length=300)
+
+
+class Thresholds(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    preset: float = Field(default=DEFAULT_PRESET_THRESHOLD, ge=0, le=1)
+
+
+class GeneratedOptions(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    allowed: bool = False
+
+
+class ReplySuggestionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    site_id: int = Field(default=0, ge=0, strict=True)
+    review_hash: str | None = Field(default=None, max_length=255)
+    text: str = Field(max_length=10000)
+    taxonomy: dict[str, Any]
+    taxonomy_key: str | None = Field(default=None, min_length=1, max_length=80)
+    presets: list[PresetOffer] = Field(max_length=30)
+    thresholds: Thresholds = Field(default_factory=Thresholds)
+    generated: GeneratedOptions = Field(default_factory=GeneratedOptions)
+
+
+class BriefFact(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    key: str = Field(min_length=1, max_length=60)
+    value: str | int | float
+
+
+class BriefRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    language: str = Field(default="id", min_length=2, max_length=2, pattern=r"^[a-z]{2}$")
+    audience: Literal["coo", "manager"] = "coo"
+    draft: str = Field(min_length=1, max_length=6000)
+    facts: list[BriefFact] = Field(default_factory=list, max_length=200)
+    max_words: int = Field(default=250, ge=50, le=600, strict=True)
+
+
+class ReviewSummaryLabels(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    sentiment: str | None = Field(default=None, max_length=20)
+    category: str | None = Field(default=None, max_length=100)
+    urgency: str | None = Field(default=None, max_length=20)
+
+
+class ReviewSummaryRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    language: str = Field(default="id", min_length=2, max_length=2, pattern=r"^[a-z]{2}$")
+    text: str = Field(min_length=1, max_length=4000)
+    rating: int | None = Field(default=None, ge=1, le=5, strict=True)
+    labels: ReviewSummaryLabels = Field(default_factory=ReviewSummaryLabels)
+
+
+class AnalysisError(BaseModel):
+    code: str
+    message: str
+
+
+class AnalysisResult(BaseModel):
+    id: str
+    review_hash: str | None
+    status: Literal["analyzed", "rating_fallback", "failed"]
+    corrected: bool
+    analysis: dict[str, Any] | None = Field(description="Free-form cleaned analysis fields; never raw provider output.")
+    error: AnalysisError | None
+
+
+class AnalysisSummary(BaseModel):
+    analyzed: int
+    rating_fallback: int
+    failed: int
+
+
+class TokenUsage(BaseModel):
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+
+
+class AnalysisData(BaseModel):
+    provider: Provider
+    model: str | None
+    summary: AnalysisSummary
+    usage: TokenUsage
+    results: list[AnalysisResult]
+
+
+class AnalysisResponse(BaseModel):
+    data: AnalysisData
+    meta: V2Meta
+
+
+class ReplySuggestionResponse(BaseModel):
+    data: dict[str, Any] = Field(description="Reply decision fields, exactly as emitted by the v1 decision rules.")
+    meta: V2Meta
+
+
+class BriefData(BaseModel):
+    text: str
+    model: str | None
+    usage: TokenUsage
+
+
+class BriefResponse(BaseModel):
+    data: BriefData
+    meta: V2Meta
+
+
+class ReviewSummaryData(BaseModel):
+    summary: str
+    evidence: str | None
+    recommended_action: str
+    evidence_verified: bool
+    model: str | None
+    usage: TokenUsage
+
+
+class ReviewSummaryResponse(BaseModel):
+    data: ReviewSummaryData
+    meta: V2Meta

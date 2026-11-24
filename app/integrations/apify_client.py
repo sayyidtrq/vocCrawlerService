@@ -132,6 +132,30 @@ class ApifyClient:
             yield from items
             offset += len(items)
 
+    def get_dataset_items(
+        self, dataset_id: str, *, token: str, offset: int, limit: int
+    ) -> list[dict]:
+        response = self._request(
+            "get",
+            f"{self.base_url}/datasets/{quote(dataset_id, safe='')}/items",
+            token=token,
+            params={"format": "json", "offset": offset, "limit": limit},
+            timeout=max(120, self.settings.fetch_timeout_seconds),
+        )
+        try:
+            items = response.json()
+        except ValueError as exc:
+            raise ReviewSourceError(
+                "Apify dataset returned invalid JSON.",
+                retriable=True, code="APIFY_INVALID_RESPONSE",
+            ) from exc
+        if not isinstance(items, list) or any(not isinstance(item, dict) for item in items):
+            raise ReviewSourceError(
+                "Apify dataset response was not a list of objects.",
+                retriable=True, code="APIFY_INVALID_RESPONSE",
+            )
+        return items
+
     def _request(self, method: str, url: str, *, token: str, **kwargs):
         headers = dict(kwargs.pop("headers", {}))
         headers["Authorization"] = f"Bearer {token}"

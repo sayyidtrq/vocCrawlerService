@@ -81,7 +81,7 @@ def _fetch_all(service: FetchService) -> None:
     print("\nFetching reviews for all active locations...")
     summary = service.fetch_all_active_locations()
     if summary["total_locations"] == 0:
-        print("No active Hermina locations found.")
+        print("No active locations found.")
         print("Please add or activate location first.")
         pause()
         return

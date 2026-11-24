@@ -4,10 +4,11 @@ import httpx
 
 from app.config import Settings
 from app.integrations.gemini_client import GeminiClientBase
+from app.services.taxonomy_service import Taxonomy, merge_tag_sentiments
 
 TAXONOMY_CATEGORIES = {
-    "doctor": "doctor_service",
-    "nurse": "nurse_service",
+    "doctor": "professional_service",
+    "nurse": "staff_service",
     "registration": "administration",
     "bpjs / insurance administration": "administration",
     "waiting time": "waiting_time",
@@ -16,17 +17,20 @@ TAXONOMY_CATEGORIES = {
     "cleanliness": "cleanliness",
     "facilities": "facility",
     "parking": "parking",
-    "price & value": "billing",
-    "pharmacy": "pharmacy",
-    "emergency / er": "emergency_room",
-    "inpatient care": "inpatient",
+    "price & value": "price_value",
+    "pharmacy": "availability",
+    "emergency / er": "safety_security",
+    "inpatient care": "facility",
     "customer service": "customer_service",
-    "service quality": "customer_service",
-    "digital service": "booking_system",
-    "staff attitude": "staff_communication",
-    "professionalism": "staff_communication",
-    "security": "security",
-    "food quality": "food",
+    "service quality": "service_quality",
+    "digital service": "digital_experience",
+    "staff attitude": "staff_service",
+    "professionalism": "professional_service",
+    "security": "safety_security",
+    "food quality": "food_beverage",
+    "product quality": "product_quality",
+    "availability": "availability",
+    "delivery": "delivery_fulfillment",
 }
 
 
@@ -67,10 +71,11 @@ class AbsaClient(GeminiClientBase):
         payload = response.json()
         if not isinstance(payload, dict) or not isinstance(payload.get("results"), list):
             raise TypeError("ABSA returned an invalid response.")
-        return self._to_analysis(payload, review)
+        taxonomy = Taxonomy(review["taxonomy"]) if review.get("taxonomy") else None
+        return self._to_analysis(payload, review, taxonomy)
 
     @staticmethod
-    def _to_analysis(payload: dict, review: dict) -> dict:
+    def _to_analysis(payload: dict, review: dict, taxonomy: Taxonomy | None = None) -> dict:
         aspects = payload.get("results") or []
         sentiments = {
             str(item.get("sentiment") or "").lower()
@@ -95,17 +100,37 @@ class AbsaClient(GeminiClientBase):
             ),
             default={},
         )
-        taxonomy = str(
+        label = str(
             primary.get("complaint_taxonomy") or primary.get("taxonomy") or ""
         ).lower()
-        category = TAXONOMY_CATEGORIES.get(taxonomy, "other")
-        if sentiment == "positive" and category == "other":
-            category = "general_praise"
+        if taxonomy is not None:
+            # The pack's absa_map replaces the hard-coded hospital-era table.
+            category = taxonomy.absa_map.get(label, taxonomy.fallback)
+            fallback, praise = taxonomy.fallback, taxonomy.praise
+        else:
+            category = TAXONOMY_CATEGORIES.get(label, "other")
+            fallback, praise = "other", "general_praise"
+        category_confidence = round(float(primary.get("confidence") or 0), 4) if primary else None
+        if sentiment == "positive" and category == fallback:
+            category = praise
+            category_confidence = None  # praise is a rule here, not the model's pick
 
         text = str(review.get("review_text") or "").lower()
         safety = any(
             word in text
-            for word in ("salah obat", "malpraktik", "darurat", "nyawa", "infeksi")
+            for word in (
+                "salah obat",
+                "malpraktik",
+                "darurat",
+                "nyawa",
+                "infeksi",
+                "cedera",
+                "bahaya",
+                "celaka",
+                "kecelakaan",
+                "keracunan",
+                "kebakaran",
+            )
         )
         viral = any(word in text for word in ("viral", "sebarkan", "media sosial"))
         rating = review.get("rating")
@@ -119,9 +144,9 @@ class AbsaClient(GeminiClientBase):
             else "low"
         )
         summaries = {
-            "negative": "Pasien menyampaikan keluhan yang memerlukan tindak lanjut.",
-            "mixed": "Pasien memberi apresiasi sekaligus menyampaikan kendala.",
-            "positive": "Pasien menyampaikan pengalaman pelayanan yang positif.",
+            "negative": "Pelanggan menyampaikan keluhan yang memerlukan tindak lanjut.",
+            "mixed": "Pelanggan memberi apresiasi sekaligus menyampaikan kendala.",
+            "positive": "Pelanggan menyampaikan pengalaman pelayanan yang positif.",
         }
         keywords = list(
             dict.fromkeys(
@@ -131,13 +156,36 @@ class AbsaClient(GeminiClientBase):
                 if value
             )
         )[:5]
+        extra = {}
+        if taxonomy is not None and taxonomy.tagging_enabled:
+            # Every aspect ABSA found that the pack can name is a candidate tag.
+            probabilities: dict[str, float] = {}
+            judged: dict[str, list[str]] = {}
+            for item in aspects:
+                slug = taxonomy.absa_map.get(
+                    str(item.get("complaint_taxonomy") or item.get("taxonomy") or "").lower()
+                )
+                if slug:
+                    probabilities[slug] = max(
+                        probabilities.get(slug, 0.0), float(item.get("confidence") or 0)
+                    )
+                    judged.setdefault(slug, []).append(str(item.get("sentiment") or ""))
+            tags = taxonomy.add_primary(
+                taxonomy.pick_tags(probabilities), category, round(float(primary.get("confidence") or 0), 4)
+            )
+            # ABSA already judges each aspect: several hits on one slug that disagree become `mixed`.
+            for tag in tags:
+                tag["sentiment"] = merge_tag_sentiments(judged.get(tag["slug"], ()))
+            extra["tags"] = tags
         return {
+            **extra,
             "sentiment": sentiment,
             "sentiment_score": max(
                 (float(item.get("confidence") or 0) for item in aspects),
                 default=0.0,
             ),
             "issue_category": category,
+            "category_confidence": category_confidence,
             "urgency": urgency,
             "summary": summaries.get(
                 sentiment, "Ulasan belum memiliki aspek yang cukup meyakinkan."
@@ -147,6 +195,6 @@ class AbsaClient(GeminiClientBase):
             ),
             "keywords": keywords,
             "is_potential_viral": viral,
-            "is_patient_safety_issue": safety,
+            "is_safety_issue": safety,
             "absa": payload,
         }

@@ -12,7 +12,7 @@ from app.terminal.common import (
 
 
 FIELDS = [
-    "hospital_name",
+    "organization_name",
     "branch_name",
     "city",
     "address",
@@ -30,7 +30,7 @@ FIELDS = [
 def run_location_menu() -> None:
     service = LocationService()
     while True:
-        print_heading("Manage Hermina Locations")
+        print_heading("Manage Locations")
         print("1. Add New Location")
         print("2. View All Locations")
         print("3. View Active Locations")
@@ -65,7 +65,7 @@ def run_location_menu() -> None:
 
 def _add_location(service: LocationService) -> None:
     print_heading("Add New Location")
-    hospital_name = input("Hospital Name [default: Hermina]: ").strip() or "Hermina"
+    organization_name = input("Organization Name: ").strip() or "Company"
     branch_name = input("Branch Name: ").strip()
     city = input("City: ").strip()
     address = input("Address: ").strip()
@@ -80,7 +80,7 @@ def _add_location(service: LocationService) -> None:
     )
     is_active = ask_yes_no("Is Active?", default=True)
     location = service.add_location(
-        hospital_name=hospital_name,
+        organization_name=organization_name,
         branch_name=branch_name,
         city=city,
         address=address,

@@ -56,7 +56,7 @@ def location_summary(
     "/critical-issues",
     response_model=IssueListResponse,
     summary="Daftar isu kritis",
-    description="Daftar review yang teridentifikasi sebagai isu kritis (mis. patient safety / urgency tinggi) beserta rekomendasi aksi.",
+    description="Daftar review yang teridentifikasi sebagai isu keselamatan atau urgency tinggi beserta rekomendasi aksi.",
 )
 def critical_issues(
     principal: ServicePrincipal = Depends(require_service_principal),

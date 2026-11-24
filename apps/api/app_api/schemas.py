@@ -54,7 +54,7 @@ class HealthResponse(_Base):
 # --------------------------------------------------------------------------- #
 class LocationResponse(_Base):
     id: int
-    hospital_name: str | None = None
+    organization_name: str | None = None
     branch_name: str | None = None
     city: str | None = None
     address: str | None = None
@@ -120,7 +120,7 @@ class ReviewResponse(_Base):
     recommended_action: str | None = None
     keywords: list[Any] | None = None
     is_potential_viral: bool | None = None
-    is_patient_safety_issue: bool | None = None
+    is_safety_issue: bool | None = None
 
 
 class ReviewListResponse(_Base):

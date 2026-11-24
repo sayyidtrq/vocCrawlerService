@@ -37,15 +37,18 @@ class MockGeminiClient(GeminiClientBase):
             score = 0.62
 
         category_rules = [
-            ("booking_system", ["booking", "aplikasi"]),
+            ("booking_ordering", ["booking", "pemesanan"]),
+            ("digital_experience", ["aplikasi", "website"]),
             ("waiting_time", ["antrean", "menunggu"]),
             ("administration", ["administrasi", "pendaftaran"]),
-            ("pharmacy", ["farmasi", "obat"]),
+            ("availability", ["stok", "tersedia", "obat"]),
             ("parking", ["parkir"]),
             ("cleanliness", ["bersih", "toilet"]),
             ("facility", ["gedung", "lift", "ac", "ruang tunggu"]),
-            ("doctor_service", ["dokter"]),
-            ("nurse_service", ["perawat"]),
+            ("professional_service", ["dokter", "konsultan", "teknisi"]),
+            ("staff_service", ["perawat", "petugas", "staf"]),
+            ("product_quality", ["produk", "barang", "kualitas"]),
+            ("delivery_fulfillment", ["pengiriman", "kurir"]),
         ]
         issue_category = "general_praise" if sentiment == "positive" else "other"
         for candidate, words in category_rules:
@@ -53,11 +56,23 @@ class MockGeminiClient(GeminiClientBase):
                 issue_category = candidate
                 break
 
-        safety_words = {"salah obat", "malpraktik", "darurat", "nyawa", "infeksi"}
+        safety_words = {
+            "salah obat",
+            "malpraktik",
+            "darurat",
+            "nyawa",
+            "infeksi",
+            "cedera",
+            "bahaya",
+            "celaka",
+            "kecelakaan",
+            "keracunan",
+            "kebakaran",
+        }
         viral_words = {"viral", "sebarkan", "media sosial"}
-        patient_safety = any(word in text for word in safety_words)
+        safety_issue = any(word in text for word in safety_words)
         potential_viral = any(word in text for word in viral_words)
-        if patient_safety:
+        if safety_issue:
             urgency = "critical"
         elif potential_viral or (rating == 1 and sentiment == "negative"):
             urgency = "high"
@@ -69,8 +84,8 @@ class MockGeminiClient(GeminiClientBase):
         keywords = [
             word
             for word in [
-                "dokter",
-                "perawat",
+                "produk",
+                "layanan",
                 "antrean",
                 "administrasi",
                 "parkir",
@@ -83,20 +98,20 @@ class MockGeminiClient(GeminiClientBase):
         ][:5]
 
         if sentiment == "negative":
-            summary = "Pasien menyampaikan keluhan yang memerlukan tindak lanjut."
+            summary = "Pelanggan menyampaikan keluhan yang memerlukan tindak lanjut."
         elif sentiment == "mixed":
-            summary = "Pasien memberi apresiasi sekaligus menyampaikan kendala."
+            summary = "Pelanggan memberi apresiasi sekaligus menyampaikan kendala."
         elif sentiment == "positive":
-            summary = "Pasien menyampaikan pengalaman pelayanan yang positif."
+            summary = "Pelanggan menyampaikan pengalaman pelayanan yang positif."
         else:
             summary = "Ulasan bersifat netral atau belum cukup spesifik."
 
         actions = {
             "waiting_time": "Evaluasi alur antrean dan kapasitas petugas pada jam ramai.",
             "administration": "Perjelas informasi dan tingkatkan respons petugas administrasi.",
-            "pharmacy": "Tinjau proses antrean dan waktu layanan farmasi.",
+            "availability": "Tinjau ketersediaan produk atau layanan yang dikeluhkan.",
             "parking": "Evaluasi kapasitas dan alur parkir pada jam ramai.",
-            "booking_system": "Periksa keandalan aplikasi booking dan jalur bantuan pengguna.",
+            "booking_ordering": "Periksa alur pemesanan dan jalur bantuan pengguna.",
             "facility": "Periksa kapasitas dan pemeliharaan fasilitas yang dikeluhkan.",
         }
 
@@ -112,6 +127,5 @@ class MockGeminiClient(GeminiClientBase):
             ),
             "keywords": keywords,
             "is_potential_viral": potential_viral,
-            "is_patient_safety_issue": patient_safety,
+            "is_safety_issue": safety_issue,
         }
-

@@ -144,12 +144,15 @@ def enqueue_crawl_jobs(
             target.onebox_location_id: _target_crawl_options(payload, target)
             for target in location_targets
         }
-        competitor_options = {
-            (target.external_place_id or "").strip(): _target_crawl_options(
-                payload, target
-            )
-            for target in competitor_targets
-        }
+        competitor_specs = []
+        for target in competitor_targets:
+            options = _target_crawl_options(payload, target)
+            competitor_specs.append({
+                "onebox_target_id": target.onebox_target_id,
+                "external_place_id": (target.external_place_id or "").strip(),
+                "target_review_count": options["budget"],
+                **options,
+            })
         batch, _created = service.enqueue(
             company_id=principal.company_id,
             client_id=principal.client_id,
@@ -179,20 +182,7 @@ def enqueue_crawl_jobs(
                 if target.sort_by and target.sort_by != "newest"
             },
             target_crawl_options=location_options,
-            competitor_targets=[
-                {
-                    "external_place_id": (target.external_place_id or "").strip(),
-                    "target_review_count": competitor_options[
-                        (target.external_place_id or "").strip()
-                    ]["budget"],
-                    "date_from": _target_date_range(payload, target)[0],
-                    "date_to": _target_date_range(payload, target)[1],
-                    "sort_by": target.sort_by,
-                    **competitor_options[(target.external_place_id or "").strip()],
-                    "dry_run": payload.dry_run,
-                }
-                for target in competitor_targets
-            ],
+            competitor_targets=competitor_specs,
             slot=payload.slot,
         )
     except CrawlQueueError as exc:

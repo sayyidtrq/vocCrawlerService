@@ -94,6 +94,16 @@ def test_redis_keeps_continuous_rotation_across_pool_recreation():
     assert restarted.rotate() == "token-b"
 
 
+def test_token_at_preserves_exhausted_account_for_reading():
+    tokens = ["token-a", "token-b"]
+    pool = ApifyTokenPool(tokens)
+
+    pool.mark_exhausted(0)
+
+    assert pool.token_at(0) == tokens[0]
+    assert pool.current() == tokens[1]
+
+
 def test_exhausted_token_is_skipped():
     pool = ApifyTokenPool(["token-a", "token-b"])
     assert pool.current() == "token-a"

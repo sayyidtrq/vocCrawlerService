@@ -642,8 +642,10 @@ right.
 
 ```jsonc
 {
-  "kind": "location",
-  "onebox_location_id": 123,
+  "kind": "location",                   // "location" | "competitor"
+  "onebox_location_id": 123,            // required when kind is location
+  "onebox_target_id": 501,              // preferred for competitors (stable registry id)
+  "external_place_id": "ChIJ...",       // legacy for competitors; wins by target_id if both sent
   "coverage": "delta" | "date_window" | "full_backfill",
   "budget": 5000,                       // optional ceiling, 1..100000; NOT allowed with date_window
   "date_from": "2026-01-01T00:00:00Z",  // date_window only; per target
@@ -655,6 +657,9 @@ right.
 Rules the crawler enforces (and OneBox should pre-check, to give a readable
 error instead of a 422):
 
+- `kind == "location"` requires `onebox_location_id`.
+- `kind == "competitor"` requires `onebox_target_id` (preferred) or non-empty `external_place_id`.
+  If both are sent, `onebox_target_id` wins and resolves by active `Competitor.onebox_target_id`.
 - `date_window` needs at least one of `date_from` / `date_to`, and must
   **not** carry `budget` (D8).
 - `full_backfill` must carry **no** dates.
@@ -681,6 +686,8 @@ That mapping is what lets the crawler deploy first without OneBox changing.
 Per job in `GET /crawl-jobs/{batch_id}`:
 
 ```jsonc
+"onebox_location_id": 123,       // location jobs only; null for competitors
+"onebox_target_id": 501,         // competitor jobs only; null for locations
 "coverage": "full_backfill",
 "expected_review_count": 9422,     // Google's own count for the place
 "collected_unique": 9301,

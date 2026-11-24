@@ -31,15 +31,15 @@ def ask_yes_no(prompt: str, default: bool = True) -> bool:
 
 def show_locations(locations: list) -> None:
     if not locations:
-        print("No Hermina locations found.")
+        print("No locations found.")
         print("Please add a location first.")
         return
     print_table(
-        ["ID", "Hospital", "Branch", "City", "Source", "Active"],
+        ["ID", "Organization", "Branch", "City", "Source", "Active"],
         [
             [
                 item.id,
-                item.hospital_name,
+                item.organization_name,
                 item.branch_name,
                 item.city or "-",
                 item.source,

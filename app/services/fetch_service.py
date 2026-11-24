@@ -17,7 +17,12 @@ from app.integrations.review_source_client import (
 from app.services.fetch_log_service import FetchLogService
 from app.services.location_service import LocationService
 from app.services.review_service import ReviewService
-from app.services.worklist_sync_service import WorklistSyncError, WorklistSyncService
+from app.services.worklist_sync_service import (
+    WorklistSyncError,
+    WorklistSyncService,
+    WorklistTenantMismatchError,
+    is_onebox_managed,
+)
 from app.utils.date_parser import (
     is_within_date_range,
     parse_datetime,
@@ -163,6 +168,14 @@ class FetchService:
                 result.deactivated,
             )
             return result.as_dict()
+        except WorklistTenantMismatchError:
+            # Company ini bukan pemilik site di konfigurasi: worklist-nya tidak
+            # dikelola jalur ini. Lanjut dengan lokasi yang sudah ada.
+            logger.warning(
+                "Worklist refresh skipped: company %s does not own the configured OneBox site.",
+                self.company_id,
+            )
+            return {"status": "skipped_foreign_tenant"}
         except WorklistSyncError:
             logger.exception("Worklist refresh failed; crawl run was not started.")
             raise
@@ -181,11 +194,11 @@ class FetchService:
 
         result = self._empty_result(location)
         result["worklist_sync"] = worklist_result
-        if getattr(location, 'onebox_connection_id', None) is not None and not location.crawl_enabled:
+        if is_onebox_managed(location) and not location.crawl_enabled:
             result["status"] = "skipped_disabled"
             result["error_message"] = "Location is disabled by the OneBox worklist."
             return result
-        if getattr(location, 'onebox_connection_id', None) is not None and not location.ingest_reviews:
+        if is_onebox_managed(location) and not location.ingest_reviews:
             result["status"] = "skipped_ingest_disabled"
             result["error_message"] = "Review ingestion is disabled by the OneBox worklist."
             return result

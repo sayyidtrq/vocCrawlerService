@@ -14,35 +14,21 @@ from app.db.models import Location, Review, ReviewAnalysis
 from app.db.session import get_session_factory
 from app.integrations.analysis_client import create_analysis_client
 from app.integrations.gemini_client import GeminiClientBase
+from app.services.taxonomy_service import LEGACY_CATEGORIES, Taxonomy, load_taxonomies
 
 logger = logging.getLogger(__name__)
 RATING_FALLBACK_MODEL = "rating-fallback-v1"
 # Shape of the analysis fields this build emits on the integration contract.
-# Kept in step with apps.api.app_api.integration_schemas.API_VERSION, which is
-# what OneBox actually compares against.
-OUTPUT_SCHEMA_VERSION = "v1"
+# Kept in step with integration_schemas.OUTPUT_SCHEMA_VERSION, which is
+# independent from the stable /integration/v1 transport endpoint.
+OUTPUT_SCHEMA_VERSION = "v2"
+# v3 only adds the optional taxonomy fields (taxonomy_version, risk_flags, tags),
+# so a location configured for either version is served without a warning.
+ACCEPTED_SCHEMA_VERSIONS = {"v2", "v3"}
 ALLOWED_SENTIMENTS = {"positive", "neutral", "negative", "mixed", "unknown"}
 ALLOWED_URGENCIES = {"low", "medium", "high", "critical", "unknown"}
-ALLOWED_CATEGORIES = {
-    "doctor_service",
-    "nurse_service",
-    "administration",
-    "waiting_time",
-    "cleanliness",
-    "facility",
-    "parking",
-    "billing",
-    "pharmacy",
-    "emergency_room",
-    "inpatient",
-    "customer_service",
-    "booking_system",
-    "staff_communication",
-    "security",
-    "food",
-    "general_praise",
-    "other",
-}
+# Legacy vocabulary: what a location without an OneBox taxonomy may emit.
+ALLOWED_CATEGORIES = set(LEGACY_CATEGORIES)
 ANALYSIS_STATUSES = {"pending", "completed", "failed", "incomplete"}
 REQUIRED_ANALYSIS_FIELDS = (
     "urgency",
@@ -190,9 +176,12 @@ class AnalysisService:
         ai_config = self._resolve_configured_models(
             ai_config, default_model, result
         )
+        taxonomies = self._load_taxonomies(ai_config)
         started = time.perf_counter()
         try:
-            self._run_batches(reviews, batch_size, ai_config, result, default_model)
+            self._run_batches(
+                reviews, batch_size, ai_config, result, default_model, taxonomies
+            )
         finally:
             if default_model is not None:
                 self.client.model_name = default_model
@@ -280,6 +269,7 @@ class AnalysisService:
         ai_config: dict,
         result: dict,
         default_model: str | None,
+        taxonomies: dict[str, Taxonomy] | None = None,
     ) -> None:
         """Run bounded LLM waves, then persist results on this thread.
 
@@ -325,10 +315,19 @@ class AnalysisService:
                             if config is not None and config["model"]
                             else default_model
                         )
+                        # None = legacy behaviour (no taxonomy named by OneBox,
+                        # or its snapshot was never received).
+                        taxonomy = (taxonomies or {}).get(
+                            (config or {}).get("taxonomy_key")
+                        )
 
                         if not review["review_text"].strip():
-                            raw_result = self._rating_only_result(review.get("rating"))
-                            cleaned, corrected = self._validate_result(raw_result)
+                            raw_result = self._rating_only_result(
+                                review.get("rating"), taxonomy
+                            )
+                            cleaned, corrected = self._validate_result(
+                                raw_result, taxonomy
+                            )
                             self._record_quality(result, corrected)
                             self._store_analysis(
                                 review["id"],
@@ -341,20 +340,25 @@ class AnalysisService:
                             result["sentiments"][cleaned["sentiment"]] += 1
                             continue
 
+                        llm_review = (
+                            {**review, "taxonomy": taxonomy.body}
+                            if taxonomy is not None
+                            else review
+                        )
                         future = (
                             executor.submit(
-                                self._run_llm_task, review, model_name, True
+                                self._run_llm_task, llm_review, model_name, True
                             )
                             if executor is not None
                             else None
                         )
-                        calls.append((review, model_name, future))
+                        calls.append((llm_review, model_name, future, taxonomy))
 
                     result["max_in_flight"] = max(
                         result["max_in_flight"], len(calls)
                     )
 
-                    for review, model_name, future in calls:
+                    for review, model_name, future, taxonomy in calls:
                         try:
                             outcome = (
                                 future.result()
@@ -391,7 +395,7 @@ class AnalysisService:
                             )
                         result["tokens_used"] = result["token_usage"]["total_tokens"]
                         cleaned, corrected = self._validate_result(
-                            outcome["raw_result"]
+                            outcome["raw_result"], taxonomy
                         )
                         self._record_quality(result, corrected)
                         self._store_analysis(
@@ -515,7 +519,7 @@ class AnalysisService:
         config = {}
         for row in rows:
             expected = row.ai_output_schema_version
-            if expected and expected != OUTPUT_SCHEMA_VERSION:
+            if expected and expected not in ACCEPTED_SCHEMA_VERSIONS:
                 # Logged, never fatal. OneBox asking for a schema this build
                 # cannot produce is a real mismatch worth seeing, but refusing to
                 # analyze would turn a version skew into an outage — and OneBox
@@ -526,8 +530,23 @@ class AnalysisService:
                     expected,
                     OUTPUT_SCHEMA_VERSION,
                 )
-            config[row.id] = {"enabled": bool(row.ai_enabled), "model": row.ai_model}
+            config[row.id] = {
+                "enabled": bool(row.ai_enabled),
+                "model": row.ai_model,
+                "taxonomy_key": row.taxonomy_key,
+            }
         return config
+
+    def _load_taxonomies(self, ai_config: dict) -> dict[str, Taxonomy]:
+        """Snapshots OneBox named for this run's locations, read once per run."""
+        keys = {cfg.get("taxonomy_key") for cfg in ai_config.values()} - {None}
+        if not keys:
+            return {}
+        with self.session_factory() as session:
+            found = load_taxonomies(session, self.company_id, keys)
+        for key in keys - set(found):
+            logger.warning("analysis.taxonomy.missing key=%s (legacy behaviour used)", key)
+        return found
 
     def _store_analysis(
         self,
@@ -561,9 +580,12 @@ class AnalysisService:
                     recommended_action=cleaned["recommended_action"],
                     keywords=cleaned["keywords"],
                     is_potential_viral=cleaned["is_potential_viral"],
-                    is_patient_safety_issue=cleaned["is_patient_safety_issue"],
+                    is_safety_issue=cleaned["is_safety_issue"],
                     model_name=model_name or self.client.model_name,
                     prompt_version=self.settings.prompt_version,
+                    taxonomy_version=cleaned.get("taxonomy_version"),
+                    risk_flags=cleaned.get("risk_flags"),
+                    tags=cleaned.get("tags"),
                     raw_response=raw_result,
                 )
             )
@@ -616,7 +638,7 @@ class AnalysisService:
         )
 
     @staticmethod
-    def _rating_only_result(rating: int | None) -> dict:
+    def _rating_only_result(rating: int | None, taxonomy: Taxonomy | None = None) -> dict:
         if rating is None:
             sentiment = "unknown"
             score = 0.0
@@ -648,13 +670,13 @@ class AnalysisService:
         return {
             "sentiment": sentiment,
             "sentiment_score": score,
-            "issue_category": "other",
+            "issue_category": taxonomy.fallback if taxonomy is not None else "other",
             "urgency": urgency,
             "summary": summary,
             "recommended_action": action,
             "keywords": [],
             "is_potential_viral": False,
-            "is_patient_safety_issue": False,
+            "is_safety_issue": False,
             "analysis_source": RATING_FALLBACK_MODEL,
         }
 
@@ -670,13 +692,16 @@ class AnalysisService:
         }
 
     @staticmethod
-    def _validate_result(result: dict) -> tuple[dict, bool]:
+    def _validate_result(result: dict, taxonomy: Taxonomy | None = None) -> tuple[dict, bool]:
         """Normalisasi hasil mentah model, DAN tandai kalau ada yang dikoreksi.
 
         Bendera `corrected` adalah sinyal kualitas baseline (DNGO19-3407):
         model yang sering mengirim bentuk di luar kontrak adalah model yang
         perlu diganti atau prompt-nya diperbaiki — tanpa bendera ini, koreksi
         yang terjadi diam-diam di sini tidak pernah terlihat siapa pun.
+
+        Dengan `taxonomy` (dari OneBox) kategori divalidasi terhadap snapshot
+        lokasi itu, bukan himpunan legacy.
         """
         corrected = False
 
@@ -688,10 +713,17 @@ class AnalysisService:
         if urgency not in ALLOWED_URGENCIES:
             corrected = True
             urgency = "unknown"
-        category = str(result.get("issue_category") or "other").lower()
-        if category not in ALLOWED_CATEGORIES:
-            corrected = True
-            category = "other"
+        category_replaced = False
+        if taxonomy is not None:
+            category, replaced = taxonomy.category(result.get("issue_category") or taxonomy.fallback)
+            corrected = corrected or replaced
+            category_replaced = replaced
+        else:
+            category = str(result.get("issue_category") or "other").lower()
+            if category not in ALLOWED_CATEGORIES:
+                corrected = True
+                category_replaced = True
+                category = "other"
         try:
             score = float(result.get("sentiment_score", 0))
         except (TypeError, ValueError):
@@ -713,10 +745,29 @@ class AnalysisService:
             "recommended_action": str(result.get("recommended_action") or ""),
             "keywords": [str(keyword) for keyword in keywords],
             "is_potential_viral": bool(result.get("is_potential_viral", False)),
-            "is_patient_safety_issue": bool(
-                result.get("is_patient_safety_issue", False)
+            "is_safety_issue": bool(
+                result.get("is_safety_issue", result.get("is_patient_safety_issue", False))
             ),
         }
+        # Optional: only the model's own pick has a confidence; a category replaced here has none.
+        try:
+            confidence = float(result["category_confidence"])
+        except (KeyError, TypeError, ValueError):
+            confidence = None
+        if confidence is not None and 0.0 <= confidence <= 1.0 and not category_replaced:
+            cleaned["category_confidence"] = round(confidence, 4)
+        if taxonomy is not None and not taxonomy.legacy:
+            flags = taxonomy.flags(result.get("risk_flags"))
+            cleaned["risk_flags"] = flags
+            # Legacy booleans are derived from the pack's flags: any critical
+            # flag is a safety issue, the flag marked is_potential_viral is viral.
+            cleaned["is_safety_issue"] = taxonomy.is_safety(flags) or cleaned["is_safety_issue"]
+            cleaned["is_potential_viral"] = taxonomy.is_viral(flags) or cleaned["is_potential_viral"]
+            cleaned["taxonomy_version"] = taxonomy.version
+            if taxonomy.tagging_enabled:
+                cleaned["tags"] = taxonomy.finalize_tags(
+                    result.get("tags"), category, sentiment
+                )
         return cleaned, corrected
 
     def rollback_analyses(

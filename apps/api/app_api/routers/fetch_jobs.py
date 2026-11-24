@@ -40,7 +40,7 @@ def _resolve_range(payload) -> tuple[datetime | None, datetime | None]:
 
 _FETCH_RESULT_EXAMPLE = {
     "location_id": 5,
-    "location_name": "Hermina Depok",
+    "location_name": "Cabang Depok",
     "source": "apify_google_maps",
     "status": "success",
     "total_fetched": 200,

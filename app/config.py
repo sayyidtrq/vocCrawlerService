@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Any, Literal
@@ -7,6 +8,8 @@ from typing import Annotated, Any, Literal
 from dotenv import load_dotenv
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+
+logger = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env")
@@ -31,6 +34,7 @@ REVIEW_SOURCE_MODES = {
     "apify",
 }
 AnalysisProvider = Literal["absa", "openai", "jev"]
+OneBoxTenantMode = Literal["single", "managed"]
 
 # Fields that go through the old _as_int/_as_bool/_as_float/_as_optional_int/
 # _as_list helpers, all of which treat a blank env value as absent (use the
@@ -48,6 +52,7 @@ _BLANK_USES_DEFAULT_FIELDS = (
     "gemini_api_key",
     "openai_api_key",
     "openai_model",
+    "brief_model",
     "typesafe_api_key",
     "absa_confidence_threshold",
     "absa_timeout_seconds",
@@ -69,12 +74,14 @@ _BLANK_USES_DEFAULT_FIELDS = (
     "apify_run_timeout_seconds",
     "apify_poll_interval_seconds",
     "redis_url",
+    "crawler_api_token",
     "apify_account_exhausted_ttl_seconds",
     "analysis_batch_size",
     "page_size",
     "show_raw_payload",
     "onebox_site_id",
     "onebox_company_id",
+    "onebox_provisioning_key_hash",
     "onebox_worklist_path",
     "onebox_timeout_seconds",
     "onebox_max_retry",
@@ -83,6 +90,8 @@ _BLANK_USES_DEFAULT_FIELDS = (
     "crawl_worker_max_attempts",
     "crawl_worker_poll_seconds",
     "crawl_worker_retry_base_seconds",
+    "crawl_fairness_window_seconds",
+    "crawl_max_concurrency_per_tenant",
     "analysis_llm_max_retries",
     "analysis_llm_retry_backoff_seconds",
     "analysis_circuit_breaker_threshold",
@@ -99,6 +108,8 @@ _INT_FLOORS = {
     "crawl_worker_max_attempts": 1,
     "crawl_worker_poll_seconds": 1,
     "crawl_worker_retry_base_seconds": 1,
+    "crawl_fairness_window_seconds": 1,
+    "crawl_max_concurrency_per_tenant": 0,
     "analysis_llm_max_retries": 0,
     "analysis_circuit_breaker_threshold": 0,
     "absa_timeout_seconds": 1,
@@ -149,6 +160,8 @@ class Settings(BaseModel):
     openai_base_url: str = "https://api.openai.com/v1"
     openai_api_key: str | None = None
     openai_model: str | None = None
+    sub_product_llm_model: str = ""
+    brief_model: str | None = None
     fetch_limit_per_location: int = 50
     fetch_timeout_seconds: int = 30
     fetch_max_retry: int = 3
@@ -177,6 +190,7 @@ class Settings(BaseModel):
     integration_cursor_secret: str = LOCAL_CURSOR_SECRET_FALLBACK
     jwt_secret_key: str = LOCAL_JWT_SECRET_FALLBACK
     service_token_pepper: str = LOCAL_SERVICE_TOKEN_PEPPER_FALLBACK
+    crawler_api_token: str | None = None
     onebox_base_url: str | None = None
     # Env var abbreviates "service" to "svc" - the field name doesn't, so the
     # default FIELD_NAME.upper() alias would miss it without this.
@@ -188,6 +202,14 @@ class Settings(BaseModel):
     )
     onebox_site_id: int | None = None
     onebox_company_id: int | None = None
+    # single : satu tenant dari ONEBOX_SITE_ID/ONEBOX_COMPANY_ID, worklist ditarik
+    #          dari OneBox (perilaku lama).
+    # managed: tenant didaftarkan OneBox; worklist dikirim OneBox, tidak ditarik.
+    onebox_tenant_mode: OneBoxTenantMode = "single"
+    # HMAC (lihat tenant_registry_service.provisioning_key_hash) dari kunci yang dipakai
+    # OneBox untuk mendaftarkan tenant. Hanya hash yang ada di sini; kunci aslinya
+    # hanya di konfigurasi OneBox. Kosong = pendaftaran tenant dinonaktifkan.
+    onebox_provisioning_key_hash: str | None = None
     onebox_worklist_path: str = "/api/VocWorklist"
     onebox_timeout_seconds: int = 30
     onebox_max_retry: int = 3
@@ -199,6 +221,8 @@ class Settings(BaseModel):
     crawl_worker_max_attempts: int = 3
     crawl_worker_poll_seconds: int = 5
     crawl_worker_retry_base_seconds: int = 60
+    crawl_fairness_window_seconds: int = 3600
+    crawl_max_concurrency_per_tenant: int = 0
     # DNGO19-3407: retry sesuai permintaan PBI. Backoff sama polanya dengan
     # OneBoxWorklistClient._backoff (min(8.0, base * 2**attempt)).
     analysis_llm_max_retries: int = 2
@@ -218,6 +242,56 @@ class Settings(BaseModel):
     def ensure_export_dir(self) -> Path:
         self.export_dir.mkdir(parents=True, exist_ok=True)
         return self.export_dir
+
+    @property
+    def onebox_managed(self) -> bool:
+        return self.onebox_tenant_mode == "managed"
+
+    @field_validator("onebox_tenant_mode", mode="before")
+    @classmethod
+    def _normalize_tenant_mode(cls, value: Any) -> Any:
+        # Nilai asing sengaja tidak dikoreksi: salah ketik harus gagal saat boot,
+        # bukan diam-diam memilih salah satu mode.
+        if isinstance(value, str):
+            return value.strip().lower() or "single"
+        return value
+
+    @model_validator(mode="after")
+    def _validate_tenant_mode(self) -> Settings:
+        if not self.onebox_managed:
+            return self
+        identity = [
+            name
+            for name, value in (
+                ("ONEBOX_SITE_ID", self.onebox_site_id),
+                ("ONEBOX_COMPANY_ID", self.onebox_company_id),
+            )
+            if value is not None
+        ]
+        if identity:
+            raise ValueError(
+                ", ".join(identity)
+                + " must be unset when ONEBOX_TENANT_MODE=managed: they pin the crawler "
+                "to one tenant, while managed mode takes tenants from OneBox."
+            )
+        leftovers = [
+            name
+            for name, value in (
+                ("ONEBOX_BASE_URL", self.onebox_base_url),
+                ("ONEBOX_SVC_EMAIL", self.onebox_service_email),
+                ("ONEBOX_SVC_PASSWORD", self.onebox_service_password),
+            )
+            if value
+        ]
+        if leftovers:
+            # Hanya peringatan: jalur pull mati di mode ini, jadi sisa env tidak
+            # berbahaya; memblokir boot karena itu hanya merepotkan deploy.
+            logger.warning(
+                "ONEBOX_TENANT_MODE=managed ignores %s; remove it once the crawler no "
+                "longer needs to pull from OneBox.",
+                ", ".join(leftovers),
+            )
+        return self
 
 
 class _EnvSettings(Settings, BaseSettings):

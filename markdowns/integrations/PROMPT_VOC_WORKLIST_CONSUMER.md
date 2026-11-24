@@ -53,7 +53,8 @@ Authorization: Bearer <JWT>
 {
   "data": [
     {
-      "onebox_connection_id": 1039,
+      "onebox_target_id": 501,         // ID registry VocTarget OneBox (stabil/utama)
+      "onebox_connection_id": 1039,    // DEPRECATED/opsional; tidak lagi dikirim di era registry
       "onebox_location_id": 12,
       "kind": "location",              // "location" | "competitor"
       "external_place_id": "ChIJ...",  // KUNCI STABIL lintas sistem — dedup pakai ini
@@ -101,7 +102,8 @@ VoC belum pernah memanggil OneBox (selama ini VoC cuma provider). Buat client (h
 Untuk tiap item worklist, **upsert** ke tabel VoC dengan kunci **`external_place_id`**:
 - `kind == "location"` → tabel Location. `kind == "competitor"` → tabel Competitor.
 - Map field: `branch_name`, `hospital_name`, `city`, `target_review_count`, `google_maps_url`,
-  `is_active = active`. Simpan juga `onebox_location_id` & `onebox_connection_id` untuk balik-map.
+  `is_active = active`. Simpan juga `onebox_location_id`, `onebox_target_id`, & `onebox_connection_id` (deprecated/opsional) untuk balik-map.
+  Penanda baris dikelola OneBox: salah satu dari `onebox_connection_id`, `onebox_location_id`, atau `onebox_target_id` bernilai tidak null.
 - **Idempotent:** jalan dua kali = hasil sama.
 - **Jangan sentuh** review cache, analysis, atau crawl cursor milik target saat update metadata.
 - **Rekonsiliasi:** target yang HILANG dari worklist → tandai **nonaktif** (`is_active=false`),

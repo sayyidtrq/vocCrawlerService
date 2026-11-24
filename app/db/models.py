@@ -5,6 +5,7 @@ from decimal import Decimal
 from typing import ClassVar
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     CheckConstraint,
     DateTime,
@@ -20,7 +21,7 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship, synonym
 
 from app.db.base import Base
 
@@ -30,9 +31,25 @@ JsonType = JSON().with_variant(JSONB, "postgresql")
 
 class Company(Base):
     __tablename__ = "companies"
+    __table_args__ = (
+        # Satu site OneBox = satu company. Unique index (bukan constraint) karena
+        # ALTER TABLE ... ADD UNIQUE tidak ada di SQLite; NULL boleh berulang.
+        Index("uq_companies_onebox_site", "onebox_site_id", unique=True),
+        CheckConstraint("weight > 0", name="ck_companies_weight_positive"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Cermin site OneBox. Kosong untuk company yang bukan berasal dari OneBox.
+    onebox_site_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    weight: Mapped[int] = mapped_column(
+        Integer, default=1, server_default="1", nullable=False
+    )
+    # Tenant nonaktif (paketnya dimatikan di OneBox): datanya tetap, crawl berhenti.
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default=text("true"), nullable=False
+    )
+    deactivated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     ai_enable_flag: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     total_enable_review: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     analyze_competitor_flag: Mapped[bool] = mapped_column(
@@ -97,6 +114,26 @@ class ApiClient(Base):
     company: Mapped[Company] = relationship(back_populates="api_clients")
 
 
+class TaxonomySnapshot(Base):
+    """Industry taxonomy delivered by OneBox, kept so a worklist outage still has it."""
+
+    __tablename__ = "taxonomy_snapshots"
+    __table_args__ = (
+        UniqueConstraint("company_id", "key", name="uq_taxonomy_snapshots_company_key"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    company_id: Mapped[int] = mapped_column(
+        ForeignKey("companies.id", ondelete="CASCADE"), nullable=False
+    )
+    key: Mapped[str] = mapped_column(String(80), nullable=False)
+    version: Mapped[str] = mapped_column(String(16), nullable=False)
+    body: Mapped[dict] = mapped_column(JsonType, nullable=False)
+    received_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
 class WorklistSyncState(Base):
     """Last pull outcome for the OneBox-owned worklist cache."""
 
@@ -115,6 +152,9 @@ class WorklistSyncState(Base):
     last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_error: Mapped[str | None] = mapped_column(Text)
     item_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # Versi snapshot yang diterapkan OneBox terakhir; versi yang tidak lebih baru ditolak.
+    snapshot_version: Mapped[int | None] = mapped_column(BigInteger)
+    applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     company: Mapped[Company] = relationship(back_populates="worklist_sync_states")
 
@@ -188,6 +228,7 @@ class CrawlJob(Base):
         Index("idx_crawl_jobs_competitor", "competitor_id"),
         Index("idx_crawl_jobs_claim", "status", "available_at", "lease_expires_at"),
         Index("idx_crawl_jobs_company", "company_id"),
+        Index("idx_crawl_jobs_company_claim", "company_id", "status", "available_at"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -278,7 +319,7 @@ class Location(_CrawlCoverageColumns, Base):
     __tablename__ = "locations"
     __table_args__ = (
         UniqueConstraint(
-            "source", "external_place_id", name="uq_locations_source_place"
+            "company_id", "source", "external_place_id", name="uq_locations_company_source_place"
         ),
         Index("idx_locations_source_place", "source", "external_place_id"),
         Index("idx_locations_active", "is_active"),
@@ -288,7 +329,10 @@ class Location(_CrawlCoverageColumns, Base):
     company_id: Mapped[int] = mapped_column(
         ForeignKey("companies.id", ondelete="CASCADE"), nullable=False
     )
-    hospital_name: Mapped[str] = mapped_column(String(150), nullable=False)
+    organization_name: Mapped[str] = mapped_column(
+        "hospital_name", String(150), nullable=False
+    )
+    hospital_name = synonym("organization_name")
     branch_name: Mapped[str] = mapped_column(String(150), nullable=False)
     city: Mapped[str | None] = mapped_column(String(100))
     address: Mapped[str | None] = mapped_column(Text)
@@ -304,6 +348,7 @@ class Location(_CrawlCoverageColumns, Base):
     )
     apify_resume_checkpoint: Mapped[dict | None] = mapped_column(JsonType)
     onebox_connection_id: Mapped[int | None] = mapped_column(Integer)
+    onebox_target_id: Mapped[int | None] = mapped_column(Integer)
     onebox_location_id: Mapped[int | None] = mapped_column(Integer)
     crawl_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     ingest_reviews: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
@@ -326,6 +371,9 @@ class Location(_CrawlCoverageColumns, Base):
     # happens to be blank.
     ai_model: Mapped[str | None] = mapped_column(String(100))
     ai_output_schema_version: Mapped[str | None] = mapped_column(String(20))
+    # Industry taxonomy named by OneBox; null = built-in legacy taxonomy.
+    taxonomy_key: Mapped[str | None] = mapped_column(String(80))
+    taxonomy_version: Mapped[str | None] = mapped_column(String(16))
     worklist_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
@@ -383,7 +431,7 @@ class _GoogleReviewColumns:
     )
     scraped_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     raw_payload: Mapped[dict] = mapped_column(JsonType, default=dict, nullable=False)
-    review_hash: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    review_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -411,6 +459,7 @@ class Review(_GoogleReviewColumns, Base):
         Index("idx_reviews_rating", "rating"),
         Index("idx_reviews_review_hash", "review_hash"),
         Index("idx_reviews_source_place", "source", "external_place_id"),
+        UniqueConstraint("company_id", "review_hash", name="uq_reviews_company_hash"),
         # Serves the integration keyset scan: tenant, then the exact ORDER BY.
         Index("idx_reviews_company_sync_id", "company_id", "sync_updated_at", "id"),
     )
@@ -463,11 +512,16 @@ class ReviewAnalysis(Base):
     is_potential_viral: Mapped[bool] = mapped_column(
         Boolean, default=False, nullable=False
     )
-    is_patient_safety_issue: Mapped[bool] = mapped_column(
-        Boolean, default=False, nullable=False
+    is_safety_issue: Mapped[bool] = mapped_column(
+        "is_patient_safety_issue", Boolean, default=False, nullable=False
     )
+    is_patient_safety_issue = synonym("is_safety_issue")
     model_name: Mapped[str | None] = mapped_column(String(100))
     prompt_version: Mapped[str | None] = mapped_column(String(50))
+    # Set only when the analysis ran under an OneBox industry taxonomy.
+    taxonomy_version: Mapped[str | None] = mapped_column(String(16))
+    risk_flags: Mapped[dict | None] = mapped_column(JsonType)
+    tags: Mapped[list | None] = mapped_column(JsonType)
     raw_response: Mapped[dict] = mapped_column(JsonType, default=dict, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -543,6 +597,7 @@ class Competitor(_CrawlCoverageColumns, Base):
     )
     apify_resume_checkpoint: Mapped[dict | None] = mapped_column(JsonType)
     onebox_connection_id: Mapped[int | None] = mapped_column(Integer)
+    onebox_target_id: Mapped[int | None] = mapped_column(Integer)
     onebox_location_id: Mapped[int | None] = mapped_column(Integer)
     crawl_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     ingest_reviews: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
@@ -575,6 +630,9 @@ class CompetitorReview(_GoogleReviewColumns, Base):
         Index("idx_comp_reviews_competitor_id", "competitor_id"),
         Index("idx_comp_reviews_review_time", "review_time"),
         Index("idx_comp_reviews_review_hash", "review_hash"),
+        UniqueConstraint(
+            "competitor_id", "review_hash", name="uq_comp_reviews_competitor_hash"
+        ),
     )
 
     competitor_id: Mapped[int] = mapped_column(

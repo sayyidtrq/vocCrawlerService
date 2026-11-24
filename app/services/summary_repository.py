@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.db.models import FetchLog, Location, Review, ReviewAnalysis
 from app.services.review_repository import latest_analysis_subquery
+from app.services.taxonomy_service import company_aliases, merge_issue_counts
 
 
 class SummaryRepository:
@@ -60,11 +61,11 @@ class SummaryRepository:
             issue_stmt = issue_stmt.join(
                 Review, Review.id == ReviewAnalysis.review_id
             ).where(Review.company_id == self.company_id)
-        return self.session.execute(
-            issue_stmt.group_by(ReviewAnalysis.issue_category)
-            .order_by(func.count(ReviewAnalysis.id).desc())
-            .limit(5)
-        ).all()
+        # No SQL LIMIT: aliases are merged first, then the top five are taken.
+        return merge_issue_counts(
+            self.session.execute(issue_stmt.group_by(ReviewAnalysis.issue_category)).all(),
+            company_aliases(self.session, self.company_id),
+        )
 
     def critical_issue_count(self) -> object:
         latest = latest_analysis_subquery()
@@ -107,15 +108,14 @@ class SummaryRepository:
 
     def location_top_issues(self, location_id: int) -> list[tuple]:
         latest = latest_analysis_subquery()
-        return self.session.execute(
+        rows = self.session.execute(
             select(ReviewAnalysis.issue_category, func.count(ReviewAnalysis.id))
             .join(latest, latest.c.analysis_id == ReviewAnalysis.id)
             .join(Review, Review.id == ReviewAnalysis.review_id)
             .where(Review.location_id == location_id)
             .group_by(ReviewAnalysis.issue_category)
-            .order_by(func.count(ReviewAnalysis.id).desc())
-            .limit(5)
         ).all()
+        return merge_issue_counts(rows, company_aliases(self.session, self.company_id))
 
     def location_critical_issue_count(self, location_id: int) -> object:
         latest = latest_analysis_subquery()

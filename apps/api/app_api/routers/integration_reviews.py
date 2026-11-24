@@ -8,19 +8,19 @@ from __future__ import annotations
 import logging
 import time
 from datetime import datetime, timezone
+from typing import Annotated
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Header, Query, Request
-
-from app.db.session import get_session_factory
-from app.db.models import Company
 from sqlalchemy import select
+
+from app.db.models import Company, Location
+from app.db.session import get_session_factory
 from app.services.integration_review_service import (
     IntegrationRequestError,
     IntegrationReviewService,
 )
 from app.utils.integration_cursor import CURSOR_VERSION, fingerprint
-from apps.api.app_api.service_auth import ServicePrincipal, require_service_principal
 from apps.api.app_api.integration_schemas import (
     API_VERSION,
     DEFAULT_LIMIT,
@@ -30,6 +30,7 @@ from apps.api.app_api.integration_schemas import (
     IntegrationReviewListResponse,
     ServiceIdentityResponse,
 )
+from apps.api.app_api.service_auth import ServicePrincipal, require_service_principal
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +86,33 @@ def service_whoami(
         "company_name": company.name,
         "scopes": sorted(principal.scopes),
     }
+
+@router.get(
+    "/locations/{onebox_location_id}",
+    summary="Resolve OneBox location to Crawler location within the token tenant",
+)
+def resolve_integration_location(
+    onebox_location_id: int,
+    principal: Annotated[ServicePrincipal, Depends(require_service_principal)],
+    session_factory: Annotated[object, Depends(get_integration_session_factory)],
+) -> dict:
+    if REQUIRED_SCOPE not in principal.scopes:
+        raise IntegrationRequestError(403, "INSUFFICIENT_SCOPE", "Token lacks the reviews:read scope.")
+    if onebox_location_id <= 0:
+        raise IntegrationRequestError(400, "INVALID_PARAMETER", "onebox_location_id must be positive.")
+    with session_factory() as session:
+        locations = session.scalars(
+            select(Location).where(
+                Location.company_id == principal.company_id,
+                Location.onebox_location_id == onebox_location_id,
+            ).limit(2)
+        ).all()
+        if not locations:
+            raise IntegrationRequestError(404, "LOCATION_NOT_FOUND", "Cabang belum ada di worklist Crawler; jalankan refresh_worklist.")
+        if len(locations) != 1:
+            raise IntegrationRequestError(409, "AMBIGUOUS_LOCATION", "Multiple Crawler locations map to this OneBox location.")
+        return {"id": locations[0].id, "onebox_location_id": onebox_location_id}
+
 
 @router.get(
     "/reviews",
