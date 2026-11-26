@@ -9,7 +9,7 @@ Python 3 standard library only. TOKEN is the CRAWLER_API_TOKEN (else prompted, h
 What OneBox's AI Insight needs from the Crawler, and what this checks:
   1. auth             no token -> 401; a valid token reaches request validation (400, no model call)
   2. /analysis        category_confidence is a number in [0, 1], absent for rating-only reviews,
-                      and present on at least one analysed text review (jev/absa)
+                      and present on at least one analysed text review (absa; jev only with a taxonomy)
   3. /brief           the rewrite keeps every headline number and invents none (same number guard
                       OneBox applies, ported from VocBriefGuard), plus a prompt-injection probe
                       and two invalid-body calls that must be rejected
@@ -240,9 +240,12 @@ def _check_analysis(request, rep, args) -> int:
     present = [v for v, r in zip(values, analyzed) if "category_confidence" in (r.get("analysis") or {})]
     rep.check(all(_is_number(v) and 0 <= v <= 1 for v in present), "every category_confidence is a number in [0, 1]",
               f"category_confidence out of range or not a number: {present!r}")
-    if args.provider in ("jev", "absa"):
+    # absa always reports a confidence; jev only on the taxonomy path, so without --taxonomy-file it has none.
+    if args.provider == "absa" or (args.provider == "jev" and getattr(args, "taxonomy", None) is not None):
         rep.check(len(present) >= 1, f"category_confidence present on {len(present)} of {len(analyzed)} analysed reviews",
                   "no analysed review carries category_confidence: the server build is older than b6a5501")
+    elif args.provider == "jev":
+        rep.out("  skip  category_confidence presence: jev returns it only with a taxonomy (--taxonomy-file)")
     rep.out(f"        model {payload.get('model')}, tokens {usage}, analyzed {summary.get('analyzed')}, "
             f"rating_fallback {summary.get('rating_fallback')}, with confidence {len(present)}")
     return usage if isinstance(usage, int) and not isinstance(usage, bool) else 0

@@ -1,6 +1,7 @@
 """The AI Insight smoke script is tested offline against the stubbed v2 app; no network is used."""
 
 import importlib.util
+import json
 import subprocess
 import sys
 import urllib.error
@@ -122,7 +123,9 @@ def make_request(api, token="shared-secret", always_send_token=False):
 
 def run_script(request, *argv):
     lines = []
-    code = smoke.run(request, smoke.build_parser().parse_args(list(argv)), out=lines.append)
+    args = smoke.build_parser().parse_args(list(argv))
+    args.taxonomy = json.loads(Path(args.taxonomy_file).read_text(encoding="utf-8")) if args.taxonomy_file else None
+    code = smoke.run(request, args, out=lines.append)
     return code, "\n".join(lines)
 
 
@@ -192,17 +195,43 @@ def test_script_fails_when_the_model_obeys_the_injection(api, monkeypatch):
     assert "number guard passes" in output
 
 
-def test_script_fails_when_confidence_is_missing_for_jev(api):
+TAXONOMY_FILE = Path(__file__).resolve().parent / "fixtures" / "worklist_taxonomy_fixture.json"
+
+
+@pytest.fixture
+def taxonomy_file(tmp_path):
+    body = json.loads(TAXONOMY_FILE.read_text(encoding="utf-8"))["taxonomies"]["kesehatan:0e20266e"]
+    path = tmp_path / "taxonomy.json"
+    path.write_text(json.dumps(body), encoding="utf-8")
+    return str(path)
+
+
+def test_script_fails_when_confidence_is_missing_for_jev_with_taxonomy(api, taxonomy_file):
     api.clients.brief_text = reordered_draft()
-    code, output = run_script(make_request(api))
+    code, output = run_script(make_request(api), "--taxonomy-file", taxonomy_file)
     assert code == 1
     assert "FAIL  no analysed review carries category_confidence: the server build is older than b6a5501" in output
+
+
+def test_script_skips_confidence_presence_for_jev_without_taxonomy(api):
+    # jev returns category_confidence only on the taxonomy path (b6a5501).
+    api.clients.brief_text = reordered_draft()
+    code, output = run_script(make_request(api))
+    assert code == 0, output
+    assert "skip  category_confidence presence: jev returns it only with a taxonomy" in output
+
+
+def test_script_fails_when_confidence_is_missing_for_absa(api):
+    api.clients.brief_text = reordered_draft()
+    code, output = run_script(make_request(api), "--provider", "absa")
+    assert code == 1
+    assert "FAIL  no analysed review carries category_confidence" in output
 
 
 def test_script_fails_when_confidence_is_out_of_range(api):
     api.clients.analysis_answer = {"category_confidence": 1.5}
     api.clients.brief_text = reordered_draft()
-    code, output = run_script(make_request(api))
+    code, output = run_script(make_request(api), "--provider", "absa")
     assert code == 1 and "category_confidence" in output.split("FAIL", 1)[1]
 
 
