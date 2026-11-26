@@ -29,7 +29,8 @@ services:
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       PYTHONUNBUFFERED: "1"
     ports:
-      - "8000:8000"
+      # Host port: dev 8000; staging sets API_HOST_PORT=8001 in its server .env. The container listens on 8000.
+      - "${API_HOST_PORT:-8000}:8000"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
