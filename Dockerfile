@@ -8,8 +8,14 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+# Optional Debian mirror (for example http://kartolo.sby.datautama.net.id/debian)
+# for hosts whose route to deb.debian.org stalls; empty keeps the default.
+ARG APT_MIRROR=
 # curl is required by the docker-compose healthcheck.
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN if [ -n "$APT_MIRROR" ]; then \
+        sed -i "s#http://deb.debian.org/debian\$#${APT_MIRROR}#" /etc/apt/sources.list.d/debian.sources; \
+    fi \
+    && apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
         curl \
     && rm -rf /var/lib/apt/lists/*
